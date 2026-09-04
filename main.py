@@ -33,31 +33,33 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === نظام الفحص العام للتحقق من روم الأمر ===
-@bot.check
-async def global_command_channel_check(ctx):
-    # صاحب السيرفر مستثنى دائماً ويقدر يكتب بأي روم
-    if ctx.author.id == ctx.guild.owner_id:
-        return True
-        
-    command_name = ctx.command.name
-    
-    # ابحث هل لهذا الأمر روم مخصص في قاعدة البيانات
-    record = command_channels_collection.find_one({"guild_id": ctx.guild.id, "command_name": command_name})
-    
-    if record:
-        allowed_channel_id = int(record["channel_id"])
-        if ctx.channel.id != allowed_channel_id:
-            # إذا كتب الأمر بروم غلط، نبهه ونمنع التنفيذ
-            await ctx.send(f"❌ عذراً، هذا الأمر (`!{command_name}`) مخصص فقط للاستخدام في روم <#{allowed_channel_id}>!", delete_after=5)
-            return False
-            
-    return True
-# ============================================
-
 @bot.event
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
+
+# === فحص صارم يحذف الرسالة بصمت لو كانت في روم غير مخصص ===
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if message.content.startswith("!"):
+        command_name = message.content[1:].split(" ")[0].lower()
+        
+        if message.guild and message.author.id != message.guild.owner_id:
+            record = command_channels_collection.find_one({"guild_id": message.guild.id, "command_name": command_name})
+            
+            if record:
+                allowed_channel_id = int(record["channel_id"])
+                if message.channel.id != allowed_channel_id:
+                    try:
+                        await message.delete() # حذف رسالة الأمر المخالف بصمت تام
+                    except:
+                        pass
+                    return
+
+    await bot.process_commands(message)
+# =========================================================
 
 async def load_extensions():
     for filename in os.listdir('./cogs'):
