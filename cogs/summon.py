@@ -24,7 +24,6 @@ class SummonModal(discord.ui.Modal, title="تفاصيل الاستدعاء"):
         self.target_user = target_user
 
     async def on_submit(self, interaction: discord.Interaction):
-        # التحقق من أن الروم المدخل صحيح ورقمي
         try:
             channel_id = int(self.room_id.value)
             channel = interaction.guild.get_channel(channel_id)
@@ -42,7 +41,6 @@ class SummonModal(discord.ui.Modal, title="تفاصيل الاستدعاء"):
         embed.set_footer(text=f"تم الاستدعاء عبر نظام البوت")
 
         try:
-            # محاولة إرسال الرسالة للخاص
             await self.target_user.send(embed=embed)
             await interaction.response.send_message(f"✅ تم إرسال الاستدعاء إلى العضو {self.target_user.mention} بنجاح عبر الخاص!", ephemeral=True)
         except discord.Forbidden:
@@ -52,20 +50,18 @@ class SummonCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # أمر سلاش (بدون علامة !)
-    @app_commands.command(name="استدعاء", help="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
+    # تم تصحيح help إلى description هنا
+    @app_commands.command(name="استدعاء", description="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
     @app_commands.describe(member="العضو المراد استدعاؤه")
     async def summon(self, interaction: discord.Interaction, member: discord.Member):
         if member.bot:
             await interaction.response.send_message("❌ لا يمكنك استدعاء بوت!", ephemeral=True)
             return
         
-        # فتح نافذة النموذج (Modal) للمستخدم
         await interaction.response.send_modal(SummonModal(target_user=member))
 
 async def setup(bot):
     await bot.add_cog(SummonCog(bot))
-    # مزامنة أوامر السلاش تلقائياً عند تحميل الكوج
     try:
         await bot.tree.sync()
     except Exception as e:
