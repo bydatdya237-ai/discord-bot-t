@@ -1,20 +1,14 @@
+import os
 import discord
 from discord import app_commands
 from discord.ui import Modal, Select, View
 from discord.ext import commands
 from pymongo import MongoClient
-import os
-
-# الاتصال بقاعدة بيانات MongoDB
-MONGO_URI = os.getenv("MONGO_URI")
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["discord_bot_db"]
-custom_commands_collection = db["custom_commands"]
 
 class CreateCommandModal(Modal, title="إنشاء وتخصيص أمر جديد"):
     cmd_name = discord.ui.TextInput(
-        label="اسم الأمر (بالإنجليزية بدون مسافات، مثال: welcome)",
-        placeholder="اكتب الاسم هنا...",
+        label="اسم الأمر (بالإنجليزية بدون مسافات)",
+        placeholder="مثال: welcome",
         max_length=30
     )
     cmd_description = discord.ui.TextInput(
@@ -25,7 +19,6 @@ class CreateCommandModal(Modal, title="إنشاء وتخصيص أمر جديد")
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # تمرير القيم النصية بحتة (.value) لتجنب أي مشاكل في التخزين
         view = CategorySelectView(self.cmd_name.value, self.cmd_description.value)
         await interaction.response.send_message(
             f"✅ تم حفظ الاسم: **/{self.cmd_name.value}**\nالخطوة التالية: اختر تصنيف ووظيفة هذا الأمر:",
@@ -97,6 +90,12 @@ class ActionSelect(Select):
         super().__init__(placeholder="اختر الوظيفة الدقيقة...", min_values=1, max_values=1, options=selected_options)
 
     async def callback(self, interaction: discord.Interaction):
+        # الاتصال بقاعدة البيانات محلياً داخل الأمر لضمان عدم وجود مشاكل نطاق (Scope)
+        mongo_url = os.environ.get('MONGO_URI')
+        client = MongoClient(mongo_url)
+        db = client['discord_bot_db']
+        collection = db['custom_commands']
+
         chosen_action = self.values[0]
         
         command_data = {
@@ -106,7 +105,7 @@ class ActionSelect(Select):
             "action": chosen_action
         }
         
-        custom_commands_collection.update_one(
+        collection.update_one(
             {"guild_id": interaction.guild.id, "name": self.cmd_name},
             {"$set": command_data},
             upsert=True
@@ -122,7 +121,7 @@ class ActionSelectView(View):
         super().__init__()
         self.add_item(ActionSelect(cmd_name, cmd_desc, category))
 
-class CustomCommands(commands.Cog):
+class CustomCommandsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
@@ -136,4 +135,4 @@ class CustomCommands(commands.Cog):
         await interaction.response.send_modal(modal)
 
 async def setup(bot):
-    await bot.add_cog(CustomCommands(bot))
+    await bot.add_cog(CustomCommandsCog(bot))
