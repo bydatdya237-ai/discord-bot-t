@@ -34,7 +34,8 @@ class WhitelistView(discord.ui.View):
         )
         
         names = ", ".join([user.name for user in selected_users])
-        await interaction.followup.send(f"✅ تم تحديث قائمة التحكم بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
+        # تعديل رسالة النجاح لتطابق طلبك "تم التجديد بنجاح"
+        await interaction.followup.send(f"✅ تم التجديد بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
 
 class WhitelistCog(commands.Cog):
     def __init__(self, bot):
@@ -50,7 +51,8 @@ class WhitelistCog(commands.Cog):
         view = WhitelistView(ctx.guild.id)
         await ctx.send("🛡️ **نظام تحديد الصلاحيات:**\nالرجاء اختيار الأعضاء المسموح لهم بالتحكم في البوت من القائمة بالأسفل:", view=view)
 
-    @commands.command(name="قائمة", help="عرض الأشخاص المسموح لهم بالتحكم في البوت")
+    # استبدال أمر "قائمة" بـ "كشف" لعرض الأشخاص المسموح لهم
+    @commands.command(name="كشف", help="عرض الأشخاص المسموح لهم بالتحكم في البوت")
     async def show_whitelist(self, ctx):
         # جلب البيانات الخاصة بالسيرفر من قاعدة البيانات
         guild_data = whitelist_collection.find_one({"guild_id": ctx.guild.id})
