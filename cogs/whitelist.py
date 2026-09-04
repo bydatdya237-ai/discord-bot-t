@@ -20,6 +20,9 @@ class WhitelistView(discord.ui.View):
         max_values=10
     )
     async def select_users(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        # تأجيل الاستجابة فوراً لمنع خطأ "لم يستجب في الوقت المحدد"
+        await interaction.response.defer(ephemeral=True)
+
         selected_users = select.values
         user_ids = [user.id for user in selected_users]
         
@@ -31,7 +34,7 @@ class WhitelistView(discord.ui.View):
         )
         
         names = ", ".join([user.name for user in selected_users])
-        await interaction.response.send_message(f"✅ تم تحديث قائمة التحكم بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
+        await interaction.followup.send(f"✅ تم تحديث قائمة التحكم بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
 
 class WhitelistCog(commands.Cog):
     def __init__(self, bot):
@@ -46,6 +49,23 @@ class WhitelistCog(commands.Cog):
 
         view = WhitelistView(ctx.guild.id)
         await ctx.send("🛡️ **نظام تحديد الصلاحيات:**\nالرجاء اختيار الأعضاء المسموح لهم بالتحكم في البوت من القائمة بالأسفل:", view=view)
+
+    # === الأمر الجديد لعرض الأعضاء المسموح لهم ===
+    @commands.command(name="قائمة", help="عرض الأشخاص المسموح لهم بالتحكم في البوت")
+    async def show_whitelist(self, ctx):
+        # جلب البيانات الخاصة بالسيرفر من قاعدة البيانات
+        guild_data = whitelist_collection.find_one({"guild_id": ctx.guild.id})
+        
+        if not guild_data or "allowed_users" not in guild_data or not guild_data["allowed_users"]:
+            await ctx.send("📋 **قائمة التحكم:**\nلم يتم تحديد أي عضو بعد! البوت متاح حالياً لصاحب السيرفر فقط.")
+            return
+
+        user_mentions = []
+        for uid in guild_data["allowed_users"]:
+            user_mentions.append(f"<@{uid}>")
+        
+        mentions_str = ", ".join(user_mentions)
+        await ctx.send(f"📋 **قائمة الأعضاء المسموح لهم بالتحكم في البوت:**\n{mentions_str}")
 
 async def setup(bot):
     await bot.add_cog(WhitelistCog(bot))
