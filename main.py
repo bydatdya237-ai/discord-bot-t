@@ -40,6 +40,10 @@ async def on_ready():
         GUILD_ID = discord.Object(id=1544077828151054537)
         bot.tree.copy_global_to(guild=GUILD_ID)
         synced = await bot.tree.sync(guild=GUILD_ID)
+        
+        # طباعة أسماء الأوامر المزامنة للتأكد
+        command_names = [cmd.name for cmd in synced]
+        print(f"الأوامر المزامنة حالياً: {command_names}")
         print(f"تمت مزامنة {len(synced)} أمر على سيرفرك بنجاح!")
     except Exception as e:
         print(f"خطأ في مزامنة الأوامر: {e}")
@@ -47,7 +51,11 @@ async def on_ready():
 async def load_extensions():
     for filename in os.listdir('./cogs'):
         if filename.endswith('.py'):
-            await bot.load_extension(f'cogs.{filename[:-3]}')
+            try:
+                await bot.load_extension(f'cogs.{filename[:-3]}')
+                print(f"✅ تم تحميل الملف بنجاح: {filename}")
+            except Exception as e:
+                print(f"❌ فشل تحميل الملف {filename} بسبب الخطأ التالي: {e}")
 
 @bot.event
 async def setup_hook():
