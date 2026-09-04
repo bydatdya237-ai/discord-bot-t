@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+from discord import app_commands
 from pymongo import MongoClient
 
 # 1. نافذة الإدخال (Modal) تبقى كما هي بدون تغيير
@@ -48,7 +49,7 @@ class SummonModal(discord.ui.Modal, title="تفاصيل الاستدعاء"):
         except discord.Forbidden:
             await interaction.response.send_message(f"❌ عذراً، لا يمكنني إرسال رسالة خاصة لـ {self.target_user.mention} لأن خاصه مغلق.", ephemeral=True)
 
-# 2. زر تفاعلي يربط الأمر العادي بالـ Modal
+# 2. زر تفاعلي يربط الأمر بالـ Modal
 class SummonView(discord.ui.View):
     def __init__(self, target_user: discord.Member):
         super().__init__(timeout=60)
@@ -61,42 +62,38 @@ class SummonView(discord.ui.View):
 class SummonCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # ربط الاتصال بقاعدة البيانات للتحقق من المشرفين
         mongo_url = os.environ.get('MONGO_URI')
         self.client = MongoClient(mongo_url)
         self.db = self.client['discord_db']
         self.whitelist_collection = self.db['whitelist_admins']
 
-    def _has_permission(self, ctx):
+    def _has_permission(self, interaction: discord.Interaction):
         # 1. صاحب السيرفر مسموح له دائماً
-        if ctx.author.id == ctx.guild.owner_id:
+        if interaction.user.id == interaction.guild.owner_id:
             return True
             
-        # 2. المشرفون المضافون في قاعدة البيانات عبر أمر تحديد
-        db_admin = self.whitelist_collection.find_one({"user_id": str(ctx.author.id)})
+        # 2. المشرفون المضافون في قاعدة البيانات
+        db_admin = self.whitelist_collection.find_one({"user_id": str(interaction.user.id)})
         if db_admin:
             return True
             
         return False
 
-    # 3. تحويل الأمر ليصبح محمي ولا يستعمله إلا المشرفون
-    @commands.command(name="استدعاء", help="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
-    async def summon(self, ctx, member: discord.Member = None):
+    # 3. تحويل الأمر ليصبح أمر سلاش (`/استدعاء`) ومحمي للمشرفين
+    @app_commands.command(name="استدعاء", description="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
+    @app_commands.describe(member="العضو المراد استدعاؤه")
+    async def summon(self, interaction: discord.Interaction, member: discord.Member):
         # التحقق من الصلاحية قبل تنفيذ أي شيء
-        if not self._has_permission(ctx):
-            await ctx.send("❌ عذراً، هذا الأمر مخصص للمشرفين وصاحب السيرفر فقط!")
-            return
-
-        if not member:
-            await ctx.send("❌ عذراً، يجب عليك تحديد العضو المراد استدعاؤه! مثال: `!استدعاء @ضياء`")
+        if not self._has_permission(interaction):
+            await interaction.response.send_message("❌ عذراً، هذا الأمر مخصص للمشرفين وصاحب السيرفر فقط!", ephemeral=True)
             return
 
         if member.bot:
-            await ctx.send("❌ لا يمكنك استدعاء بوت!")
+            await interaction.response.send_message("❌ لا يمكنك استدعاء بوت!", ephemeral=True)
             return
         
         view = SummonView(target_user=member)
-        await ctx.send(f"📌 لإتمام استدعاء العضو {member.mention}, اضغط على الزر بالأسفل:", view=view)
+        await interaction.response.send_message(f"📌 لإتمام استدعاء العضو {member.mention}, اضغط على الزر بالأسفل:", view=view, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(SummonCog(bot))
