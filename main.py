@@ -23,7 +23,7 @@ def keep_alive():
 # === الاتصال بقاعدة البيانات لنظام الألعاب والبيانات ===
 mongo_url = os.environ.get('MONGO_URI')
 client = MongoClient(mongo_url)
-db = client['discord_bot_db'] # تم توحيد اسم القاعدة لتطابق الـ cogs
+db = client['discord_bot_db']
 # ==================================================
 
 # نظام السلاش ما يحتاج صلاحية قراءة الرسائل (Message Content)
@@ -36,9 +36,11 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
     try:
-        # مزامنة الأوامر مع ديسكورد لتظهر فوراً مع علامة /
-        synced = await bot.tree.sync()
-        print(f"تمت مزامنة {len(synced)} أمر بنجاح!")
+        # مزامنة الأوامر خصيصاً على سيرفرك لتظهر في الحال
+        GUILD_ID = discord.Object(id=1544077828151054537)
+        bot.tree.copy_global_to(guild=GUILD_ID)
+        synced = await bot.tree.sync(guild=GUILD_ID)
+        print(f"تمت مزامنة {len(synced)} أمر على سيرفرك بنجاح!")
     except Exception as e:
         print(f"خطأ في مزامنة الأوامر: {e}")
 
@@ -52,5 +54,5 @@ async def setup_hook():
     await load_extensions()
 
 keep_alive()
-TOKEN = os.environ.get('TOKEN') # تعديل اسم المتغير ليطابق ما تم وضعه في Railway
+TOKEN = os.environ.get('TOKEN')
 bot.run(TOKEN)
