@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ui import Modal, Select, View
-from discord.ext import commands  # تم نقل الاستيراد للأعلى هنا عشان يشتغل الكلاس صح
+from discord.ext import commands
 from pymongo import MongoClient
 import os
 
@@ -25,6 +25,7 @@ class CreateCommandModal(Modal, title="إنشاء وتخصيص أمر جديد")
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # تمرير القيم النصية بحتة (.value) لتجنب أي مشاكل في التخزين
         view = CategorySelectView(self.cmd_name.value, self.cmd_description.value)
         await interaction.response.send_message(
             f"✅ تم حفظ الاسم: **/{self.cmd_name.value}**\nالخطوة التالية: اختر تصنيف ووظيفة هذا الأمر:",
