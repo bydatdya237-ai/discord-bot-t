@@ -44,7 +44,8 @@ async def on_message(message):
         return
 
     if message.content.startswith("!"):
-        command_name = message.content[1:].split(" ")[0].lower()
+        # استخراج اسم الأمر بدقة وتنظيفه ليتطابق مع قاعدة البيانات
+        command_name = message.content[1:].strip().split(" ")[0].lower()
         
         if message.guild and message.author.id != message.guild.owner_id:
             record = command_channels_collection.find_one({"guild_id": message.guild.id, "command_name": command_name})
