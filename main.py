@@ -1,5 +1,6 @@
 import os
 import discord
+from discord.ext import commands
 from flask import Flask
 from threading import Thread
 
@@ -18,21 +19,21 @@ def keep_alive():
 
 intents = discord.Intents.default()
 intents.message_content = True
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-@client.event
+@bot.event
 async def on_ready():
-    print(f'دخلت السيرفر باسم: {client.user}')
+    print(f'دخلت السيرفر باسم: {bot.user}')
 
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
+async def load_extensions():
+    for filename in os.listdir('./cogs'):
+        if filename.endswith('.py'):
+            await bot.load_extension(f'cogs.{filename[:-3]}')
 
-    if message.channel.id == 1545187326093693038:
-        if message.content == '!هلا':
-            await message.channel.send('هلا بك يالغالي! منور السيرفر ⚡')
+@bot.event
+async def setup_hook():
+    await load_extensions()
 
 keep_alive()
 TOKEN = os.environ.get('DISCORD_TOKEN')
-client.run(TOKEN)
+bot.run(TOKEN)
