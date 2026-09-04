@@ -8,63 +8,78 @@ client = MongoClient(MONGO_URI)
 db = client["discord_bot"]
 whitelist_collection = db["whitelist"]
 
-class WhitelistView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=60)
-        self.guild_id = guild_id
-
-    @discord.ui.select(
-        cls=discord.ui.UserSelect,
-        placeholder="اختر الأعضاء المسموح لهم بتحكم البوت...",
-        min_values=1,
-        max_values=10
-    )
-    async def select_users(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-        # تأجيل الاستجابة فوراً لمنع خطأ "لم يستجب في الوقت المحدد"
-        await interaction.response.defer(ephemeral=True)
-
-        selected_users = select.values
-        user_ids = [user.id for user in selected_users]
-        
-        # حفظ الأعضاء في قاعدة البيانات للسيرفر الحالي
-        whitelist_collection.update_one(
-            {"guild_id": self.guild_id},
-            {"$set": {"allowed_users": user_ids}},
-            upsert=True
-        )
-        
-        names = ", ".join([user.name for user in selected_users])
-        # رسالة النجاح حسب طلبك
-        await interaction.followup.send(f"✅ تم التجديد بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
-
 class WhitelistCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name="تحديد", help="تحديد الأعضاء المسموح لهم بالتحكم في البوت")
-    async def set_whitelist(self, ctx):
-        # السماح فقط لصاحب السيرفر باستخدام أمر التحديد الأمني
+    @commands.command(name="تحديد", help="إضافة عضو لقائمة المسموح لهم بالتحكم. مثال: !تحديد @اسم_العضو")
+    async def set_whitelist(self, ctx, member: discord.Member = None):
+        # السماح فقط لصاحب السيرفر
         if ctx.author.id != ctx.guild.owner_id:
             await ctx.send("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!")
             return
 
-        view = WhitelistView(ctx.guild.id)
-        await ctx.send("🛡️ **نظام تحديد الصلاحيات:**\nالرجاء اختيار الأعضاء المسموح لهم بالتحكم في البوت من القائمة بالأسفل:", view=view)
+        if not member:
+            await ctx.send("❌ عذراً، يجب عليك منشن العضو المراد إضافته! مثال: `!تحديد @ضياء`")
+            return
 
-    # أمر كشف لعرض الأشخاص المسموح لهم
+        # جلب البيانات الحالية أو إنشاء قائمة جديدة للسيرفر
+        guild_data = whitelist_collection.find_one({"guild_id": ctx.guild.id})
+        allowed_users = guild_data.get("allowed_users", []) if guild_data else []
+
+        if member.id in allowed_users:
+            await ctx.send(f"⚠️ العضو {member.mention} موجود مسبقاً في قائمة المسموح لهم!")
+            return
+
+        allowed_users.append(member.id)
+
+        # حفظ التحديث في قاعدة البيانات
+        whitelist_collection.update_one(
+            {"guild_id": ctx.guild.id},
+            {"$set": {"allowed_users": allowed_users}},
+            upsert=True
+        )
+        
+        await ctx.send(f"✅ تم إضافة العضو {member.mention} بنجاح إلى قائمة التحكم المسموح لها!")
+
+    @commands.command(name="إزالة", help="إزالة عضو من قائمة المسموح لهم. مثال: !إزالة @اسم_العضو")
+    async def remove_whitelist(self, ctx, member: discord.Member = None):
+        if ctx.author.id != ctx.guild.owner_id:
+            await ctx.send("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!")
+            return
+
+        if not member:
+            await ctx.send("❌ عذراً، يجب عليك منشن العضو المراد إزالته! مثال: `!إزالة @ضياء`")
+            return
+
+        guild_data = whitelist_collection.find_one({"guild_id": ctx.guild.id})
+        if not guild_data or "allowed_users" not in guild_data:
+            await ctx.send("📋 القائمة فارغة أصلاً ولا توجد أي أعضاء مضافين.")
+            return
+
+        allowed_users = guild_data["allowed_users"]
+        if member.id not in allowed_users:
+            await ctx.send(f"⚠️ العضو {member.mention} ليس موجوداً في القائمة من الأساس.")
+            return
+
+        allowed_users.remove(member.id)
+        whitelist_collection.update_one(
+            {"guild_id": ctx.guild.id},
+            {"$set": {"allowed_users": allowed_users}},
+            upsert=True
+        )
+
+        await ctx.send(f"🗑️ تم إزالة العضو {member.mention} من قائمة التحكم بنجاح.")
+
     @commands.command(name="كشف", help="عرض الأشخاص المسموح لهم بالتحكم في البوت")
     async def show_whitelist(self, ctx):
-        # جلب البيانات الخاصة بالسيرفر من قاعدة البيانات
         guild_data = whitelist_collection.find_one({"guild_id": ctx.guild.id})
         
         if not guild_data or "allowed_users" not in guild_data or not guild_data["allowed_users"]:
             await ctx.send("📋 **قائمة التحكم:**\nلم يتم تحديد أي عضو بعد! البوت متاح حالياً لصاحب السيرفر فقط.")
             return
 
-        user_mentions = []
-        for uid in guild_data["allowed_users"]:
-            user_mentions.append(f"<@{uid}>")
-        
+        user_mentions = [f"<@{uid}>" for uid in guild_data["allowed_users"]]
         mentions_str = ", ".join(user_mentions)
         await ctx.send(f"📋 **قائمة الأعضاء المسموح لهم بالتحكم في البوت:**\n{mentions_str}")
 
