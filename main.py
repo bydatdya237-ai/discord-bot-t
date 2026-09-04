@@ -33,31 +33,27 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# الآيدي المؤقت المخصص لجميع الأوامر
+TEMPORARY_CHANNEL_ID = 1545187326093693038
+
 @bot.event
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
 
-# === فحص صارم يحذف الرسالة بصمت لو كانت في روم غير مخصص ===
+# === فحص مؤقت لحصر جميع الأوامر في الروم المحدد فقط ===
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
     if message.content.startswith("!"):
-        # استخراج اسم الأمر بدقة وتنظيفه ليتطابق مع قاعدة البيانات
-        command_name = message.content[1:].strip().split(" ")[0].lower()
-        
         if message.guild and message.author.id != message.guild.owner_id:
-            record = command_channels_collection.find_one({"guild_id": message.guild.id, "command_name": command_name})
-            
-            if record:
-                allowed_channel_id = int(record["channel_id"])
-                if message.channel.id != allowed_channel_id:
-                    try:
-                        await message.delete() # حذف رسالة الأمر المخالف بصمت تام
-                    except:
-                        pass
-                    return
+            if message.channel.id != TEMPORARY_CHANNEL_ID:
+                try:
+                    await message.delete() # حذف رسالة الأمر المخالف بصمت تام
+                except:
+                    pass
+                return
 
     await bot.process_commands(message)
 # =========================================================
