@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 
+# 1. نافذة الإدخال (Modal) تبقى كما هي بدون تغيير
 class SummonModal(discord.ui.Modal, title="تفاصيل الاستدعاء"):
     reason = discord.ui.TextInput(
         label="سبب الاستدعاء",
@@ -46,23 +46,35 @@ class SummonModal(discord.ui.Modal, title="تفاصيل الاستدعاء"):
         except discord.Forbidden:
             await interaction.response.send_message(f"❌ عذراً، لا يمكنني إرسال رسالة خاصة لـ {self.target_user.mention} لأن خاصه مغلق.", ephemeral=True)
 
+# 2. زر تفاعلي يربط الأمر العادي بالـ Modal
+class SummonView(discord.ui.View):
+    def __init__(self, target_user: discord.Member):
+        super().__init__(timeout=60)
+        self.target_user = target_user
+
+    @discord.ui.button(label="اضغط هنا لكتابة تفاصيل الاستدعاء", style=discord.ButtonStyle.primary, emoji="📋")
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # فتح النافذة عند الضغط على الزر
+        await interaction.response.send_modal(SummonModal(target_user=self.target_user))
+
 class SummonCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # تم تصحيح help إلى description هنا
-    @app_commands.command(name="استدعاء", description="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
-    @app_commands.describe(member="العضو المراد استدعاؤه")
-    async def summon(self, interaction: discord.Interaction, member: discord.Member):
+    # 3. تحويل الأمر ليصبح بادئة تقليدية (!)
+    @commands.command(name="استدعاء", help="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
+    async def summon(self, ctx, member: discord.Member = None):
+        if not member:
+            await ctx.send("❌ عذراً، يجب عليك تحديد العضو المراد استدعاؤه! مثال: `!استدعاء @ضياء`")
+            return
+
         if member.bot:
-            await interaction.response.send_message("❌ لا يمكنك استدعاء بوت!", ephemeral=True)
+            await ctx.send("❌ لا يمكنك استدعاء بوت!")
             return
         
-        await interaction.response.send_modal(SummonModal(target_user=member))
+        # إرسال رسالة فيها زر لتفتيح الـ Modal (بسبب قيود ديسكورد للأوامر العادية)
+        view = SummonView(target_user=member)
+        await ctx.send(f"📌 لإتمام استدعاء العضو {member.mention}, اضغط على الزر بالأسفل:", view=view)
 
 async def setup(bot):
     await bot.add_cog(SummonCog(bot))
-    try:
-        await bot.tree.sync()
-    except Exception as e:
-        print(f"Failed to sync tree: {e}")
