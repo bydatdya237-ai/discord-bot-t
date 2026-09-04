@@ -3,7 +3,6 @@ import discord
 from discord.ext import commands
 from pymongo import MongoClient
 
-# 1. قائمة منسدلة متعددة الاختيارات للأوامر
 class CommandSelect(discord.ui.Select):
     def __init__(self, bot):
         self.bot = bot
@@ -15,6 +14,7 @@ class CommandSelect(discord.ui.Select):
             options.append(
                 discord.SelectOption(
                     label=f"!{command.name}",
+                    value=command.name.lower(), # التأكد من تخزين القيمة بحروف صغيرة صافية
                     description=command.help or "تحديد روم مخصص لهذا الأمر",
                     emoji="⚙️"
                 )
@@ -23,14 +23,12 @@ class CommandSelect(discord.ui.Select):
         if not options:
             options.append(discord.SelectOption(label="لا توجد أوامر متاحة", value="none"))
 
-        # السماح باختيار عدة أوامر مع بعض (الحد الأقصى عدد الأوامر المتوفرة أو 25 كحد أقصى لديسكورد)
         max_val = min(len(options), 25)
         super().__init__(placeholder="اختر أمراً أو عدة أوامر لتحديد روم لها...", min_values=1, max_values=max_val, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        selected_commands = [val.replace("!", "") for val in self.values]
-        
-        # حفظ الأوامر المختارة في الكلاس المؤقت لنقلها لخطوة التأكيد
+        # استخدام الـ value مباشرة لأنها مضمونة بحروف صغيرة وصافية
+        selected_commands = [val.lower() for val in self.values]
         self.view.selected_commands = selected_commands
         
         await interaction.response.send_message(
@@ -60,7 +58,6 @@ class CommandSelect(discord.ui.Select):
             await interaction.followup.send("⏱️ انتهى الوقت المخصص ولم تقم بإرسال آيدي الغرفة.", ephemeral=True)
             return
 
-        # إرسال زر التأكيد النهائي
         confirm_view = ConfirmView(self.bot, selected_commands, new_channel_id)
         await interaction.followup.send(
             f"⚠️ هل أنت متأكد من ربط هذه الأوامر بالغرفة <#{new_channel_id}>؟",
@@ -68,7 +65,6 @@ class CommandSelect(discord.ui.Select):
             ephemeral=True
         )
 
-# 2. زر التأكيد النهائي للعملية
 class ConfirmView(discord.ui.View):
     def __init__(self, bot, selected_commands, channel_id):
         super().__init__(timeout=30)
@@ -83,7 +79,6 @@ class ConfirmView(discord.ui.View):
         db = client['discord_db']
         collection = db['command_channels']
 
-        # حفظ كل أمر تم تحديده في قاعدة البيانات مع نفس الروم
         for cmd in self.selected_commands:
             collection.update_one(
                 {"guild_id": interaction.guild.id, "command_name": cmd},
@@ -97,7 +92,6 @@ class ConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content=f"✅ تمت الإفادة بنجاح! تم ربط الأوامر المحددة بالغرفة <#{self.channel_id}>.",
             view=self
-
         )
 
     @discord.ui.button(label="إلغاء", style=discord.ButtonStyle.red, emoji="❌")
@@ -123,7 +117,7 @@ class ChannelConfigCog(commands.Cog):
 
         embed = discord.Embed(
             title="🛠️ نظام إدارة رومات الأوامر المتعددة",
-            description="حدد الأوامر المطلوبة من القائمة أدناه (يمكنك اختيار أكثر من أمر)، ثم أرسل آيدي الروم لتأكيد الربط:",
+            description="حدد الأوامر المطلوبة من القائمة أدناه، ثم أرسل آيدي الروم لتأكيد الربط:",
             color=discord.Color.gold()
         )
         
