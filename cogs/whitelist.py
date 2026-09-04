@@ -50,7 +50,6 @@ class WhitelistCog(commands.Cog):
         view = WhitelistView(ctx.guild.id)
         await ctx.send("🛡️ **نظام تحديد الصلاحيات:**\nالرجاء اختيار الأعضاء المسموح لهم بالتحكم في البوت من القائمة بالأسفل:", view=view)
 
-    # === الأمر الجديد لعرض الأعضاء المسموح لهم ===
     @commands.command(name="قائمة", help="عرض الأشخاص المسموح لهم بالتحكم في البوت")
     async def show_whitelist(self, ctx):
         # جلب البيانات الخاصة بالسيرفر من قاعدة البيانات
