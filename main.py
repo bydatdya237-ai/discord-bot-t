@@ -21,6 +21,22 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# === التعديل المضاف هنا ===
+@bot.check
+def globally_block_non_authorized(ctx):
+    # السماح للبوتات (إن وجدت) لكي لا يحدث تداخل أو حظر داخلي
+    if ctx.author.bot:
+        return False
+        
+    allowed_role_id = 1545427714855669871
+    
+    # التحقق مما إذا كان المستخدم يملك الرتبة المحددة أو هو صاحب السيرفر
+    has_role = any(role.id == allowed_role_id for role in ctx.author.roles)
+    is_owner = ctx.author.id == ctx.guild.owner_id
+    
+    return has_role or is_owner
+# =========================
+
 @bot.event
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
