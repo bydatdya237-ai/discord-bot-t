@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ui import Modal, Select, View
+from discord.ext import commands  # تم نقل الاستيراد للأعلى هنا عشان يشتغل الكلاس صح
 from pymongo import MongoClient
 import os
 
@@ -134,5 +135,4 @@ class CustomCommands(commands.Cog):
         await interaction.response.send_modal(modal)
 
 async def setup(bot):
-    from discord.ext import commands
     await bot.add_cog(CustomCommands(bot))
