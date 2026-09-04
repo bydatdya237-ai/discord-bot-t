@@ -23,7 +23,7 @@ def keep_alive():
 # === الاتصال بقاعدة البيانات لنظام الألعاب والبيانات ===
 mongo_url = os.environ.get('MONGO_URI')
 client = MongoClient(mongo_url)
-db = client['discord_db']
+db = client['discord_bot_db'] # تم توحيد اسم القاعدة لتطابق الـ cogs
 # ==================================================
 
 # نظام السلاش ما يحتاج صلاحية قراءة الرسائل (Message Content)
@@ -52,5 +52,5 @@ async def setup_hook():
     await load_extensions()
 
 keep_alive()
-TOKEN = os.environ.get('DISCORD_TOKEN')
+TOKEN = os.environ.get('TOKEN') # تعديل اسم المتغير ليطابق ما تم وضعه في Railway
 bot.run(TOKEN)
