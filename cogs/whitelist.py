@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+from discord import app_commands
 from pymongo import MongoClient
 
 class WhitelistCog(commands.Cog):
@@ -11,59 +12,53 @@ class WhitelistCog(commands.Cog):
         self.db = self.client['discord_db']
         self.whitelist_collection = self.db['whitelist_admins']
 
-    def _has_permission(self, ctx):
+    def _has_permission(self, interaction: discord.Interaction):
         # 1. صاحب السيرفر
-        if ctx.author.id == ctx.guild.owner_id:
+        if interaction.user.id == interaction.guild.owner_id:
             return True
             
-        # 2. المشرفون المضافون في قاعدة البيانات (مثل ما سويت بأمر تحديد)
-        db_admin = self.whitelist_collection.find_one({"user_id": str(ctx.author.id)})
+        # 2. المشرفون المضافون في قاعدة البيانات
+        db_admin = self.whitelist_collection.find_one({"user_id": str(interaction.user.id)})
         if db_admin:
             return True
             
         return False
 
-    @commands.command(name="تحديد", help="إضافة عضو لقائمة المشرفين")
-    async def add_whitelist(self, ctx, member: discord.Member = None):
-        if ctx.author.id != ctx.guild.owner_id:
-            await ctx.send("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!")
-            return
-
-        if not member:
-            await ctx.send("⚠️ أرجو تحديد العضو. مثال: `!تحديد @اسم_العضو`")
+    @app_commands.command(name="تحديد", description="إضافة عضو لقائمة المشرفين (خاص بصاحب السيرفر)")
+    @app_commands.describe(member="العضو المراد إضافته للمشرفين")
+    async def add_whitelist(self, interaction: discord.Interaction, member: discord.Member):
+        if interaction.user.id != interaction.guild.owner_id:
+            await interaction.response.send_message("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!", ephemeral=True)
             return
 
         user_id = str(member.id)
         existing = self.whitelist_collection.find_one({"user_id": user_id})
         
         if existing:
-            await ctx.send(f"⚠️ العضو **{member.name}** مضاف مسبقاً!")
+            await interaction.response.send_message(f"⚠️ العضو **{member.name}** مضاف مسبقاً!", ephemeral=True)
         else:
             self.whitelist_collection.insert_one({"user_id": user_id, "name": member.name})
-            await ctx.send(f"✅ تم بنجاح إضافة **{member.name}** لقائمة المشرفين!")
+            await interaction.response.send_message(f"✅ تم بنجاح إضافة **{member.name}** لقائمة المشرفين!")
 
-    @commands.command(name="ازالة", help="إزالة عضو من قائمة المشرفين")
-    async def remove_whitelist(self, ctx, member: discord.Member = None):
-        if ctx.author.id != ctx.guild.owner_id:
-            await ctx.send("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!")
-            return
-
-        if not member:
-            await ctx.send("⚠️ أرجو تحديد العضو المراد إزالته.")
+    @app_commands.command(name="ازالة", description="إزالة عضو من قائمة المشرفين (خاص بصاحب السيرفر)")
+    @app_commands.describe(member="العضو المراد إزالته من المشرفين")
+    async def remove_whitelist(self, interaction: discord.Interaction, member: discord.Member):
+        if interaction.user.id != interaction.guild.owner_id:
+            await interaction.response.send_message("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!", ephemeral=True)
             return
 
         user_id = str(member.id)
         result = self.whitelist_collection.delete_one({"user_id": user_id})
         
         if result.deleted_count > 0:
-            await ctx.send(f"🗑️ تم إزالة **{member.name}** بنجاح.")
+            await interaction.response.send_message(f"🗑️ تم إزالة **{member.name}** بنجاح.")
         else:
-            await ctx.send(f"⚠️ العضو غير موجود أساساً في القائمة.")
+            await interaction.response.send_message(f"⚠️ العضو غير موجود أساساً في القائمة.", ephemeral=True)
 
-    @commands.command(name="كشف", help="عرض قائمة المشرفين")
-    async def show_whitelist(self, ctx):
-        if not self._has_permission(ctx):
-            await ctx.send("❌ عذراً، ليس لديك صلاحية!")
+    @app_commands.command(name="كشف", description="عرض قائمة المشرفين المعتمدين")
+    async def show_whitelist(self, interaction: discord.Interaction):
+        if not self._has_permission(interaction):
+            await interaction.response.send_message("❌ عذراً، ليس لديك صلاحية!", ephemeral=True)
             return
 
         admins = list(self.whitelist_collection.find({}))
@@ -79,7 +74,7 @@ class WhitelistCog(commands.Cog):
         else:
             embed.add_field(name="📂 المشرفون بالسحاب:", value="لا يوجد مشرفون إضافيون.", inline=False)
 
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(WhitelistCog(bot))
