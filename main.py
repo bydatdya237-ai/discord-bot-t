@@ -29,8 +29,9 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    if message.content == '!هلا':
-        await message.channel.send('هلا بك يالغالي! منور السيرفر ⚡')
+    if message.channel.id == 1545187326093693038:
+        if message.content == '!هلا':
+            await message.channel.send('هلا بك يالغالي! منور السيرفر ⚡')
 
 keep_alive()
 TOKEN = os.environ.get('DISCORD_TOKEN')
