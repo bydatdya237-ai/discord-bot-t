@@ -2,8 +2,8 @@ import discord
 from discord.ext import commands
 from pymongo import MongoClient
 
-# الاتصال بقاعدة بيانات MongoDB بنفس الرابط واسم المستخدم
-MONGO_URI = "mongodb+srv://Bydatdya237_db_user:NovcUW863kD2T8Z0@cluster0.aded4cm.mongodb.net/?appName=Cluster0"
+# الاتصال بقاعدة بيانات MongoDB بالرابط وكلمة المرور الجديدة
+MONGO_URI = "mongodb+srv://Bydatdya237_db_user:dydatdya7268163@cluster0.aded4cm.mongodb.net/?appName=Cluster0"
 client = MongoClient(MONGO_URI)
 db = client["discord_bot"]
 whitelist_collection = db["whitelist"]
@@ -34,7 +34,7 @@ class WhitelistView(discord.ui.View):
         )
         
         names = ", ".join([user.name for user in selected_users])
-        # تعديل رسالة النجاح لتطابق طلبك "تم التجديد بنجاح"
+        # رسالة النجاح حسب طلبك
         await interaction.followup.send(f"✅ تم التجديد بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
 
 class WhitelistCog(commands.Cog):
@@ -51,7 +51,7 @@ class WhitelistCog(commands.Cog):
         view = WhitelistView(ctx.guild.id)
         await ctx.send("🛡️ **نظام تحديد الصلاحيات:**\nالرجاء اختيار الأعضاء المسموح لهم بالتحكم في البوت من القائمة بالأسفل:", view=view)
 
-    # استبدال أمر "قائمة" بـ "كشف" لعرض الأشخاص المسموح لهم
+    # أمر كشف لعرض الأشخاص المسموح لهم
     @commands.command(name="كشف", help="عرض الأشخاص المسموح لهم بالتحكم في البوت")
     async def show_whitelist(self, ctx):
         # جلب البيانات الخاصة بالسيرفر من قاعدة البيانات
