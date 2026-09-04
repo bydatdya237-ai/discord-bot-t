@@ -40,21 +40,25 @@ TEMPORARY_CHANNEL_ID = 1545187326093693038
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
 
-# === فحص مؤقت لحصر جميع الأوامر في الروم المحدد فقط ===
+# === نظام الفحص المباشر والمضمون 100% ===
 @bot.event
 async def on_message(message):
+    # تجاهل رسائل البوتات عشان ما يدخل بنهائي لوب
     if message.author.bot:
         return
 
+    # إذا الرسالة تبدأ بـ !
     if message.content.startswith("!"):
+        # لو الكاتب مو صاحب السيرفر وروم الرسالة يختلف عن الروم المخصص
         if message.guild and message.author.id != message.guild.owner_id:
             if message.channel.id != TEMPORARY_CHANNEL_ID:
                 try:
-                    await message.delete() # حذف رسالة الأمر المخالف بصمت تام
-                except:
-                    pass
-                return
+                    await message.delete() # حذف رسالة الأمر المخالف بصمت
+                except Exception as e:
+                    print(f"خطأ بالحذف: {e}")
+                return # وقف التنفيذ تماماً ولا عاد تقرأ الأمر
 
+    # هذي السطر هو اللي يشغل الأوامر (لازم يكون موجود وتحت الشروط)
     await bot.process_commands(message)
 # =========================================================
 
