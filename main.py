@@ -20,47 +20,27 @@ def keep_alive():
     t.start()
 # ========================================================
 
-# === الاتصال بقاعدة البيانات لنظام رومات الأوامر ===
+# === الاتصال بقاعدة البيانات لنظام الألعاب والبيانات ===
 mongo_url = os.environ.get('MONGO_URI')
 client = MongoClient(mongo_url)
 db = client['discord_db']
-command_channels_collection = db['command_channels']
 # ==================================================
 
+# نظام السلاش ما يحتاج صلاحية قراءة الرسائل (Message Content)
 intents = discord.Intents.default()
-intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# الآيدي المؤقت المخصص لجميع الأوامر
-TEMPORARY_CHANNEL_ID = 1545187326093693038
-
 @bot.event
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
-
-# === نظام الفحص المباشر والمضمون 100% ===
-@bot.event
-async def on_message(message):
-    # تجاهل رسائل البوتات عشان ما يدخل بنهائي لوب
-    if message.author.bot:
-        return
-
-    # إذا الرسالة تبدأ بـ !
-    if message.content.startswith("!"):
-        # لو الكاتب مو صاحب السيرفر وروم الرسالة يختلف عن الروم المخصص
-        if message.guild and message.author.id != message.guild.owner_id:
-            if message.channel.id != TEMPORARY_CHANNEL_ID:
-                try:
-                    await message.delete() # حذف رسالة الأمر المخالف بصمت
-                except Exception as e:
-                    print(f"خطأ بالحذف: {e}")
-                return # وقف التنفيذ تماماً ولا عاد تقرأ الأمر
-
-    # هذي السطر هو اللي يشغل الأوامر (لازم يكون موجود وتحت الشروط)
-    await bot.process_commands(message)
-# =========================================================
+    try:
+        # مزامنة الأوامر مع ديسكورد لتظهر فوراً مع علامة /
+        synced = await bot.tree.sync()
+        print(f"تمت مزامنة {len(synced)} أمر بنجاح!")
+    except Exception as e:
+        print(f"خطأ في مزامنة الأوامر: {e}")
 
 async def load_extensions():
     for filename in os.listdir('./cogs'):
