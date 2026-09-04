@@ -1,11 +1,10 @@
 import discord
 from discord.ext import commands
 from pymongo import MongoClient
-import os
 
-# الاتصال بقاعدة بيانات MongoDB (نفس الرابط اللي تستخدمه في البوت)
-MONGO_URL = os.environ.get("MONGO_URL") # تأكد إن متغير البيئة عندك بنفس الاسم، أو حط رابط مونجو مباشرة بين قوسين
-client = MongoClient("mongodb+srv://...") # (لو كنت مخزن الرابط بمتغير بيئة، استبدله بـ os.environ.get أو حط الرابط هنا)
+# الاتصال بقاعدة بيانات MongoDB بنفس الرابط واسم المستخدم
+MONGO_URI = "mongodb+srv://Bydatdya237_db_user:NovcUW863kD2T8Z0@cluster0.aded4cm.mongodb.net/?appName=Cluster0"
+client = MongoClient(MONGO_URI)
 db = client["discord_bot"]
 whitelist_collection = db["whitelist"]
 
