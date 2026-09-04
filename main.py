@@ -4,14 +4,14 @@ from discord.ext import commands
 from flask import Flask
 from threading import Thread
 
-# === الإضافة الجديدة للاتصال بقاعدة بيانات MongoDB وفحص القائمة البيضاء ===
+# === الاتصال بقاعدة بيانات MongoDB ===
 from pymongo import MongoClient
 
-# اعد استخدام رابط مونجو الخاص بك هنا
-client = MongoClient("ضع_رابط_MongoDB_هنا")
+MONGO_URI = "mongodb+srv://Bydatdya237_db_user:NovcUW863kD2T8Z0@cluster0.aded4cm.mongodb.net/?appName=Cluster0"
+client = MongoClient(MONGO_URI)
 db = client["discord_bot"]
 whitelist_collection = db["whitelist"]
-# ===========================================================================
+# ====================================
 
 app = Flask('')
 
@@ -30,7 +30,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === الإضافة الجديدة لدالة الفحص العامة (التحكم بالأعضاء المسموح لهم) ===
+# === دالة الفحص العامة للتحكم بالأعضاء المسموح لهم ===
 @bot.check
 def check_whitelist(ctx):
     if ctx.author.bot:
@@ -46,7 +46,7 @@ def check_whitelist(ctx):
         return False # لو ما تم تحديد أحد نهائياً، البوت مقفل على الكل عدا صاحب السيرفر
         
     return ctx.author.id in guild_data["allowed_users"]
-# ======================================================================
+# ====================================================
 
 @bot.event
 async def on_ready():
