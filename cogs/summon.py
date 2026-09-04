@@ -1,5 +1,7 @@
+import os
 import discord
 from discord.ext import commands
+from pymongo import MongoClient
 
 # 1. نافذة الإدخال (Modal) تبقى كما هي بدون تغيير
 class SummonModal(discord.ui.Modal, title="تفاصيل الاستدعاء"):
@@ -54,16 +56,37 @@ class SummonView(discord.ui.View):
 
     @discord.ui.button(label="اضغط هنا لكتابة تفاصيل الاستدعاء", style=discord.ButtonStyle.primary, emoji="📋")
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # فتح النافذة عند الضغط على الزر
         await interaction.response.send_modal(SummonModal(target_user=self.target_user))
 
 class SummonCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # ربط الاتصال بقاعدة البيانات للتحقق من المشرفين
+        mongo_url = os.environ.get('MONGO_URI')
+        self.client = MongoClient(mongo_url)
+        self.db = self.client['discord_db']
+        self.whitelist_collection = self.db['whitelist_admins']
 
-    # 3. تحويل الأمر ليصبح بادئة تقليدية (!)
+    def _has_permission(self, ctx):
+        # 1. صاحب السيرفر مسموح له دائماً
+        if ctx.author.id == ctx.guild.owner_id:
+            return True
+            
+        # 2. المشرفون المضافون في قاعدة البيانات عبر أمر تحديد
+        db_admin = self.whitelist_collection.find_one({"user_id": str(ctx.author.id)})
+        if db_admin:
+            return True
+            
+        return False
+
+    # 3. تحويل الأمر ليصبح محمي ولا يستعمله إلا المشرفون
     @commands.command(name="استدعاء", help="استدعاء عضو عبر رسالة خاصة مع السبب وروم التوجه")
     async def summon(self, ctx, member: discord.Member = None):
+        # التحقق من الصلاحية قبل تنفيذ أي شيء
+        if not self._has_permission(ctx):
+            await ctx.send("❌ عذراً، هذا الأمر مخصص للمشرفين وصاحب السيرفر فقط!")
+            return
+
         if not member:
             await ctx.send("❌ عذراً، يجب عليك تحديد العضو المراد استدعاؤه! مثال: `!استدعاء @ضياء`")
             return
@@ -72,7 +95,6 @@ class SummonCog(commands.Cog):
             await ctx.send("❌ لا يمكنك استدعاء بوت!")
             return
         
-        # إرسال رسالة فيها زر لتفتيح الـ Modal (بسبب قيود ديسكورد للأوامر العادية)
         view = SummonView(target_user=member)
         await ctx.send(f"📌 لإتمام استدعاء العضو {member.mention}, اضغط على الزر بالأسفل:", view=view)
 
