@@ -7,7 +7,7 @@ from threading import Thread
 # === الاتصال بقاعدة بيانات MongoDB ===
 from pymongo import MongoClient
 
-MONGO_URI = "mongodb+srv://Bydatdya237_db_user:NovcUW863kD2T8Z0@cluster0.aded4cm.mongodb.net/?appName=Cluster0"
+MONGO_URI = "mongodb+srv://Bydatdya237_db_user:dydatdya7268163@cluster0.aded4cm.mongodb.net/?appName=Cluster0"
 client = MongoClient(MONGO_URI)
 db = client["discord_bot"]
 whitelist_collection = db["whitelist"]
