@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from flask import Flask
 from threading import Thread
-from pymompgo import MongoClient # (أو pymongo)
+from pymongo import MongoClient
 
 # === إعدادات سيرفر الحفاظ على البوت شغال (Keep Alive) ===
 app = Flask('')
