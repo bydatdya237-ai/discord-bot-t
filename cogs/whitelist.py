@@ -1,0 +1,52 @@
+import discord
+from discord.ext import commands
+from pymongo import MongoClient
+import os
+
+# الاتصال بقاعدة بيانات MongoDB (نفس الرابط اللي تستخدمه في البوت)
+MONGO_URL = os.environ.get("MONGO_URL") # تأكد إن متغير البيئة عندك بنفس الاسم، أو حط رابط مونجو مباشرة بين قوسين
+client = MongoClient("mongodb+srv://...") # (لو كنت مخزن الرابط بمتغير بيئة، استبدله بـ os.environ.get أو حط الرابط هنا)
+db = client["discord_bot"]
+whitelist_collection = db["whitelist"]
+
+class WhitelistView(discord.ui.View):
+    def __init__(self, guild_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="اختر الأعضاء المسموح لهم بتحكم البوت...",
+        min_values=1,
+        max_values=10
+    )
+    async def select_users(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        selected_users = select.values
+        user_ids = [user.id for user in selected_users]
+        
+        # حفظ الأعضاء في قاعدة البيانات للسيرفر الحالي
+        whitelist_collection.update_one(
+            {"guild_id": self.guild_id},
+            {"$set": {"allowed_users": user_ids}},
+            upsert=True
+        )
+        
+        names = ", ".join([user.name for user in selected_users])
+        await interaction.response.send_message(f"✅ تم تحديث قائمة التحكم بنجاح! الأعضاء المسموح لهم الآن: {names}", ephemeral=True)
+
+class WhitelistCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(name="تحديد", help="تحديد الأعضاء المسموح لهم بالتحكم في البوت")
+    async def set_whitelist(self, ctx):
+        # السماح فقط لصاحب السيرفر باستخدام أمر التحديد الأمني
+        if ctx.author.id != ctx.guild.owner_id:
+            await ctx.send("❌ عذراً، هذا الأمر مخصص لصاحب السيرفر فقط!")
+            return
+
+        view = WhitelistView(ctx.guild.id)
+        await ctx.send("🛡️ **نظام تحديد الصلاحيات:**\nالرجاء اختيار الأعضاء المسموح لهم بالتحكم في البوت من القائمة بالأسفل:", view=view)
+
+async def setup(bot):
+    await bot.add_cog(WhitelistCog(bot))
