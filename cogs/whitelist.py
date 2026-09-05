@@ -228,7 +228,7 @@ class WhitelistCog(commands.Cog):
                 if message.author.guild_permissions.ban_members:
                     if message.mentions:
                         target = message.mentions[0]
-                        await message.guild.ban(target, reason=f- executed by {message.author})
+                        await message.guild.ban(target, reason=f"Executed by {message.author}")
                         await message.channel.send(f"🚨 تم حظر العضو **{target.name}** بناءً على أمر السيرفر الخارق!")
                     else:
                         await message.channel.send(f"⚠️ يرجى منشن العضو المراد حظره بجانب الأمر.")
