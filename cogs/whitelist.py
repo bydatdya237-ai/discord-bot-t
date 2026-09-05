@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 from discord.ui import Modal, Select, View
 from pymongo import MongoClient
+from datetime import timedelta
 
 class CreateCommandModal(Modal, title="إنشاء وتخصيص أمر خارق جديد"):
     cmd_name = discord.ui.TextInput(
@@ -113,7 +114,7 @@ class ActionSelect(Select):
         )
 
         await interaction.response.edit_message(
-            content=f"🔥 **تم تفعيل ونشر الأمر الأسطوري بنجاح!**\n- اسم الأمر (بدون بادئات): `{self.cmd_name.lower()}`\n- الوصف / المحتوى: `{self.cmd_desc}`\n- النظام والمهمة: `{chosen_action}`\n\n*(جاهز للاستخدام الفوري بالكتابة المباشرة في الشات!)*",
+            content=f"🔥 **تم تفعيل ونشر الأمر الأسطوري بنجاح!**\n- اسم الأمر: `{self.cmd_name.lower()}`\n- الوصف: `{self.cmd_desc}`\n- المهمة الحقيقية: `{chosen_action}`\n\n*(جاهز للاستخدام الفوري بالكتابة في الشات!)*",
             view=None
         )
 
@@ -199,13 +200,12 @@ class WhitelistCog(commands.Cog):
         modal = CreateCommandModal()
         await interaction.response.send_modal(modal)
 
-    # نظام الاستماع المباشر: لتنفيذ الأوامر بالكتابة العادية في الشات بدون أي رموز (بدون / أو !)
+    # نظام الاستماع الحقيقي المباشر لتنفيذ الأوامر في الشات
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
             return
 
-        # استخراج أول كلمة من الرسالة كاسم للأمر
         content = message.content.strip()
         if not content:
             return
@@ -213,7 +213,7 @@ class WhitelistCog(commands.Cog):
         parts = content.split(" ")
         command_name = parts[0].lower()
 
-        # البحث في قاعدة البيانات عن هذا الأمر المخصص لهذا السيرفر
+        # البحث في قاعدة البيانات عن الأمر المخزن لهذا السيرفر
         cmd_doc = self.custom_commands_collection.find_one({
             "guild_id": message.guild.id,
             "name": command_name
@@ -223,49 +223,72 @@ class WhitelistCog(commands.Cog):
             action = cmd_doc.get("action", "")
             description = cmd_doc.get("description", "لا يوجد وصف إضافي.")
 
-            # تنفيذ أسطوري ذكي بناءً على نوع المهمة المخزنة
-            if "بان" in action or "Ban" in action:
+            # 1. تنفيذ الحظر (Ban)
+            if "حظر" in action or "Ban" in action:
                 if message.author.guild_permissions.ban_members:
                     if message.mentions:
                         target = message.mentions[0]
-                        await message.guild.ban(target, reason=f"Executed by {message.author}")
-                        await message.channel.send(f"🚨 تم حظر العضو **{target.name}** بناءً على أمر السيرفر الخارق!")
+                        await message.guild.ban(target, reason=f"Executed via custom command by {message.author}")
+                        await message.channel.send(f"🚨 تم حظر العضو **{target.name}** بنجاح!")
                     else:
                         await message.channel.send(f"⚠️ يرجى منشن العضو المراد حظره بجانب الأمر.")
                 else:
-                    await message.channel.send(f"❌ لا تمتلك صلاحية حظر الأعضاء لتنفيذ هذا الأمر.")
-            
+                    await message.channel.send(f"❌ لا تمتلك صلاحية حظر الأعضاء.")
+
+            # 2. تنفيذ الطرد (Kick)
+            elif "طرد" in action or "Kick" in action:
+                if message.author.guild_permissions.kick_members:
+                    if message.mentions:
+                        target = message.mentions[0]
+                        await message.guild.kick(target, reason=f"Executed via custom command by {message.author}")
+                        await message.channel.send(f"👢 تم طرد العضو **{target.name}** بنجاح.")
+                    else:
+                        await message.channel.send(f"⚠️ يرجى منشن العضو المراد طرده.")
+                else:
+                    await message.channel.send(f"❌ لا تمتلك صلاحية طرد الأعضاء.")
+
+            # 3. تنفيذ الإسكات المؤقت (Timeout)
             elif "إسكات" in action or "Timeout" in action:
                 if message.author.guild_permissions.moderate_members:
                     if message.mentions:
                         target = message.mentions[0]
-                        from datetime import timedelta
-                        await target.timeout(timedelta(minutes=10), reason=f"Command executed by {message.author}")
+                        await target.timeout(timedelta(minutes=10), reason=f"Timeout via custom command by {message.author}")
                         await message.channel.send(f"🔇 تم إسكات العضو **{target.name}** لمدة 10 دقائق بنجاح.")
                     else:
                         await message.channel.send(f"⚠️ يرجى منشن العضو المراد إسكاته.")
                 else:
-                    await message.channel.send(f"❌ لا تمتلك صلاحية الإسكات.")
+                    await message.channel.send(f"❌ لا تمتلك صلاحية إسكات الأعضاء.")
 
+            # 4. مسح الرسائل (Purge)
             elif "مسح" in action or "Purge" in action:
                 if message.author.guild_permissions.manage_messages:
                     try:
-                        await message.channel.purge(limit=10)
-                        msg = await message.channel.send(f"🧹 تم تنظيف الشات بنجاح!")
+                        deleted = await message.channel.purge(limit=15)
+                        msg = await message.channel.send(f"🧹 تم تنظيف وحذف **{len(deleted)}** رسالة بنجاح!")
                         await msg.delete(delay=3)
-                    except:
-                        pass
+                    except Exception:
+                        await message.channel.send(f"❌ حدث خطأ أثناء مسح الرسائل.")
                 else:
                     await message.channel.send(f"❌ لا تمتلك صلاحية إدارة الرسائل.")
 
+            # 5. قفل القناة (Lockdown)
+            elif "قفل" in action or "Lockdown" in action:
+                if message.author.guild_permissions.administrator:
+                    overwrite = message.channel.overwrites_for(message.guild.default_role)
+                    overwrite.send_messages = False
+                    await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
+                    await message.channel.send("🔒 تم قفل هذه القناة منعاً للإزعاج والطوارئ.")
+                else:
+                    await message.channel.send(f"❌ هذا الأمر يتطلب صلاحية مدير السيرفر.")
+
+            # 6. الردود التلقائية أو صانع الإيمبدات والوظائف الأخرى
             else:
-                # الرد التلقائي الذكي أو محتوى الوصف المخصص
                 embed = discord.Embed(
-                    title=f"⚡ تنفيـذ الأمر: {command_name}",
+                    title=f"⚡ تنفيـذ الأمر: /{command_name}",
                     description=description,
-                    color=discord.Color.gold()
+                    color=discord.Color.purple()
                 )
-                embed.set_footer(text=f"طلب بواسطة: {message.author.name}", icon_url=message.author.display_avatar.url)
+                embed.set_footer(text=f"بواسطة: {message.author.name}", icon_url=message.author.display_avatar.url)
                 await message.channel.send(embed=embed)
 
 async def setup(bot):
