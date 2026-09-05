@@ -40,7 +40,7 @@ class CreateRoleModal(Modal, title="مصنع الرتب الخارق"):
             
             embed = discord.Embed(
                 title="✨ تم خلق رتبة جديدة بنجاح!",
-                description=f"تم إطلاق الرتبة **{new_role.mention}}}** وإضافتها لسيرفرك.",
+                description=f"تم إطلاق الرتبة **{new_role.mention}** وإضافتها لسيرفرك.",
                 color=role_color
             )
             embed.add_field(name="معرف الرتبة (ID):", value=f"`{new_role.id}`", inline=False)
