@@ -6,11 +6,66 @@ from discord.ui import Modal, Select, View
 from pymongo import MongoClient
 from datetime import timedelta
 
-# === 1. لوحة تفاعلية لإدخال سبب مخصص ومدة زمنية للإسكات ===
+# === 1. لوحة تفاعلية لإنشاء الرومات (من الكود الأول) ===
+class CreateChannelModal(Modal, title="مركز قيادة إنشاء الرومات الذكي"):
+    channel_name = discord.ui.TextInput(
+        label="اسم الروم الجديد (بدون مسافات أو بـ -)",
+        placeholder="مثال: chat, general, support...",
+        max_length=50
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        ch_name = self.channel_name.value.strip().replace(" ", "-")
+        view = ChannelTypeView(ch_name)
+        await interaction.response.send_message(
+            f"⚡ تم رصد اسم الروم: **{ch_name}**\nاختر نوع القناة التي تريد إطلاقها فوراً:",
+            view=view,
+            ephemeral=True
+        )
+
+class ChannelTypeSelect(Select):
+    def __init__(self, channel_name):
+        self.channel_name = channel_name
+        options = [
+            discord.SelectOption(label="قناة كتابية (Text Channel)", description="إنشاء روم شات كتابي جديد ومنسق", emoji="💬"),
+            discord.SelectOption(label="قناة صوتية (Voice Channel)", description="إنشاء روم صوتي خاص بالأعضاء", emoji="🔊"),
+            discord.SelectOption(label="روم إداري مخفي (Staff Only)", description="روم كتابي سري خاص بالمشرفين فقط", emoji="🛡️")
+        ]
+        super().__init__(placeholder="اختر تصنيف الروم...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        choice = self.values[0]
+        
+        try:
+            if "كتابية" in choice:
+                new_ch = await guild.create_text_channel(name=self.channel_name)
+                await interaction.response.edit_message(content=f"✅ تم إطلاق الروم الكتابي بنجاح: {new_ch.mention}", view=None)
+            elif "صوتية" in choice:
+                new_ch = await guild.create_voice_channel(name=self.channel_name)
+                await interaction.response.edit_message(content=f"✅ تم إطلاق الروم الصوتي بنجاح: **{new_ch.name}**", view=None)
+            elif "إداري" in choice:
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    interaction.user: discord.PermissionOverwrite(read_messages=True)
+                }
+                new_ch = await guild.create_text_channel(name=f"secure-{self.channel_name}", overwrites=overwrites)
+                await interaction.response.edit_message(content=f"🔒 تم إنشاء الروم الإداري السري بنجاح: {new_ch.mention}", view=None)
+        except Exception:
+            await interaction.response.edit_message(content=f"❌ حدث خطأ أثناء إنشاء الروم: تأكد أن البوت يمتلك صلاحية (Manage Channels).", view=None)
+
+class ChannelTypeView(View):
+    def __init__(self, channel_name):
+        super().__init__()
+        self.add_item(ChannelTypeSelect(channel_name))
+
+
+# === 2. لوحة تفاعلية لإدخال سبب مخصص ومدة زمنية للإسكات ===
 class CustomTimeoutModal(Modal, title="تحديد سبب ومدّة مخصصة للإسكات"):
     reason_input = discord.ui.TextInput(
         label="سبب الإسكات",
-        placeholder="اكتب السبب هنا (مثال: مخالفة قوانين الروم الصوتع)...",
+        placeholder="اكتب السبب هنا...",
         max_length=100
     )
     minutes_input = discord.ui.TextInput(
@@ -45,7 +100,6 @@ class CustomTimeoutModal(Modal, title="تحديد سبب ومدّة مخصصة �
         except Exception:
             await interaction.response.send_message("❌ فشل إسكات العضو (تأكد أن رتبة بوتك أعلى من رتبته).", ephemeral=True)
 
-# === 2. قائمة اختيار الأسباب الجاهزة للإسكات ===
 class TimeoutSelect(Select):
     def __init__(self, target: discord.Member):
         self.target = target
@@ -64,7 +118,6 @@ class TimeoutSelect(Select):
             await interaction.response.send_modal(CustomTimeoutModal(self.target))
             return
 
-        # تحديد الأسباب والمدد الجاهزة بناءً على اختيارك
         if "شتم" in choice:
             minutes = 15
             reason = "شتم / ألفاظ نابية"
@@ -98,7 +151,7 @@ class TimeoutView(View):
         self.add_item(TimeoutSelect(target))
 
 
-# === كلاس الإدارة والأمان الشامل (منظومة الـ Slash المتكاملة) ===
+# === كلاس الإدارة والأمان الشامل ===
 class AdvancedAdminCore(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -106,35 +159,49 @@ class AdvancedAdminCore(commands.Cog):
         self.client = MongoClient(mongo_url)
         self.db = self.client['discord_bot_db']
         self.whitelist_collection = self.db['whitelist_admins']
-        self.settings_collection = self.db['guild_settings']
 
     def _has_permission(self, author, guild):
         if author.id == guild.owner_id:
             return True
         db_admin = self.whitelist_collection.find_one({"user_id": str(author.id)})
-        if db_admin:
-            return True
-        return False
+        return bool(db_admin)
+
+    # دالة فحص الروم المخصص للاستخدام (154557934142803150)
+    def _check_allowed_channel(self, channel_id):
+        return channel_id == 154557934142803150
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        setting = self.settings_collection.find_one({"guild_id": member.guild.id})
-        if setting and "welcome_channel" in setting:
-            channel = member.guild.get_channel(setting["welcome_channel"])
-            if channel:
-                embed = discord.Embed(
-                    title="🎉 منور السيرفر يا وحش!",
-                    description=f"أهلاً بك {member.mention} في سيرفر **{member.guild.name}**!\nنتمنى لك أوقاتاً ممتعة معنا.",
-                    color=discord.Color.green()
-                )
-                embed.set_thumbnail(url=member.display_avatar.url)
-                embed.set_footer(text=f"رقم العضوية: {member.guild.member_count}")
-                await channel.send(embed=embed)
+        # الترحيب يعمل حصرياً في الروم: 1545601155952812044
+        channel = member.guild.get_channel(1545601155952812044)
+        if channel:
+            embed = discord.Embed(
+                title="🎉 منور السيرفر يا وحش!",
+                description=f"أهلاً بك {member.mention} في سيرفر **{member.guild.name}**!\nنتمنى لك أوقاتاً ممتعة معنا.",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(text=f"رقم العضوية: {member.guild.member_count}")
+            await channel.send(embed=embed)
 
-    # 1. أمر الحظر (Ban)
+    # 1. أمر إنشاء روم
+    @app_commands.command(name="انشاء", description="لوحة تحكم مرنة لإنشاء الرومات الصوتية والكتابية فوراً")
+    async def create_channel_slash(self, interaction: discord.Interaction):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
+        if not interaction.user.guild_permissions.manage_channels and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ عذراً، لا تمتلك صلاحية إدارة القنوات لتنفيذ هذا الأمر!", ephemeral=True)
+            return
+        await interaction.response.send_modal(CreateChannelModal())
+
+    # 2. أمر الحظر (Ban)
     @app_commands.command(name="حظر", description="حظر عضو مخالف نهائياً من السيرفر")
     @app_commands.describe(member="العضو المراد حظره", reason="سبب الحظر")
     async def ban_member(self, interaction: discord.Interaction, member: discord.Member, reason: str = "لم يُذكر سبب"):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.ban_members and not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ لا تمتلك صلاحية حظر الأعضاء!", ephemeral=True)
             return
@@ -147,10 +214,13 @@ class AdvancedAdminCore(commands.Cog):
         except Exception:
             await interaction.response.send_message("❌ فشل حظر العضو (تأكد أن رتبة بوتك أعلى من رتبته).", ephemeral=True)
 
-    # 2. أمر الطرد (Kick)
+    # 3. أمر الطرد (Kick)
     @app_commands.command(name="طرد", description="طرد عضو مخالف مع توثيق العملية")
     @app_commands.describe(member="العضو المراد طرده", reason="سبب الطرد")
     async def kick_member(self, interaction: discord.Interaction, member: discord.Member, reason: str = "لم يُذكر سبب"):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.kick_members and not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ لا تمتلك صلاحية طرد الأعضاء!", ephemeral=True)
             return
@@ -162,10 +232,13 @@ class AdvancedAdminCore(commands.Cog):
         except Exception:
             await interaction.response.send_message("❌ فشل طرد العضو.", ephemeral=True)
 
-    # 3. أمر الإسكات الذكي التفاعلي (مع قائمة الأسباب)
+    # 4. أمر الإسكات الذكي التفاعلي (ايسكات)
     @app_commands.command(name="ايسكات", description="إسكات عضو مع اختيار سبب جاهز أو تحديد مدة مخصصة")
     @app_commands.describe(member="العضو المراد إסקاته")
     async def timeout_member_interactive(self, interaction: discord.Interaction, member: discord.Member):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.moderate_members and not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ لا تمتلك صلاحية إسكات الأعضاء!", ephemeral=True)
             return
@@ -177,10 +250,13 @@ class AdvancedAdminCore(commands.Cog):
             ephemeral=True
         )
 
-    # 4. أمر مسح الرسائل (Purge)
+    # 5. أمر مسح الرسائل (مسح)
     @app_commands.command(name="مسح", description="حذف عدد معين من رسائل الشات بلمح البصر")
     @app_commands.describe(amount="عدد الرسائل المراد مسحها (من 1 إلى 100)")
     async def purge_messages(self, interaction: discord.Interaction, amount: int):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.manage_messages and not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ لا تمتلك صلاحية إدارة الرسائل!", ephemeral=True)
             return
@@ -194,9 +270,12 @@ class AdvancedAdminCore(commands.Cog):
         msg = await interaction.channel.send(f"🧹 تم تطهير وحذف **{len(deleted)}** رسالة بنجاح!")
         await msg.delete(delay=4)
 
-    # 5. أمر قفل القناة (Lock)
+    # 6. أمر قفل القناة (قفل)
     @app_commands.command(name="قفل", description="قفل الشات الحالي تماماً ومنع الجميع من التحدث طوارئ")
     async def lockdown_channel(self, interaction: discord.Interaction):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.administrator and not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ هذا الأمر خاص بالإدارة العليا فقط!", ephemeral=True)
             return
@@ -215,9 +294,12 @@ class AdvancedAdminCore(commands.Cog):
         await channel.send(embed=embed)
         await interaction.followup.send("🔒 تم قفل الروم بنجاح.", ephemeral=True)
 
-    # 6. أمر فتح القناة (Unlock)
+    # 7. أمر فتح القناة (فتح)
     @app_commands.command(name="فتح", description="إلغاء حالة الطوارئ وفتح القناة للأعضاء")
     async def unlock_channel(self, interaction: discord.Interaction):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.administrator and not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ هذا الأمر خاص بالإدارة العليا فقط!", ephemeral=True)
             return
@@ -236,11 +318,14 @@ class AdvancedAdminCore(commands.Cog):
         await channel.send(embed=embed)
         await interaction.followup.send("🔓 تم فتح الروم بنجاح.", ephemeral=True)
 
-    # ==================== 🔒 أوامر الـ Slash الخاصة بالـ Whitelist ====================
+    # ==================== أوامر الـ Whitelist ====================
 
     @app_commands.command(name="تحديد", description="إضافة عضو لقائمة المشرفين المعتمدين")
     @app_commands.describe(member="العضو المراد إضافته")
     async def add_whitelist(self, interaction: discord.Interaction, member: discord.Member):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if interaction.user.id != interaction.guild.owner_id:
             await interaction.response.send_message("❌ هذا الأمر مخصص لصاحب السيرفر الأساسي فقط!", ephemeral=True)
             return
@@ -257,6 +342,9 @@ class AdvancedAdminCore(commands.Cog):
     @app_commands.command(name="ازالة", description="إزالة عضو من قائمة المشرفين المعتمدين")
     @app_commands.describe(member="العضو المراد إزالته")
     async def remove_whitelist(self, interaction: discord.Interaction, member: discord.Member):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if interaction.user.id != interaction.guild.owner_id:
             await interaction.response.send_message("❌ هذا الأمر مخصص لصاحب السيرفر الأساسي فقط!", ephemeral=True)
             return
@@ -271,6 +359,9 @@ class AdvancedAdminCore(commands.Cog):
 
     @app_commands.command(name="كشف", description="استعراض قائمة المشرفين المعتمدين في السيرفر")
     async def show_whitelist(self, interaction: discord.Interaction):
+        if not self._check_allowed_channel(interaction.channel_id):
+            await interaction.response.send_message("❌ هذا الأمر غير مسموح استخدامه في هذه الروم! يرجى استخدامه في الروم المخصص: <#154557934142803150>", ephemeral=True)
+            return
         if not self._has_permission(interaction.user, interaction.guild):
             await interaction.response.send_message("❌ عذراً، لا تمتلك الصلاحية للاطلاع على السجل!", ephemeral=True)
             return
