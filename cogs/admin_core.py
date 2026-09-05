@@ -2,8 +2,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from discord.ui import Modal, Select, View
-import os
-from pymongo import MongoClient
 
 # === لوحة تفاعلية لإنشاء الرومات بالذكاء والسرعة المطلقة ===
 class CreateChannelModal(Modal, title="مركز قيادة إنشاء الرومات الذكي"):
@@ -41,17 +39,14 @@ class ChannelTypeSelect(Select):
         
         try:
             if "كتابية" in choice:
-                # إنشاء روم كتابي عادي
                 new_ch = await guild.create_text_channel(name=self.channel_name)
                 await interaction.response.edit_message(content=f"✅ تم إطلاق الروم الكتابي بنجاح: {new_ch.mention}", view=None)
             
             elif "صوتية" in choice:
-                # إنشاء روم صوتي
                 new_ch = await guild.create_voice_channel(name=self.channel_name)
                 await interaction.response.edit_message(content=f"✅ تم إطلاق الروم الصوتي بنجاح: **{new_ch.name}**", view=None)
             
             elif "إداري" in choice:
-                # إنشاء روم إداري بصلاحيات مخفية عن الأعضاء العاديين
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(read_messages=False),
                     interaction.user: discord.PermissionOverwrite(read_messages=True)
@@ -73,7 +68,6 @@ class AdvancedAdminCore(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # 1. أمر إنشاء الرومات الأسطوري (سلاش + كتابة مباشرة)
     @app_commands.command(name="انشاء", description="لوحة تحكم مرنة لإنشاء الرومات الصوتية والكتابية فوراً")
     async def create_channel_slash(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.manage_channels:
@@ -81,7 +75,6 @@ class AdvancedAdminCore(commands.Cog):
             return
         await interaction.response.send_modal(CreateChannelModal())
 
-    # 2. أمر العقوبات والقفل المطلق (Lockdown)
     @app_commands.command(name="قفل", description="قفل الشات الحالي تماماً ومنع الجميع من التحدث الطوارئ القصوى")
     async def lockdown_channel(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -102,7 +95,6 @@ class AdvancedAdminCore(commands.Cog):
         await channel.send(embed=embed)
         await interaction.followup.send("🔒 تم قفل الروم بنجاح.", ephemeral=True)
 
-    # 3. أمر فك القفل (Unlock)
     @app_commands.command(name="فتح", description="إلغاء حالة الطوارئ وفتح القناة للأعضاء")
     async def unlock_channel(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -123,7 +115,6 @@ class AdvancedAdminCore(commands.Cog):
         await channel.send(embed=embed)
         await interaction.followup.send("🔓 تم فتح الروم بنجاح.", ephemeral=True)
 
-    # 4. طرد ذكي مع تقرير أمني (Kick)
     @app_commands.command(name="طرد", description="طرد عضو مخالف مع توثيق العملية بسجل السيرفر")
     @app_commands.describe(member="العضو المراد طرده", reason="سبب الطرد")
     async def kick_member(self, interaction: discord.Interaction, member: discord.Member, reason: str = "لم يُذكر سبب"):
@@ -144,7 +135,6 @@ class AdvancedAdminCore(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ فشل طرد العضو (ربما رتبته أعلى من بوتك أو رتبتك).", ephemeral=True)
 
-    # 5. تطهير الشات الجبار (Mass Purge)
     @app_commands.command(name="مسح", description="حذف عدد معين من رسائل الشات بلمح البصر")
     @app_commands.describe(amount="عدد الرسائل المراد مسحها (من 1 إلى 100)")
     async def purge_messages(self, interaction: discord.Interaction, amount: int):
@@ -161,7 +151,6 @@ class AdvancedAdminCore(commands.Cog):
         msg = await interaction.channel.send(f"🧹 تم تطهير وحذف **{len(deleted)}** رسالة بنجاح!")
         await msg.delete(delay=4)
 
-    # نظام الاستماع السريع للكتابة المباشرة بدون رموز لأهم أوامر الإدارة
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -174,10 +163,8 @@ class AdvancedAdminCore(commands.Cog):
         parts = content.split(" ")
         cmd = parts[0].lower()
 
-        # لو كتب المستخدم كلمة "انشاء" مباشرة بالشات بدون /
         if cmd == "انشاء":
             if message.author.guild_permissions.manage_channels:
-                # يمديه يستدعي اللوحة أو ينشئ بالطريقة السريعة
                 await message.channel.send(f"⚡ يا هلا {message.author.mention}، لإنشاء روم فوري استخدم أمر السلاش `/انشاء` لتظهر لك لوحة الخيارات المتقدمة!")
 
 async def setup(bot):
