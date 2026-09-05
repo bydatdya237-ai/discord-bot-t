@@ -36,15 +36,13 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f'دخلت السيرفر باسم: {bot.user}')
     try:
-        # مزامنة الأوامر خصيصاً على سيرفرك لتظهر في الحال
-        GUILD_ID = discord.Object(id=1544077828151054537)
-        bot.tree.copy_global_to(guild=GUILD_ID)
-        synced = await bot.tree.sync(guild=GUILD_ID)
+        # مزامنة الأوامر عالمياً لتعمل في أي سيرفر يتواجد فيه البوت مباشرة
+        synced = await bot.tree.sync()
         
         # طباعة أسماء الأوامر المزامنة للتأكد
         command_names = [cmd.name for cmd in synced]
         print(f"الأوامر المزامنة حالياً: {command_names}")
-        print(f"تمت مزامنة {len(synced)} أمر على سيرفرك بنجاح!")
+        print(f"تمت مزامنة {len(synced)} أمر عالمياً بنجاح!")
     except Exception as e:
         print(f"خطأ في مزامنة الأوامر: {e}")
 
