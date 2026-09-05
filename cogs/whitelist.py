@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+from discord import app_commands
 from pymongo import MongoClient
 import random
 from datetime import timedelta
@@ -79,7 +80,7 @@ class GiantCleanBotCog(commands.Cog):
         channel = message.channel
         guild = message.guild
 
-        # ==================== 🛡️ 1. أوامر الحماية والإدارة (15 أمر) ====================
+        # ==================== 🛡️ 1. أوامر الحماية والإدارة ====================
 
         if cmd == "حظر" or cmd == "ban":
             if author.guild_permissions.ban_members or self._has_permission(author, guild):
@@ -244,7 +245,7 @@ class GiantCleanBotCog(commands.Cog):
                 await channel.send("❌ تتطلب صلاحية مدير السيرفر.")
 
 
-        # ==================== 💰 2. أوامر الاقتصاد والبنوك (20 أمر) ====================
+        # ==================== 💰 2. أوامر الاقتصاد والبنوك ====================
 
         elif cmd == "فلوس" or cmd == "balance" or cmd == "راتبي" or cmd == "كاش":
             target = message.mentions[0] if message.mentions else author
@@ -433,7 +434,7 @@ class GiantCleanBotCog(commands.Cog):
                 await channel.send("❌ ليس لديك صلاحية.")
 
 
-        # ==================== 🛠️ 3. أوامر الأدوات والمعلومات (20 أمر) ====================
+        # ==================== 🛠️ 3. أوامر الأدوات والمعلومات ====================
 
         elif cmd == "بينغ" or cmd == "ping":
             latency = round(self.bot.latency * 1000)
@@ -516,7 +517,7 @@ class GiantCleanBotCog(commands.Cog):
                 else:
                     await channel.send("⚠️ اكتب سؤال الاستطلاع.")
             else:
-                await channel.send("❌ لا تمتلك صلاحية.")
+                    await channel.send("❌ لا تمتلك صلاحية.")
 
         elif cmd == "أعضاء" or cmd == "membercount":
             await channel.send(f"👥 إجمالي الأعضاء المتواجدين في السيرفر حالياً: **{guild.member_count}** عضو أسطوري!")
@@ -584,7 +585,7 @@ class GiantCleanBotCog(commands.Cog):
             )
             embed.add_field(
                 name="🛠️ 3. الأدوات والمعلومات:", 
-                value="`بينغ` , `سيرفر` , `بروفايل` , `صورة` , `بانر` , `افك` , `قول` , `إيمبد` , `استطلاع` , `أعضاء` , `معلومات_البوت` , `حالة_التشغيل` , `رتب` , `قنوات` , `رابط` , `المطور` , `إيمبد_عنوان` , `تنبيه_عام`", 
+                value="`بينغ` , `سيرفر` , `بروفايل` , `صورة` , `بانر` , `افك` , `قول` , `إيمبد` , `استطلاع` , `أعضاء` , `معلومات_البوت` , `حالة_التشغيل` , `رتب` , `قنوات` , `رابط` ,`المطور` , `إيمبد_عنوان` , `تنبيه_عام`", 
                 inline=False
             )
             await channel.send(embed=embed)
