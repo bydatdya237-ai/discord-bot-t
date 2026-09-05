@@ -19,7 +19,8 @@ class CreateCommandModal(Modal, title="إنشاء وتخصيص أمر جديد")
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        view = CategorySelectView(self.cmd_name.value, self.cmd_description.value)
+        # تمرير القيم كـ نص صريح (Strings)
+        view = CategorySelectView(str(self.cmd_name.value), str(self.cmd_description.value))
         await interaction.response.send_message(
             f"✅ تم حفظ الاسم: **/{self.cmd_name.value}**\nالخطوة التالية: اختر تصنيف ووظيفة هذا الأمر:",
             view=view,
@@ -92,6 +93,7 @@ class ActionSelect(Select):
     async def callback(self, interaction: discord.Interaction):
         mongo_url = os.environ.get('MONGO_URI')
         client = MongoClient(mongo_url)
+        # توحيد اسم قاعدة البيانات لتكون discord_bot_db
         db = client['discord_bot_db']
         collection = db['custom_commands']
 
@@ -126,7 +128,8 @@ class WhitelistCog(commands.Cog):
         self.bot = bot
         mongo_url = os.environ.get('MONGO_URI')
         self.client = MongoClient(mongo_url)
-        self.db = self.client['discord_db']
+        # توحيد اسم قاعدة البيانات لتكون discord_bot_db متوافقة مع البقية
+        self.db = self.client['discord_bot_db']
         self.whitelist_collection = self.db['whitelist_admins']
 
     def _has_permission(self, interaction: discord.Interaction):
