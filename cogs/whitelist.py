@@ -2,10 +2,104 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import Modal, Select, View
 from pymongo import MongoClient
 from datetime import timedelta
 
-class GiantCleanBotCog(commands.Cog):
+# === 1. لوحة تفاعلية لإدخال سبب مخصص ومدة زمنية للإسكات ===
+class CustomTimeoutModal(Modal, title="تحديد سبب ومدّة مخصصة للإسكات"):
+    reason_input = discord.ui.TextInput(
+        label="سبب الإسكات",
+        placeholder="اكتب السبب هنا (مثال: مخالفة قوانين الروم الصوتع)...",
+        max_length=100
+    )
+    minutes_input = discord.ui.TextInput(
+        label="المدة بالدقائق (أرقام فقط)",
+        placeholder="مثال: 15 أو 60...",
+        max_length=5
+    )
+
+    def __init__(self, target: discord.Member):
+        super().__init__()
+        self.target = target
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            minutes = int(self.minutes_input.value.strip())
+            reason = self.reason_input.value.strip()
+        except ValueError:
+            await interaction.response.send_message("❌ يرجى إدخال رقم صحيح في خانة الدقائق!", ephemeral=True)
+            return
+
+        try:
+            await self.target.timeout(timedelta(minutes=minutes), reason=reason)
+            embed = discord.Embed(
+                title="🔇 عقوبة إسكات مخصصة",
+                description=f"تم إسكات العضو **{self.target.name}** بنجاح.",
+                color=discord.Color.dark_red()
+            )
+            embed.add_field(name="السبب:", value=reason, inline=False)
+            embed.add_field(name="المدة:", value=f"{minutes} دقيقة", inline=False)
+            embed.set_footer(text=f"بواسطة المشرف: {interaction.user.name}")
+            await interaction.response.send_message(embed=embed)
+        except Exception:
+            await interaction.response.send_message("❌ فشل إسكات العضو (تأكد أن رتبة بوتك أعلى من رتبته).", ephemeral=True)
+
+# === 2. قائمة اختيار الأسباب الجاهزة للإسكات ===
+class TimeoutSelect(Select):
+    def __init__(self, target: discord.Member):
+        self.target = target
+        options = [
+            discord.SelectOption(label="شتم / ألفاظ نابية", description="مدة الإسكات: 15 دقيقة", emoji="⚠️"),
+            discord.SelectOption(label="سبام / إزعاج متكرر", description="مدة الإسكات: 30 دقيقة", emoji="⏱️"),
+            discord.SelectOption(label="تخريب أو إثارة مشاكل", description="مدة الإسكات: 60 دقيقة (ساعة)", emoji="🛑"),
+            discord.SelectOption(label="إدخال سبب ومدة مخصصة", description="افتح لوحة لكتابة سبب يدوي ومدّة خاصة", emoji="✍️")
+        ]
+        super().__init__(placeholder="اختر سبب الإسكات المناسب...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        choice = self.values[0]
+
+        if "مخصصة" in choice:
+            await interaction.response.send_modal(CustomTimeoutModal(self.target))
+            return
+
+        # تحديد الأسباب والمدد الجاهزة بناءً على اختيارك
+        if "شتم" in choice:
+            minutes = 15
+            reason = "شتم / ألفاظ نابية"
+        elif "سبام" in choice:
+            minutes = 30
+            reason = "سبام / إزعاج متكرر"
+        elif "تخريب" in choice:
+            minutes = 60
+            reason = "تخريب أو إثارة مشاكل"
+        else:
+            minutes = 10
+            reason = "مخالفة عامة"
+
+        try:
+            await self.target.timeout(timedelta(minutes=minutes), reason=reason)
+            embed = discord.Embed(
+                title="🔇 تنفيذ عقوبة الإسكات",
+                description=f"تم إسكات العضو **{self.target.name}** بنجاح.",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="السبب:", value=reason, inline=False)
+            embed.add_field(name="المدة:", value=f"{minutes} دقيقة", inline=False)
+            embed.set_footer(text=f"بواسطة المشرف: {interaction.user.name}")
+            await interaction.response.edit_message(content="✅ تمت العملية بنجاح وإسكات العضو.", embed=embed, view=None)
+        except Exception:
+            await interaction.response.edit_message(content="❌ فشل إسكات العضو (تأكد أن رتبة بوتك أعلى منه).", view=None)
+
+class TimeoutView(View):
+    def __init__(self, target: discord.Member):
+        super().__init__()
+        self.add_item(TimeoutSelect(target))
+
+
+# === كلاس الإدارة والأمان الشامل (منظومة الـ Slash المتكاملة) ===
+class AdvancedAdminCore(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         mongo_url = os.environ.get('MONGO_URI')
@@ -13,7 +107,6 @@ class GiantCleanBotCog(commands.Cog):
         self.db = self.client['discord_bot_db']
         self.whitelist_collection = self.db['whitelist_admins']
         self.settings_collection = self.db['guild_settings']
-        self.warns_collection = self.db['guild_warns']
 
     def _has_permission(self, author, guild):
         if author.id == guild.owner_id:
@@ -38,296 +131,110 @@ class GiantCleanBotCog(commands.Cog):
                 embed.set_footer(text=f"رقم العضوية: {member.guild.member_count}")
                 await channel.send(embed=embed)
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
+    # 1. أمر الحظر (Ban)
+    @app_commands.command(name="حظر", description="حظر عضو مخالف نهائياً من السيرفر")
+    @app_commands.describe(member="العضو المراد حظره", reason="سبب الحظر")
+    async def ban_member(self, interaction: discord.Interaction, member: discord.Member, reason: str = "لم يُذكر سبب"):
+        if not interaction.user.guild_permissions.ban_members and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ لا تمتلك صلاحية حظر الأعضاء!", ephemeral=True)
+            return
+        try:
+            await member.ban(reason=reason)
+            embed = discord.Embed(title="🔨 تم الحظر بنجاح", description=f"تم حظر العضو **{member.name}**.", color=discord.Color.dark_red())
+            embed.add_field(name="السبب:", value=reason)
+            embed.set_footer(text=f"بواسطة: {interaction.user.name}")
+            await interaction.response.send_message(embed=embed)
+        except Exception:
+            await interaction.response.send_message("❌ فشل حظر العضو (تأكد أن رتبة بوتك أعلى من رتبته).", ephemeral=True)
+
+    # 2. أمر الطرد (Kick)
+    @app_commands.command(name="طرد", description="طرد عضو مخالف مع توثيق العملية")
+    @app_commands.describe(member="العضو المراد طرده", reason="سبب الطرد")
+    async def kick_member(self, interaction: discord.Interaction, member: discord.Member, reason: str = "لم يُذكر سبب"):
+        if not interaction.user.guild_permissions.kick_members and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ لا تمتلك صلاحية طرد الأعضاء!", ephemeral=True)
+            return
+        try:
+            await member.kick(reason=reason)
+            embed = discord.Embed(title="👢 عملية طرد ناجحة", description=f"تم طرد العضو **{member.name}**.", color=discord.Color.orange())
+            embed.add_field(name="السبب:", value=reason)
+            await interaction.response.send_message(embed=embed)
+        except Exception:
+            await interaction.response.send_message("❌ فشل طرد العضو.", ephemeral=True)
+
+    # 3. أمر الإسكات الذكي التفاعلي (مع قائمة الأسباب)
+    @app_commands.command(name="ايسكات", description="إسكات عضو مع اختيار سبب جاهز أو تحديد مدة مخصصة")
+    @app_commands.describe(member="العضو المراد إסקاته")
+    async def timeout_member_interactive(self, interaction: discord.Interaction, member: discord.Member):
+        if not interaction.user.guild_permissions.moderate_members and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ لا تمتلك صلاحية إسكات الأعضاء!", ephemeral=True)
+            return
+        
+        view = TimeoutView(member)
+        await interaction.response.send_message(
+            f"⚖️ اختر سبب الإسكات المناسب للعضو **{member.name}** من القائمة أدناه، أو حدد مدة وسبب يدوي:",
+            view=view,
+            ephemeral=True
+        )
+
+    # 4. أمر مسح الرسائل (Purge)
+    @app_commands.command(name="مسح", description="حذف عدد معين من رسائل الشات بلمح البصر")
+    @app_commands.describe(amount="عدد الرسائل المراد مسحها (من 1 إلى 100)")
+    async def purge_messages(self, interaction: discord.Interaction, amount: int):
+        if not interaction.user.guild_permissions.manage_messages and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ لا تمتلك صلاحية إدارة الرسائل!", ephemeral=True)
+            return
+        
+        if amount > 100 or amount < 1:
+            await interaction.response.send_message("⚠️ يرجى تحديد رقم بين 1 و 100.", ephemeral=True)
             return
 
-        content = message.content.strip()
-        if not content:
+        await interaction.response.defer(ephemeral=True)
+        deleted = await interaction.channel.purge(limit=amount)
+        msg = await interaction.channel.send(f"🧹 تم تطهير وحذف **{len(deleted)}** رسالة بنجاح!")
+        await msg.delete(delay=4)
+
+    # 5. أمر قفل القناة (Lock)
+    @app_commands.command(name="قفل", description="قفل الشات الحالي تماماً ومنع الجميع من التحدث طوارئ")
+    async def lockdown_channel(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ هذا الأمر خاص بالإدارة العليا فقط!", ephemeral=True)
             return
+        
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        overwrite = channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = False
+        await channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        
+        embed = discord.Embed(
+            title="🚨 حالة طوارئ: تم إغلاق القناة",
+            description="تم تجميد هذه القناة بأمر إداري صارم.",
+            color=discord.Color.red()
+        )
+        await channel.send(embed=embed)
+        await interaction.followup.send("🔒 تم قفل الروم بنجاح.", ephemeral=True)
 
-        parts = content.split(" ")
-        cmd = parts[0].lower()
-        args = parts[1:]
-        author = message.author
-        channel = message.channel
-        guild = message.guild
-
-        # ==================== 🛡️ أوامر الإدارة، الباندات، والإسكاتات المكثفة ====================
-
-        if cmd == "حظر" or cmd == "ban":
-            if author.guild_permissions.ban_members or self._has_permission(author, guild):
-                if message.mentions:
-                    target = message.mentions[0]
-                    reason = " ".join(args[1:]) if len(args) > 1 else "بدون سبب"
-                    await guild.ban(target, reason=reason)
-                    await channel.send(f"🔨 تم حظر العضو **{target.name}** بنجاح. السبب: `{reason}`")
-                else:
-                    await channel.send("❌ يرجى منشن العضو المراد حظره.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية حظر الأعضاء.")
-
-        elif cmd == "فك_الحظر" or cmd == "unban":
-            if author.guild_permissions.ban_members or self._has_permission(author, guild):
-                if args:
-                    try:
-                        user_id = int(args[0])
-                        user = await self.bot.fetch_user(user_id)
-                        await guild.unban(user)
-                        await channel.send(f"🔓 تم ففك الحظر عن العضو **{user.name}** بنجاح.")
-                    except Exception:
-                        await channel.send("❌ لم أستطِع العثور على المستخدم أوفك الحظر عنه. تأكد من الآيدي.")
-                else:
-                    await channel.send("⚠️ يرجى كتابة آيدي العضو. مثال: `فك_الحظر 123456789`")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية فك الحظر.")
-
-        elif cmd == "طرد" or cmd == "kick":
-            if author.guild_permissions.kick_members or self._has_permission(author, guild):
-                if message.mentions:
-                    target = message.mentions[0]
-                    reason = " ".join(args[1:]) if len(args) > 1 else "بدون سبب"
-                    await guild.kick(target, reason=reason)
-                    await channel.send(f"🥾 تم طرد العضو **{target.name}** بنجاح.")
-                else:
-                    await channel.send("❌ يرجى منشن العضو المراد طرده.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية طرد الأعضاء.")
-
-        elif cmd == "ايسكات" or cmd == "mute" or cmd == "تايم_آوت":
-            if author.guild_permissions.moderate_members or self._has_permission(author, guild):
-                if message.mentions:
-                    target = message.mentions[0]
-                    minutes = int(args[1]) if len(args) > 1 and args[1].isdigit() else 10
-                    await target.timeout(timedelta(minutes=minutes), reason=f"Muted by {author}")
-                    await channel.send(f"🔇 تم إسكات العضو **{target.name}** لمدة **{minutes}** دقائق.")
-                else:
-                    await channel.send("❌ يرجى منشن العضو وتحديد الدقائق.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية إسكات الأعضاء.")
-
-        elif cmd == "فك_الإسكات" or cmd == "unmute":
-            if author.guild_permissions.moderate_members or self._has_permission(author, guild):
-                if message.mentions:
-                    target = message.mentions[0]
-                    await target.timeout(None, reason=f"Unmuted by {author}")
-                    await channel.send(f"🔊 تم فك الإسكات عن العضو **{target.name}**.")
-                else:
-                    await channel.send("❌ يرجى منشن العضو.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية.")
-
-        elif cmd == "مسح" or cmd == "clear" or cmd == "حذف":
-            if author.guild_permissions.manage_messages or self._has_permission(author, guild):
-                limit = int(args[0]) + 1 if args and args[0].isdigit() else 11
-                deleted = await channel.purge(limit=limit)
-                msg = await channel.send(f"🧹 تم مسح **{len(deleted) - 1}** رسالة بنجاح!")
-                await msg.delete(delay=3)
-            else:
-                await channel.send("❌ لا تمتلك صلاحية إدارة الرسائل.")
-
-        elif cmd == "قفل" or cmd == "lock":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                overwrite = channel.overwrites_for(guild.default_role)
-                overwrite.send_messages = False
-                await channel.set_permissions(guild.default_role, overwrite=overwrite)
-                await channel.send("🔒 تم قفل هذه القناة بنجاح لمنع الكتابة.")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير السيرفر.")
-
-        elif cmd == "فتح" or cmd == "unlock":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                overwrite = channel.overwrites_for(guild.default_role)
-                overwrite.send_messages = True
-                await channel.set_permissions(guild.default_role, overwrite=overwrite)
-                await channel.send("🔓 تم فتح هذه القناة بنجاح.")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير السيرفر.")
-
-        elif cmd == "الوضع_البطيء" or cmd == "slowmode":
-            if author.guild_permissions.manage_channels or self._has_permission(author, guild):
-                seconds = int(args[0]) if args and args[0].isdigit() else 0
-                await channel.edit(slowmode_delay=seconds)
-                await channel.send(f"⏱️ تم ضبط الـ Slowmode على **{seconds}** ثانية.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية إدارة القنوات.")
-
-        elif cmd == "إخفاء" or cmd == "hide":
-            if author.guild_permissions.manage_channels or self._has_permission(author, guild):
-                overwrite = channel.overwrites_for(guild.default_role)
-                overwrite.view_channel = False
-                await channel.set_permissions(guild.default_role, overwrite=overwrite)
-                await channel.send("👁️‍🗨️ تم إخفاء هذه القناة عن الأعضاء.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية.")
-
-        elif cmd == "إظهار" or cmd == "unhide":
-            if author.guild_permissions.manage_channels or self._has_permission(author, guild):
-                overwrite = channel.overwrites_for(guild.default_role)
-                overwrite.view_channel = True
-                await channel.set_permissions(guild.default_role, overwrite=overwrite)
-                await channel.send("👁️ تم إظهار هذه القناة للأعضاء.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية.")
-
-        elif cmd == "حرق_القناة" or cmd == "nuke":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                new_channel = await channel.clone(reason=f"Nuked by {author}")
-                await channel.delete()
-                await new_channel.send(f"💥 **تم حرق وتجديد القناة بنجاح بواسطة {author.mention}!**")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير.")
-
-        elif cmd == "تغيير_اللقب" or cmd == "setnick":
-            if author.guild_permissions.manage_nicknames or self._has_permission(author, guild):
-                if message.mentions and len(args) > 1:
-                    target = message.mentions[0]
-                    new_name = " ".join(args[1:])
-                    await target.edit(nick=new_name)
-                    await channel.send(f"✏️ تم تغيير لقب العضو إلى **{new_name}**.")
-                else:
-                    await channel.send("⚠️ الطريقة: `تغيير_اللقب @User الاسم_الجديد`")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية الألقاب.")
-
-        elif cmd == "تحذير" or cmd == "warn":
-            if author.guild_permissions.moderate_members or self._has_permission(author, guild):
-                if message.mentions:
-                    target = message.mentions[0]
-                    reason = " ".join(args[1:]) if len(args) > 1 else "بدون سبب"
-                    self.warns_collection.insert_one({"user_id": target.id, "guild_id": guild.id, "reason": reason})
-                    await channel.send(f"⚠️ تم تحذير العضو {target.mention} بنجاح! السبب: `{reason}`")
-                else:
-                    await channel.send("⚠️ منشن العضو المراد تحذيره.")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية.")
-
-        elif cmd == "رتبة" or cmd == "role":
-            if author.guild_permissions.manage_roles or self._has_permission(author, guild):
-                if message.mentions and len(args) > 1:
-                    target = message.mentions[0]
-                    role_name = " ".join(args[1:])
-                    role = discord.utils.get(guild.roles, name=role_name)
-                    if role:
-                        if role in target.roles:
-                            await target.remove_roles(role)
-                            await channel.send(f"🗑️ تمت إزالة رتبة **{role.name}** من العضو **{target.name}**.")
-                        else:
-                            await target.add_roles(role)
-                            await channel.send(f"✅ تم منح رتبة **{role.name}** للعضو **{target.name}**.")
-                    else:
-                        await channel.send("❌ الرتبة غير موجودة تماماً.")
-                else:
-                    await channel.send("⚠️ الاستخدام: `رتبة @User اسم_الرتبة`")
-            else:
-                await channel.send("❌ لا تمتلك صلاحية الرتب.")
-
-        elif cmd == "رتبة_جماعية" or cmd == "massrole":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                if args:
-                    role_name = " ".join(args)
-                    role = discord.utils.get(guild.roles, name=role_name)
-                    if role:
-                        count = 0
-                        for member in guild.members:
-                            if role not in member.roles and not member.bot:
-                                await member.add_roles(role)
-                                count += 1
-                        await channel.send(f"👥 تم منح رتبة **{role.name}** لـ `{count}` عضو بنجاح!")
-                    else:
-                        await channel.send("❌ الرتبة غير موجودة.")
-                else:
-                    await channel.send("⚠️ اكتب اسم الرتبة.")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير.")
-
-        elif cmd == "سحب_رتبة_جماعية" or cmd == "massunrole":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                if args:
-                    role_name = " ".join(args)
-                    role = discord.utils.get(guild.roles, name=role_name)
-                    if role:
-                        count = 0
-                        for member in guild.members:
-                            if role in member.roles:
-                                await member.remove_roles(role)
-                                count += 1
-                        await channel.send(f"🗑️ تمت إزالة رتبة **{role.name}** من `{count}` عضو.")
-                    else:
-                        await channel.send("❌ الرتبة غير موجودة.")
-                else:
-                    await channel.send("⚠️ اكتب اسم الرتبة.")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير.")
-
-        elif cmd == "قفل_الكل" or cmd == "lockall":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                for c in guild.channels:
-                    if isinstance(c, discord.TextChannel):
-                        overwrite = c.overwrites_for(guild.default_role)
-                        overwrite.send_messages = False
-                        await c.set_permissions(guild.default_role, overwrite=overwrite)
-                await channel.send("🔒 **تم قفل جميع قنوات السيرفر النصية بنجاح تام!**")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير.")
-
-        elif cmd == "فتح_الكل" or cmd == "unlockall":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                for c in guild.channels:
-                    if isinstance(c, discord.TextChannel):
-                        overwrite = c.overwrites_for(guild.default_role)
-                        overwrite.send_messages = True
-                        await c.set_permissions(guild.default_role, overwrite=overwrite)
-                await channel.send("🔓 **تم فتح جميع قنوات السيرفر النصية بنجاح!**")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير.")
-
-        elif cmd == "صلاحيات" or cmd == "perms":
-            target = message.mentions[0] if message.mentions else author
-            perms = [p[0] for p in target.guild_permissions if p[1]]
-            embed = discord.Embed(title=f"🛡️ صلاحيات العضو: {target.name}", description=", ".join(perms), color=discord.Color.dark_red())
-            await channel.send(embed=embed)
-
-        elif cmd == "تحديد_الترحيب" or cmd == "setwelcome":
-            if author.guild_permissions.administrator or self._has_permission(author, guild):
-                self.settings_collection.update_one(
-                    {"guild_id": guild.id},
-                    {"$set": {"welcome_channel": channel.id}},
-                    upsert=True
-                )
-                await channel.send(f"✅ **تم اعتماد هذه القناة كقناة رسمية للترحيب بالأعضاء الجدد!**")
-            else:
-                await channel.send("❌ تتطلب صلاحية مدير السيرفر.")
-
-        elif cmd == "تنبيه_عام" or cmd == "pingall":
-            if author.id == guild.owner_id or self._has_permission(author, guild):
-                await channel.send(f"📢 تنبيه إداري هام لجميع الأعضاء بواسطة {author.mention}!")
-            else:
-                await channel.send("❌ أمر إداري خطير.")
-
-        elif cmd == "أوامر_الإدارة" or cmd == "modhelp" or cmd == "اوامر_الادمن":
-            embed = discord.Embed(
-                title="🛡️ قائمة أوامر الحماية والإدارة والسيطرة",
-                description="أوامر صارمة ومخصصة لإدارة السيرفرات بحزم واحترافية عالية.",
-                color=discord.Color.dark_red()
-            )
-            embed.add_field(
-                name="⚔️ أوامر العقوبات والباندات:",
-                value="`حظر` , `فك_الحظر` , `طرد` , `ايسكات` , `فك_الإسكات` , `تحذير`",
-                inline=False
-            )
-            embed.add_field(
-                name="🔒 أوامر التحكم بالقنوات والشات:",
-                value="`مسح` , `قفل` , `فتح` , `الوضع_البطيء` , `إخفاء` , `إظهار` , `حرق_القناة` , `قفل_الكل` , `فتح_الكل`",
-                inline=False
-            )
-            embed.add_field(
-                name="👑 أوامر الرتب والإدارة العامة:",
-                value="`رتبة` , `رتبة_جماعية` , `سحب_رتبة_جماعية` , `تغيير_اللقب` , `تحديد_الترحيب` , `صلاحيات` , `تنبيه_عام`",
-                inline=False
-            )
-            await channel.send(embed=embed)
+    # 6. أمر فتح القناة (Unlock)
+    @app_commands.command(name="فتح", description="إلغاء حالة الطوارئ وفتح القناة للأعضاء")
+    async def unlock_channel(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator and not self._has_permission(interaction.user, interaction.guild):
+            await interaction.response.send_message("❌ هذا الأمر خاص بالإدارة العليا فقط!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        overwrite = channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = True
+        await channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        
+        embed = discord.Embed(
+            title="🟢 عودة الحياة: تم فتح القناة",
+            description="تمت إزالة القيود، وأصبح بإمكان الجميع التحدث الآن.",
+            color=discord.Color.green()
+        )
+        await channel.send(embed=embed)
+        await interaction.followup.send("🔓 تم فتح الروم بنجاح.", ephemeral=True)
 
     # ==================== 🔒 أوامر الـ Slash الخاصة بالـ Whitelist ====================
 
@@ -382,4 +289,4 @@ class GiantCleanBotCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
-    await bot.add_cog(GiantCleanBotCog(bot))
+    await bot.add_cog(AdvancedAdminCore(bot))
