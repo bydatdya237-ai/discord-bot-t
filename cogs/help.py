@@ -9,7 +9,7 @@ from discord.ext import commands
 # الروم الوحيد المسموح فيه استخدام -اوامر
 COMMAND_ROOM_ID = 1547711993568305232
 
-# الرتب المسموح لها باستخدام الأمر
+# الرتب المسموح لها باستخدام -اوامر
 ALLOWED_ROLE_IDS = {
     1544078469657530578,
     1544426415766896690,
@@ -35,23 +35,49 @@ def has_allowed_role(member: discord.Member) -> bool:
 def get_command_room(command):
 
     try:
-        # نحاول الحصول على المتغيرات الموجودة
-        # في نفس ملف الأمر
-        command_globals = command.callback.__globals__
+        callback = command.callback
+        command_globals = callback.__globals__
 
-        # الطريقة الأساسية التي نستخدمها في أكواد البوت
-        room_id = command_globals.get("COMMAND_ROOM_ID")
+        # =================================================
+        # 1 - روم الاقتصاد
+        # =================================================
+        economy_room_id = command_globals.get(
+            "ECONOMY_ROOM_ID"
+        )
+
+        if economy_room_id:
+            return economy_room_id
+
+        # =================================================
+        # 2 - روم الشعار
+        # =================================================
+        banner_room_id = command_globals.get(
+            "BANNER_ROOM_ID"
+        )
+
+        if banner_room_id:
+            return banner_room_id
+
+        # =================================================
+        # 3 - دعم الأكواد القديمة
+        # =================================================
+        room_id = command_globals.get(
+            "COMMAND_ROOM_ID"
+        )
 
         if room_id:
             return room_id
 
-        # دعم أسماء أخرى إذا استخدمتها مستقبلاً
-        room_id = command_globals.get("ALLOWED_ROOM_ID")
+        room_id = command_globals.get(
+            "ALLOWED_ROOM_ID"
+        )
 
         if room_id:
             return room_id
 
-        room_id = command_globals.get("COMMAND_CHANNEL_ID")
+        room_id = command_globals.get(
+            "COMMAND_CHANNEL_ID"
+        )
 
         if room_id:
             return room_id
@@ -63,16 +89,16 @@ def get_command_room(command):
 
 
 # =========================================================
-# الحصول على وصف الأمر تلقائياً
+# الحصول على وصف الأمر
 # =========================================================
 
 def get_command_description(command):
 
-    # discord.py يحفظ help إذا تم تحديده
+    # إذا كان للأمر Help محدد
     if command.help:
         return command.help
 
-    # نحاول أخذ وصف الـcallback
+    # محاولة قراءة وصف الدالة
     try:
         callback = command.callback
 
@@ -85,7 +111,6 @@ def get_command_description(command):
     except Exception:
         pass
 
-    # وصف افتراضي إذا لم يوجد وصف
     return "لا يوجد وصف لهذا الأمر."
 
 
@@ -101,10 +126,8 @@ def get_channel_display(guild, channel_id):
     channel = guild.get_channel(channel_id)
 
     if channel is None:
-        return "❓ الروم غير موجود"
+        return f"❓ روم غير موجود (`{channel_id}`)"
 
-    # mention يظهر اسم الروم للمستخدم
-    # وليس الـID
     return channel.mention
 
 
@@ -128,14 +151,14 @@ class CommandsListCog(commands.Cog):
     async def commands_list(self, ctx):
 
         # -------------------------------------------------
-        # الروم المسموح فقط
+        # التأكد أن -اوامر مستخدم في الروم المحدد
         # -------------------------------------------------
 
         if ctx.channel.id != COMMAND_ROOM_ID:
             return
 
         # -------------------------------------------------
-        # التحقق من الرتبة
+        # التأكد من الرتبة
         # -------------------------------------------------
 
         if not isinstance(ctx.author, discord.Member):
@@ -145,7 +168,7 @@ class CommandsListCog(commands.Cog):
             return
 
         # -------------------------------------------------
-        # الحصول على جميع أوامر البوت تلقائياً
+        # جمع الأوامر
         # -------------------------------------------------
 
         commands_list = []
@@ -172,7 +195,9 @@ class CommandsListCog(commands.Cog):
 
             description = get_command_description(command)
 
-            command_text += f"\n📝 {description}"
+            command_text += (
+                f"\n📝 {description}"
+            )
 
             # =============================================
             # الروم الذي يعمل فيه الأمر
@@ -190,7 +215,7 @@ class CommandsListCog(commands.Cog):
             )
 
             # =============================================
-            # البدائل / Aliases
+            # البدائل
             # =============================================
 
             if command.aliases:
@@ -223,10 +248,12 @@ class CommandsListCog(commands.Cog):
         # ترتيب الأوامر
         # -------------------------------------------------
 
-        commands_list.sort()
+        commands_list.sort(
+            key=lambda x: x.lower()
+        )
 
         # -------------------------------------------------
-        # تقسيم القائمة الطويلة
+        # تقسيم القائمة إذا كانت طويلة
         # -------------------------------------------------
 
         chunks = []
@@ -234,12 +261,21 @@ class CommandsListCog(commands.Cog):
 
         for command_text in commands_list:
 
-            if len(current_chunk) + len(command_text) + 2 > 3800:
+            # Discord Embed description حدها قريب من 4096
+            if (
+                len(current_chunk)
+                + len(command_text)
+                + 2
+                > 3800
+            ):
 
                 chunks.append(current_chunk)
                 current_chunk = ""
 
-            current_chunk += command_text + "\n\n"
+            current_chunk += (
+                command_text
+                + "\n\n"
+            )
 
         if current_chunk:
             chunks.append(current_chunk)
@@ -262,16 +298,20 @@ class CommandsListCog(commands.Cog):
                     text=f"عدد الأوامر: {len(commands_list)}"
                 )
 
-            await ctx.send(embed=embed)
+            await ctx.send(
+                embed=embed
+            )
 
         # -------------------------------------------------
         # حذف رسالة -اوامر
         # -------------------------------------------------
 
         try:
+
             await ctx.message.delete()
 
         except discord.HTTPException:
+
             pass
 
 
@@ -280,4 +320,7 @@ class CommandsListCog(commands.Cog):
 # =========================================================
 
 async def setup(bot):
-    await bot.add_cog(CommandsListCog(bot))
+
+    await bot.add_cog(
+        CommandsListCog(bot)
+    )
