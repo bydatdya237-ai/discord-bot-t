@@ -5,33 +5,41 @@ import discord
 from discord.ext import commands
 from discord import ui
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 
 
 # =========================================================
 # الإعدادات
 # =========================================================
 
-# الروم المسموح فيه أوامر الاقتصاد
+# روم أوامر العملة
 ECONOMY_ROOM_ID = 1544334212734124174
 
-# الروم المسموح فيه أمر الشعار
+# روم -شعار + -تعطيل + -تفعيل
+CONTROL_ROOM_ID = 1547711993568305232
+
+# نفس الروم الخاص بالشعار
 BANNER_ROOM_ID = 1547711993568305232
 
-# الرتبة الإدارية المسموح لها بالأوامر الإدارية
-ADMIN_ROLE_ID = 1544078469657530578
+# الرتب المسموح لها باستخدام أوامر الإدارة
+ALLOWED_ROLE_IDS = {
+    1545851911121666108,
+    1544078469657530578,
+    1544426415766896690
+}
 
 
 # =========================================================
-# تحويل المبالغ
+# أدوات المبالغ
 # =========================================================
 
 def parse_amount(amount_str: str) -> int:
+
     if not amount_str:
         return 0
 
     amount_str = amount_str.lower().strip()
 
-    # الكلمات العربية
     amount_str = (
         amount_str
         .replace("ألف", "k")
@@ -40,7 +48,6 @@ def parse_amount(amount_str: str) -> int:
         .replace("مليار", "b")
     )
 
-    # إزالة المسافات
     amount_str = amount_str.replace(" ", "")
 
     multiplier = 1
@@ -57,32 +64,412 @@ def parse_amount(amount_str: str) -> int:
         multiplier = 1_000
         amount_str = amount_str.replace("k", "")
 
-    numbers = re.findall(r"\d+\.?\d*", amount_str)
+    numbers = re.findall(
+        r"\d+\.?\d*",
+        amount_str
+    )
 
     if not numbers:
         return 0
 
     try:
-        return int(float(numbers[0]) * multiplier)
+        return int(
+            float(numbers[0]) * multiplier
+        )
     except Exception:
         return 0
 
 
-# =========================================================
-# تنسيق العملة
-# =========================================================
-
 def format_coins(amount: int) -> str:
+
     if amount >= 1_000_000_000:
-        return f"{amount / 1_000_000_000:.2f}b".replace(".00", "")
+        return f"{amount / 1_000_000_000:.2f}b".replace(
+            ".00",
+            ""
+        )
 
     elif amount >= 1_000_000:
-        return f"{amount / 1_000_000:.2f}m".replace(".00", "")
+        return f"{amount / 1_000_000:.2f}m".replace(
+            ".00",
+            ""
+        )
 
     elif amount >= 1_000:
-        return f"{amount / 1_000:.1f}k".replace(".0", "")
+        return f"{amount / 1_000:.1f}k".replace(
+            ".0",
+            ""
+        )
 
     return str(amount)
+
+
+# =========================================================
+# Modal الشعار
+# =========================================================
+
+class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
+
+    amount_input = ui.TextInput(
+        label="💰 مبلغ المكافأة",
+        placeholder="مثال: 25k أو 50000",
+        required=True,
+        max_length=30
+    )
+
+    reason_input = ui.TextInput(
+        label="📝 سبب المكافأة",
+        placeholder="اكتب سبب المكافأة هنا...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1000
+    )
+
+    def __init__(self, cog, target_member):
+
+        super().__init__()
+
+        self.cog = cog
+        self.target_member = target_member
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        amount = parse_amount(
+            self.amount_input.value
+        )
+
+        if amount <= 0:
+
+            await interaction.response.send_message(
+                "❌ المبلغ غير صحيح.",
+                ephemeral=True
+            )
+
+            return
+
+        reason = self.reason_input.value.strip()
+
+        if not reason:
+
+            await interaction.response.send_message(
+                "❌ يجب كتابة سبب المكافأة.",
+                ephemeral=True
+            )
+
+            return
+
+        if self.cog.rewards is None:
+
+            await interaction.response.send_message(
+                "❌ قاعدة البيانات غير متصلة.",
+                ephemeral=True
+            )
+
+            return
+
+        reward_id = str(uuid.uuid4())
+
+        await self.cog.rewards.insert_one({
+            "reward_id": reward_id,
+            "user_id": self.target_member.id,
+            "amount": amount,
+            "reason": reason,
+            "claimed": False,
+            "created_by": interaction.user.id,
+            "guild_id": interaction.guild.id
+        })
+
+        dm_embed = discord.Embed(
+            title="🎁 لديك شعار ومكافأة جديدة!",
+            description=(
+                f"**السبب / التفاصيل:**\n"
+                f"{reason}\n\n"
+                f"💰 **قيمة المكافأة:**\n"
+                f"**{format_coins(amount)} Ai**"
+            ),
+            color=discord.Color.gold()
+        )
+
+        dm_embed.set_footer(
+            text=f"بواسطة الإدارة في سيرفر: {interaction.guild.name}"
+        )
+
+        view = ClaimRewardView(
+            reward_id
+        )
+
+        try:
+
+            await self.target_member.send(
+                embed=dm_embed,
+                view=view
+            )
+
+            await interaction.response.send_message(
+                f"✅ تم إرسال الشعار والمكافأة إلى "
+                f"{self.target_member.mention} في الخاص.\n"
+                f"💰 قيمة المكافأة: "
+                f"**{format_coins(amount)} Ai**",
+                ephemeral=True
+            )
+
+        except discord.Forbidden:
+
+            await self.cog.rewards.delete_one({
+                "reward_id": reward_id
+            })
+
+            await interaction.response.send_message(
+                f"⚠️ تعذر إرسال الخاص إلى "
+                f"{self.target_member.mention} "
+                f"لأن الرسائل الخاصة مغلقة.",
+                ephemeral=True
+            )
+
+        except Exception:
+
+            await self.cog.rewards.delete_one({
+                "reward_id": reward_id
+            })
+
+            await interaction.response.send_message(
+                "⚠️ حدث خطأ أثناء إرسال المكافأة.",
+                ephemeral=True
+            )
+
+
+# =========================================================
+# Modal التوزيع
+# =========================================================
+
+class DistributionModal(
+    ui.Modal,
+    title="💰 توزيع Ai"
+):
+
+    amount_input = ui.TextInput(
+        label="💰 المبلغ لكل عضو",
+        placeholder="مثال: 10k أو 5000",
+        required=True,
+        max_length=30
+    )
+
+    reason_input = ui.TextInput(
+        label="📝 سبب التوزيع",
+        placeholder="اكتب سبب التوزيع هنا...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1000
+    )
+
+    def __init__(self, cog):
+
+        super().__init__()
+
+        self.cog = cog
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        amount = parse_amount(
+            self.amount_input.value
+        )
+
+        if amount <= 0:
+
+            await interaction.response.send_message(
+                "❌ المبلغ غير صحيح.",
+                ephemeral=True
+            )
+
+            return
+
+        reason = self.reason_input.value.strip()
+
+        if not reason:
+
+            await interaction.response.send_message(
+                "❌ يجب كتابة سبب التوزيع.",
+                ephemeral=True
+            )
+
+            return
+
+        if self.cog.balances is None:
+
+            await interaction.response.send_message(
+                "❌ قاعدة البيانات غير متصلة.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_message(
+            "⏳ جاري توزيع Ai على أعضاء السيرفر...",
+            ephemeral=True
+        )
+
+        count = 0
+
+        for member in interaction.guild.members:
+
+            if member.bot:
+                continue
+
+            await self.cog.update_balance(
+                member.id,
+                amount
+            )
+
+            count += 1
+
+        embed = discord.Embed(
+            title="💰 تم توزيع Ai",
+            description=(
+                f"تم توزيع **{format_coins(amount)} Ai** "
+                f"على **{count}** عضو.\n\n"
+                f"📝 **السبب:**\n"
+                f"{reason}"
+            ),
+            color=discord.Color.gold()
+        )
+
+        await interaction.channel.send(
+            embed=embed
+        )
+
+
+# =========================================================
+# زر الشعار
+# =========================================================
+
+class BannerButtonView(ui.View):
+
+    def __init__(
+        self,
+        cog,
+        target_member
+    ):
+
+        super().__init__(
+            timeout=60
+        )
+
+        self.cog = cog
+        self.target_member = target_member
+
+    @ui.button(
+        label="إدخال تفاصيل الشعار",
+        style=discord.ButtonStyle.blurple,
+        emoji="🎁"
+    )
+    async def open_banner_modal(
+        self,
+        interaction: discord.Interaction,
+        button: ui.Button
+    ):
+
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
+
+        if not member:
+            return
+
+        if not self.cog.has_admin_role(member):
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام هذا النظام.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_modal(
+            BannerModal(
+                self.cog,
+                self.target_member
+            )
+        )
+
+
+# =========================================================
+# زر التوزيع
+# =========================================================
+
+class DistributionButtonView(ui.View):
+
+    def __init__(self, cog):
+
+        super().__init__(
+            timeout=60
+        )
+
+        self.cog = cog
+
+    @ui.button(
+        label="إدخال تفاصيل التوزيع",
+        style=discord.ButtonStyle.green,
+        emoji="💰"
+    )
+    async def open_distribution_modal(
+        self,
+        interaction: discord.Interaction,
+        button: ui.Button
+    ):
+
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
+
+        if not member:
+            return
+
+        if not self.cog.has_admin_role(member):
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام هذا النظام.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_modal(
+            DistributionModal(
+                self.cog
+            )
+        )
+
+
+# =========================================================
+# زر استلام المكافأة
+# =========================================================
+
+class ClaimRewardView(ui.View):
+
+    def __init__(
+        self,
+        reward_id: str
+    ):
+
+        super().__init__(
+            timeout=None
+        )
+
+        button = ui.Button(
+            label="إستلام المكافأة",
+            style=discord.ButtonStyle.blurple,
+            emoji="💰",
+            custom_id=f"claim_reward:{reward_id}"
+        )
+
+        self.add_item(
+            button
+        )
 
 
 # =========================================================
@@ -92,45 +479,137 @@ def format_coins(amount: int) -> str:
 class EconomyCog(commands.Cog):
 
     def __init__(self, bot):
+
         self.bot = bot
 
-        mongo_uri = os.environ.get("MONGO_URI")
+        mongo_uri = os.environ.get(
+            "MONGO_URI"
+        )
 
         if mongo_uri:
-            self.db_client = AsyncIOMotorClient(mongo_uri)
+
+            self.db_client = AsyncIOMotorClient(
+                mongo_uri
+            )
+
             self.db = self.db_client.discord_bot_db
 
-            self.balances = self.db.economy_balances
-            self.rewards = self.db.economy_rewards
+            self.balances = (
+                self.db.economy_balances
+            )
+
+            self.rewards = (
+                self.db.economy_rewards
+            )
+
+            self.settings = (
+                self.db.economy_settings
+            )
 
         else:
+
             self.db_client = None
             self.db = None
             self.balances = None
             self.rewards = None
+            self.settings = None
 
     # =====================================================
-    # التحقق من الروم
+    # التحقق من الرتب
+    # =====================================================
+
+    def has_admin_role(
+        self,
+        member: discord.Member
+    ):
+
+        return any(
+            role.id in ALLOWED_ROLE_IDS
+            for role in member.roles
+        )
+
+    # =====================================================
+    # التحقق من الرومات
     # =====================================================
 
     def economy_room(self, ctx):
-        return ctx.channel.id == ECONOMY_ROOM_ID
+
+        return (
+            ctx.channel.id ==
+            ECONOMY_ROOM_ID
+        )
+
+    def control_room(self, ctx):
+
+        return (
+            ctx.channel.id ==
+            CONTROL_ROOM_ID
+        )
 
     def banner_room(self, ctx):
-        return ctx.channel.id == BANNER_ROOM_ID
+
+        return (
+            ctx.channel.id ==
+            BANNER_ROOM_ID
+        )
 
     # =====================================================
-    # التحقق من الرتبة الإدارية
+    # فحص حالة العملة
     # =====================================================
 
-    def has_admin_role(self, member: discord.Member):
-        return any(role.id == ADMIN_ROLE_ID for role in member.roles)
+    async def currency_enabled(
+        self,
+        guild_id: int
+    ):
+
+        if self.settings is None:
+            return True
+
+        data = await self.settings.find_one({
+            "guild_id": guild_id
+        })
+
+        if not data:
+            return True
+
+        return data.get(
+            "currency_enabled",
+            True
+        )
+
+    # =====================================================
+    # تغيير حالة العملة
+    # =====================================================
+
+    async def set_currency_enabled(
+        self,
+        guild_id: int,
+        enabled: bool
+    ):
+
+        if self.settings is None:
+            return
+
+        await self.settings.update_one(
+            {
+                "guild_id": guild_id
+            },
+            {
+                "$set": {
+                    "currency_enabled": enabled
+                }
+            },
+            upsert=True
+        )
 
     # =====================================================
     # الرصيد
     # =====================================================
 
-    async def get_balance(self, user_id: int) -> int:
+    async def get_balance(
+        self,
+        user_id: int
+    ):
 
         if self.balances is None:
             return 0
@@ -139,61 +618,155 @@ class EconomyCog(commands.Cog):
             "user_id": user_id
         })
 
-        return user_data.get("balance", 0) if user_data else 0
+        return (
+            user_data.get("balance", 0)
+            if user_data
+            else 0
+        )
 
-    # =====================================================
-    # تعديل الرصيد
-    # =====================================================
-
-    async def update_balance(self, user_id: int, amount: int):
+    async def update_balance(
+        self,
+        user_id: int,
+        amount: int
+    ):
 
         if self.balances is None:
             return
 
         await self.balances.update_one(
-            {"user_id": user_id},
-            {"$inc": {"balance": amount}},
+            {
+                "user_id": user_id
+            },
+            {
+                "$inc": {
+                    "balance": amount
+                }
+            },
             upsert=True
         )
 
     # =====================================================
-    # أمر الشرح
+    # -تعطيل
+    # =====================================================
+
+    @commands.command(name="تعطيل")
+    async def disable_currency(
+        self,
+        ctx
+    ):
+
+        if not self.control_room(ctx):
+            return
+
+        if not self.has_admin_role(
+            ctx.author
+        ):
+            return
+
+        await self.set_currency_enabled(
+            ctx.guild.id,
+            False
+        )
+
+        embed = discord.Embed(
+            title="🔴 تم تعطيل العملة",
+            description=(
+                "تم تعطيل **أوامر العملة فقط**.\n\n"
+                "يمكن إعادة تشغيلها باستخدام:\n"
+                "`-تفعيل`"
+            ),
+            color=discord.Color.red()
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # -تفعيل
+    # =====================================================
+
+    @commands.command(name="تفعيل")
+    async def enable_currency(
+        self,
+        ctx
+    ):
+
+        if not self.control_room(ctx):
+            return
+
+        if not self.has_admin_role(
+            ctx.author
+        ):
+            return
+
+        await self.set_currency_enabled(
+            ctx.guild.id,
+            True
+        )
+
+        embed = discord.Embed(
+            title="🟢 تم تفعيل العملة",
+            description=(
+                "تم تفعيل **أوامر العملة** من جديد."
+            ),
+            color=discord.Color.green()
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # -شرح
     # =====================================================
 
     @commands.command(name="شرح")
-    async def help_economy(self, ctx):
+    async def help_economy(
+        self,
+        ctx
+    ):
 
         if not self.economy_room(ctx):
+            return
+
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
             return
 
         embed = discord.Embed(
             title="📖 شرح أوامر نظام Ai",
             description=(
-                "هذه الأوامر المتاحة لك في نظام الاقتصاد:\n\n"
                 "💰 **-رصيد**\n"
                 "عرض رصيدك الحالي من عملة Ai.\n\n"
 
-                "🏆 **-توب**\n"
-                "عرض أعلى 10 أعضاء من ناحية رصيد Ai.\n\n"
+                "🏆 **-توب [رقم الصفحة]**\n"
+                "عرض أعلى الأعضاء حسب الرصيد.\n"
+                "مثال: `-توب 1`\n\n"
 
-                "🎁 **-اعطي**\n"
-                "هذا الأمر مخصص للإدارة لإعطاء Ai للأعضاء.\n\n"
+                "🎁 **-اعطي @العضو المبلغ**\n"
+                "إعطاء Ai لعضو.\n\n"
 
-                "💸 **-سحب**\n"
-                "هذا الأمر مخصص للإدارة لسحب Ai من الأعضاء.\n\n"
+                "💸 **-سحب @العضو المبلغ**\n"
+                "سحب Ai من عضو.\n\n"
 
                 "💰 **-توزيع**\n"
-                "هذا الأمر مخصص للإدارة لتوزيع Ai على أعضاء السيرفر."
+                "فتح قائمة لتحديد المبلغ والسبب."
             ),
             color=discord.Color.gold()
         )
 
-        embed.set_footer(text="عملة السيرفر: Ai")
+        embed.set_footer(
+            text="عملة السيرفر: Ai"
+        )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
 
     # =====================================================
-    # أمر الرصيد
+    # -رصيد
     # =====================================================
 
     @commands.command(name="رصيد")
@@ -206,9 +779,16 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
+            return
+
         target = member or ctx.author
 
-        bal = await self.get_balance(target.id)
+        bal = await self.get_balance(
+            target.id
+        )
 
         embed = discord.Embed(
             title="💰 رصيد Ai",
@@ -219,79 +799,146 @@ class EconomyCog(commands.Cog):
             color=discord.Color.gold()
         )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
 
     # =====================================================
-    # أمر التوب
+    # -توب
     # =====================================================
 
     @commands.command(name="توب")
-    async def top_cmd(self, ctx):
+    async def top_cmd(
+        self,
+        ctx,
+        page: int = 1
+    ):
 
         if not self.economy_room(ctx):
             return
 
-        if self.balances is None:
-            await ctx.send("❌ قاعدة البيانات غير متصلة.")
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
             return
+
+        if self.balances is None:
+
+            await ctx.send(
+                "❌ قاعدة البيانات غير متصلة."
+            )
+
+            return
+
+        if page < 1:
+
+            await ctx.send(
+                "❌ رقم الصفحة يجب أن يكون 1 أو أكثر."
+            )
+
+            return
+
+        per_page = 10
+
+        skip = (
+            page - 1
+        ) * per_page
 
         cursor = (
             self.balances
             .find()
             .sort("balance", -1)
-            .limit(10)
+            .skip(skip)
+            .limit(per_page)
         )
 
-        top_users = await cursor.to_list(length=10)
+        top_users = await cursor.to_list(
+            length=per_page
+        )
 
         if not top_users:
+
             await ctx.send(
-                "📭 لا توجد بيانات مسجلة في التوب حتى الآن."
+                f"📭 لا توجد نتائج في الصفحة "
+                f"**{page}**."
             )
+
             return
 
         description_lines = []
 
         medals = [
-            "🥇 #1",
-            "🥈 #2",
-            "🥉 #3",
-            "🔹 #4",
-            "🔹 #5",
-            "🔹 #6",
-            "🔹 #7",
-            "🔹 #8",
-            "🔹 #9",
-            "🔹 #10"
+            "🥇",
+            "🥈",
+            "🥉",
+            "🔹",
+            "🔹",
+            "🔹",
+            "🔹",
+            "🔹",
+            "🔹",
+            "🔹"
         ]
 
-        for idx, doc in enumerate(top_users):
+        for idx, doc in enumerate(
+            top_users
+        ):
 
-            user_id = doc.get("user_id")
-            bal = doc.get("balance", 0)
+            user_id = doc.get(
+                "user_id"
+            )
 
-            member = ctx.guild.get_member(user_id)
+            bal = doc.get(
+                "balance",
+                0
+            )
+
+            member = ctx.guild.get_member(
+                user_id
+            )
 
             if member:
+
                 name = member.mention
+
             else:
-                name = f"<@{user_id}> (مغادر)"
+
+                name = (
+                    f"<@{user_id}> "
+                    f"(مغادر)"
+                )
+
+            rank = (
+                skip +
+                idx +
+                1
+            )
 
             description_lines.append(
-                f"{medals[idx]} {name} — "
+                f"{medals[idx]} "
+                f"**#{rank}** "
+                f"{name} — "
                 f"**{format_coins(bal)} Ai**"
             )
 
         embed = discord.Embed(
             title="🏆 قائمة التوب",
-            description="\n".join(description_lines),
+            description="\n".join(
+                description_lines
+            ),
             color=discord.Color.gold()
         )
 
-        await ctx.send(embed=embed)
+        embed.set_footer(
+            text=f"صفحة التوب: {page}"
+        )
+
+        await ctx.send(
+            embed=embed
+        )
 
     # =====================================================
-    # أمر الإعطاء
+    # -اعطي
     # =====================================================
 
     @commands.command(name="اعطي")
@@ -306,29 +953,44 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
-        if not self.has_admin_role(ctx.author):
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
             return
 
-        amount = parse_amount(amount_str)
+        if not self.has_admin_role(
+            ctx.author
+        ):
+            return
+
+        amount = parse_amount(
+            amount_str
+        )
 
         if amount <= 0:
+
             await ctx.send(
                 "⚠️ الصيغة خاطئة.\n"
                 "مثال:\n"
                 "`-اعطي @الشخص 25k`\n"
                 "`-اعطي @الشخص 5000`"
             )
+
             return
 
-        await self.update_balance(member.id, amount)
+        await self.update_balance(
+            member.id,
+            amount
+        )
 
         await ctx.send(
-            f"✅ تم إضافة **{format_coins(amount)} Ai** "
+            f"✅ تم إضافة "
+            f"**{format_coins(amount)} Ai** "
             f"إلى رصيد {member.mention}"
         )
 
     # =====================================================
-    # أمر السحب
+    # -سحب
     # =====================================================
 
     @commands.command(name="سحب")
@@ -343,29 +1005,48 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
-        if not self.has_admin_role(ctx.author):
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
             return
 
-        amount = parse_amount(amount_str)
+        if not self.has_admin_role(
+            ctx.author
+        ):
+            return
+
+        amount = parse_amount(
+            amount_str
+        )
 
         if amount <= 0:
+
             await ctx.send(
                 "⚠️ الصيغة خاطئة.\n"
                 "مثال:\n"
                 "`-سحب @الشخص 25k`\n"
                 "`-سحب @الشخص 10 ألف`"
             )
+
             return
 
-        current_bal = await self.get_balance(member.id)
+        current_bal = await self.get_balance(
+            member.id
+        )
 
         if current_bal <= 0:
+
             await ctx.send(
-                f"❌ {member.mention} لا يملك أي Ai."
+                f"❌ {member.mention} "
+                f"لا يملك أي Ai."
             )
+
             return
 
-        final_amount = min(amount, current_bal)
+        final_amount = min(
+            amount,
+            current_bal
+        )
 
         await self.update_balance(
             member.id,
@@ -373,332 +1054,117 @@ class EconomyCog(commands.Cog):
         )
 
         await ctx.send(
-            f"✅ تم سحب **{format_coins(final_amount)} Ai** "
+            f"✅ تم سحب "
+            f"**{format_coins(final_amount)} Ai** "
             f"من رصيد {member.mention}"
         )
 
     # =====================================================
-    # أمر التوزيع
+    # -توزيع
     # =====================================================
 
     @commands.command(name="توزيع")
     async def distribute_cmd(
         self,
-        ctx,
-        *,
-        amount_str: str
+        ctx
     ):
 
         if not self.economy_room(ctx):
             return
 
-        if not self.has_admin_role(ctx.author):
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
             return
 
-        amount = parse_amount(amount_str)
-
-        if amount <= 0:
-            await ctx.send(
-                "⚠️ يرجى تحديد مبلغ صحيح.\n"
-                "مثال: `-توزيع 10k`"
-            )
+        if not self.has_admin_role(
+            ctx.author
+        ):
             return
 
-        msg = await ctx.send(
-            "⏳ جاري توزيع Ai على أعضاء السيرفر..."
+        view = DistributionButtonView(
+            self
         )
 
-        count = 0
-
-        for member in ctx.guild.members:
-
-            if member.bot:
-                continue
-
-            await self.update_balance(
-                member.id,
-                amount
-            )
-
-            count += 1
-
-        await msg.edit(
-            content=(
-                f"✅ تم توزيع **{format_coins(amount)} Ai** "
-                f"بنجاح على **{count}** عضو!"
-            )
+        await ctx.send(
+            "📋 اضغط الزر التالي لإدخال "
+            "المبلغ والسبب:",
+            view=view
         )
 
     # =====================================================
-    # أمر الشعار
+    # -شعار
     # =====================================================
 
     @commands.command(name="شعار")
-    async def banner_cmd(self, ctx):
+    async def banner_cmd(
+        self,
+        ctx,
+        member: discord.Member
+    ):
 
         if not self.banner_room(ctx):
             return
 
-        if not self.has_admin_role(ctx.author):
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
             return
 
-        embed = discord.Embed(
-            title="🎯 نظام إرسال الشعارات والمكافآت",
-            description=(
-                "اضغط على الزر أدناه لإكمال التسليم.\n\n"
-                "سيتم طلب أيدي العضو وسبب الشعار، "
-                "ثم إرسال المكافأة له في الخاص."
-            ),
-            color=discord.Color.blue()
-        )
-
-        view = BannerMainView()
+        if not self.has_admin_role(
+            ctx.author
+        ):
+            return
 
         await ctx.send(
-            embed=embed,
-            view=view
+            f"🎁 إعداد مكافأة لـ "
+            f"{member.mention}\n"
+            f"اضغط الزر لإدخال المبلغ والسبب:",
+            view=BannerButtonView(
+                self,
+                member
+            )
         )
-
-        try:
-            await ctx.message.delete()
-        except Exception:
-            pass
 
 
 # =========================================================
-# لوحة الشعار
+# استلام المكافآت
 # =========================================================
 
-class BannerMainView(ui.View):
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @ui.button(
-        label="إكمال التسليم",
-        style=discord.ButtonStyle.green,
-        emoji="📋",
-        custom_id="banner_start_delivery"
-    )
-    async def start_delivery(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
-
-        # التأكد من الرتبة
-        member = interaction.guild.get_member(
-            interaction.user.id
-        )
-
-        if not member:
-            return
-
-        if not any(
-            role.id == ADMIN_ROLE_ID
-            for role in member.roles
-        ):
-            await interaction.response.send_message(
-                "❌ ليس لديك صلاحية استخدام هذا النظام.",
-                ephemeral=True
-            )
-            return
-
-        modal = BannerModal()
-
-        await interaction.response.send_modal(modal)
-
-
-# =========================================================
-# نافذة تفاصيل الشعار
-# =========================================================
-
-class BannerModal(ui.Modal, title="تفاصيل تسليم الشعار"):
-
-    def __init__(self):
-        super().__init__()
-
-        self.user_id_input = ui.TextInput(
-            label="أيدي العضو",
-            placeholder="اكتب أيدي العضو هنا...",
-            required=True,
-            max_length=30
-        )
-
-        self.reason_input = ui.TextInput(
-            label="سبب الشعار / التفاصيل",
-            style=discord.TextStyle.paragraph,
-            placeholder="اكتب سبب أو تفاصيل الشعار هنا...",
-            required=True,
-            max_length=1000
-        )
-
-        self.add_item(self.user_id_input)
-        self.add_item(self.reason_input)
-
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        # التأكد من الرتبة مرة ثانية
-        member = interaction.guild.get_member(
-            interaction.user.id
-        )
-
-        if not member:
-            return
-
-        if not any(
-            role.id == ADMIN_ROLE_ID
-            for role in member.roles
-        ):
-            await interaction.response.send_message(
-                "❌ ليس لديك صلاحية استخدام هذا النظام.",
-                ephemeral=True
-            )
-            return
-
-        raw_id = self.user_id_input.value.strip()
-
-        if not raw_id.isdigit():
-            await interaction.response.send_message(
-                "❌ الأيدي غير صحيح. اكتب أرقام فقط.",
-                ephemeral=True
-            )
-            return
-
-        target_id = int(raw_id)
-
-        target_member = interaction.guild.get_member(
-            target_id
-        )
-
-        if not target_member:
-            await interaction.response.send_message(
-                "❌ لم يتم العثور على هذا العضو داخل السيرفر.",
-                ephemeral=True
-            )
-            return
-
-        reason = self.reason_input.value
-
-        # مبلغ المكافأة
-        reward_amount = 5000
-
-        # ID فريد للمكافأة
-        reward_id = str(uuid.uuid4())
-
-        # حفظ المكافأة في MongoDB
-        mongo_uri = os.environ.get("MONGO_URI")
-
-        if not mongo_uri:
-            await interaction.response.send_message(
-                "❌ قاعدة البيانات غير متصلة.",
-                ephemeral=True
-            )
-            return
-
-        client = AsyncIOMotorClient(mongo_uri)
-        db = client.discord_bot_db
-        rewards = db.economy_rewards
-
-        await rewards.insert_one({
-            "reward_id": reward_id,
-            "user_id": target_member.id,
-            "amount": reward_amount,
-            "reason": reason,
-            "claimed": False,
-            "created_by": interaction.user.id,
-            "guild_id": interaction.guild.id
-        })
-
-        # رسالة الخاص
-        dm_embed = discord.Embed(
-            title="🎁 لديك شعار ومكافأة جديدة!",
-            description=(
-                f"**السبب / التفاصيل:**\n"
-                f"{reason}\n\n"
-                f"💰 قيمة المكافأة: "
-                f"**{format_coins(reward_amount)} Ai**"
-            ),
-            color=discord.Color.gold()
-        )
-
-        dm_embed.set_footer(
-            text=f"بواسطة الإدارة في سيرفر: {interaction.guild.name}"
-        )
-
-        view = ClaimRewardView(reward_id)
-
-        try:
-
-            await target_member.send(
-                embed=dm_embed,
-                view=view
-            )
-
-            await interaction.response.send_message(
-                f"✅ تم إرسال الشعار والمكافأة إلى "
-                f"{target_member.mention} في الخاص.",
-                ephemeral=True
-            )
-
-        except Exception:
-
-            # إذا فشل إرسال الخاص نحذف المكافأة المحفوظة
-            await rewards.delete_one({
-                "reward_id": reward_id
-            })
-
-            await interaction.response.send_message(
-                "⚠️ تعذر إرسال رسالة خاصة للعضو. "
-                "تأكد أن الخاص مفتوح لديه.",
-                ephemeral=True
-            )
-
-        finally:
-            client.close()
-
-
-# =========================================================
-# زر استلام المكافأة
-# =========================================================
-
-class ClaimRewardView(ui.View):
-
-    def __init__(self, reward_id: str):
-        super().__init__(timeout=None)
-
-        self.reward_id = reward_id
-
-        button = ui.Button(
-            label="إستلام المكافأة",
-            style=discord.ButtonStyle.blurple,
-            emoji="💰",
-            custom_id=f"claim_reward:{reward_id}"
-        )
-
-        self.add_item(button)
-
-
-# =========================================================
-# التعامل مع زر الاستلام
-# =========================================================
-
-class RewardInteractionCog(commands.Cog):
+class RewardInteractionCog(
+    commands.Cog
+):
 
     def __init__(self, bot):
+
         self.bot = bot
 
-        mongo_uri = os.environ.get("MONGO_URI")
+        mongo_uri = os.environ.get(
+            "MONGO_URI"
+        )
 
         if mongo_uri:
-            self.db_client = AsyncIOMotorClient(mongo_uri)
-            self.db = self.db_client.discord_bot_db
-            self.balances = self.db.economy_balances
-            self.rewards = self.db.economy_rewards
+
+            self.db_client = (
+                AsyncIOMotorClient(
+                    mongo_uri
+                )
+            )
+
+            self.db = (
+                self.db_client.discord_bot_db
+            )
+
+            self.balances = (
+                self.db.economy_balances
+            )
+
+            self.rewards = (
+                self.db.economy_rewards
+            )
+
         else:
+
             self.db_client = None
             self.db = None
             self.balances = None
@@ -710,22 +1176,34 @@ class RewardInteractionCog(commands.Cog):
         interaction: discord.Interaction
     ):
 
-        if interaction.type != discord.InteractionType.component:
+        if (
+            interaction.type !=
+            discord.InteractionType.component
+        ):
             return
 
-        custom_id = interaction.data.get("custom_id")
+        if not interaction.data:
+            return
+
+        custom_id = interaction.data.get(
+            "custom_id"
+        )
 
         if not custom_id:
             return
 
-        if not custom_id.startswith("claim_reward:"):
+        if not custom_id.startswith(
+            "claim_reward:"
+        ):
             return
 
         if self.rewards is None:
+
             await interaction.response.send_message(
                 "❌ قاعدة البيانات غير متصلة.",
                 ephemeral=True
             )
+
             return
 
         reward_id = custom_id.split(
@@ -733,23 +1211,25 @@ class RewardInteractionCog(commands.Cog):
             1
         )[1]
 
-        # محاولة استلام المكافأة بشكل ذري
-        reward = await self.rewards.find_one_and_update(
-            {
-                "reward_id": reward_id,
-                "user_id": interaction.user.id,
-                "claimed": False
-            },
-            {
-                "$set": {
-                    "claimed": True,
-                    "claimed_at": discord.utils.utcnow()
-                }
-            },
-            return_document=True
+        reward = await (
+            self.rewards.find_one_and_update(
+                {
+                    "reward_id": reward_id,
+                    "user_id": interaction.user.id,
+                    "claimed": False
+                },
+                {
+                    "$set": {
+                        "claimed": True,
+                        "claimed_at":
+                            discord.utils.utcnow()
+                    }
+                },
+                return_document=
+                    ReturnDocument.AFTER
+            )
         )
 
-        # لا توجد مكافأة قابلة للاستلام
         if not reward:
 
             await interaction.response.send_message(
@@ -762,38 +1242,44 @@ class RewardInteractionCog(commands.Cog):
 
         reward_amount = reward["amount"]
 
-        # إضافة Ai إلى الرصيد
         await self.balances.update_one(
-            {"user_id": interaction.user.id},
+            {
+                "user_id":
+                    interaction.user.id
+            },
             {
                 "$inc": {
-                    "balance": reward_amount
+                    "balance":
+                        reward_amount
                 }
             },
             upsert=True
         )
 
-        # تعطيل الزر
-        view = discord.ui.View(timeout=None)
+        view = discord.ui.View(
+            timeout=None
+        )
 
         disabled_button = discord.ui.Button(
             label="تم الاستلام بنجاح",
             style=discord.ButtonStyle.green,
             emoji="✅",
-            custom_id=f"claimed_reward:{reward_id}",
+            custom_id=
+                f"claimed_reward:{reward_id}",
             disabled=True
         )
 
-        view.add_item(disabled_button)
+        view.add_item(
+            disabled_button
+        )
 
-        # تحديث رسالة المكافأة
         await interaction.response.edit_message(
             view=view
         )
 
-        # رسالة خاصة للمستلم
         await interaction.followup.send(
-            f"🎉 مبروك! تمت إضافة "
+            f"🎉 مبروك!\n"
+            f"تمت إضافة "
             f"**{format_coins(reward_amount)} Ai** "
             f"إلى رصيدك.",
             ephemeral=True
@@ -805,5 +1291,11 @@ class RewardInteractionCog(commands.Cog):
 # =========================================================
 
 async def setup(bot):
-    await bot.add_cog(EconomyCog(bot))
-    await bot.add_cog(RewardInteractionCog(bot))
+
+    await bot.add_cog(
+        EconomyCog(bot)
+    )
+
+    await bot.add_cog(
+        RewardInteractionCog(bot)
+    )
