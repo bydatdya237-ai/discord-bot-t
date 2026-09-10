@@ -26,9 +26,10 @@ client = MongoClient(mongo_url)
 db = client['discord_bot_db']
 # ==================================================
 
-# نظام السلاش ما يحتاج صلاحية قراءة الرسائل (Message Content)
+# تفعيل الصلاحيات الأساسية وقراءة محتوى الرسائل للذكاء الاصطناعي
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True  # <--- تمت الإضافة هنا
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
