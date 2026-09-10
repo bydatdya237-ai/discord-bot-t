@@ -24,7 +24,7 @@ class AIAutoChatCog(commands.Cog):
             async with message.channel.typing():
                 try:
                     chat_completion = self.groq_client.chat.completions.create(
-                        model="llama-3.1-8b-instant",  # الموديل المحدث والنشط حالياً
+                        model="mixtral-8x7b-32768",  # موديل Mixtral المدعوم والمستقرار تماماً
                         messages=[
                             {"role": "user", "content": message.content}
                         ]
