@@ -15,12 +15,14 @@ class AIAutoChatCog(commands.Cog):
         self.TARGET_CHANNEL_ID = 1546187533044424785
         self.lock = asyncio.Lock()
 
-        self.conversation_history = [
-            {
-                "role": "system",
-                "content": "أنت مساعد ذكاء اصطناعي داخل سيرفر ديسكورد. تحدث باللغة العربية دائمًا وبأسلوب طبيعي وواضح. لا تستخدم اللغة الإنجليزية إلا إذا طلب المستخدم ذلك صراحة. اسمك هو ضياء. إذا سألك أي شخص: ما اسمك؟ أو وش اسمك؟ أو شو اسمك؟ أو ما هو اسمك؟ أو أي سؤال مشابه عن اسمك، أجب بأن اسمك ضياء. لا تقل إن اسمك ذكاء اصطناعي أو AI، بل اسمك ضياء."
-            }
-        ]
+        # رسالة النظام الثابتة للتعريف بالشخصية والاسم "ضياء"
+        self.system_prompt = {
+            "role": "system",
+            "content": "أنت مساعد ذكاء اصطناعي داخل سيرفر ديسكورد. تحدث باللغة العربية دائمًا وبأسلوب طبيعي وواضح. لا تستخدم اللغة الإنجليزية إلا إذا طلب المستخدم ذلك صراحة. اسمك هو ضياء. إذا سألك أي شخص: ما اسمك؟ أو وش اسمك؟ أو شو اسمك؟ أو ما هو اسمك؟ أو أي سؤال مشابه عن اسمك، أجب بأن اسمك ضياء. لا تقل إن اسمك ذكاء اصطناعي أو AI، بل اسمك ضياء."
+        }
+        
+        # ذاكرة مؤقتة تحفظ آخر الرسائل فقط لضمان السرعة وعدم الثقل
+        self.conversation_history = []
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -30,21 +32,26 @@ class AIAutoChatCog(commands.Cog):
         async with self.lock:
             async with message.channel.typing():
                 try:
-                    self.conversation_history.append(
-                        {"role": "user", "content": message.content}
-                    )
+                    # إضافة رسالة المستخدم الجديدة للذاكرة
+                    self.conversation_history.append({"role": "user", "content": message.content})
+                    
+                    # الاحتفاظ بآخر 10 رسائل فقط عشان يبقى البوت سريع وما يثقل
+                    if len(self.conversation_history) > 10:
+                        self.conversation_history = self.conversation_history[-10:]
+
+                    # تجميع الرسائل مع رسالة النظام الأساسية للإرسال
+                    payload_messages = [self.system_prompt] + self.conversation_history
 
                     chat_completion = await asyncio.to_thread(
                         self.groq_client.chat.completions.create,
-                        model="openai/gpt-oss-20b",
-                        messages=self.conversation_history
+                        model="llama-3.1-8b-instant",  # أسرع وأقوى موديل على Groq
+                        messages=payload_messages
                     )
                     
                     answer = chat_completion.choices[0].message.content
 
-                    self.conversation_history.append(
-                        {"role": "assistant", "content": answer}
-                    )
+                    # إضافة رد البوت للذاكرة عشان يربط الكلام ببعضه
+                    self.conversation_history.append({"role": "assistant", "content": answer})
 
                     if len(answer) > 1900:
                         answer = answer[:1900] + "\n\n... (تم اختصار الرد لطوله)"
