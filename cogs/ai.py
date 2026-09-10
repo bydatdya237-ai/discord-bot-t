@@ -6,14 +6,11 @@ from google import genai
 class AIAutoChatCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # جلب المفتاح مباشرة والتاكد منه
         api_key = os.environ.get('GEMINI_API_KEY')
         if not api_key:
             print("⚠️ تحذير: مفتاح GEMINI_API_KEY غير موجود في متغيرات البيئة!")
         
         self.gemini_client = genai.Client(api_key=api_key)
-        
-        # آيدي الروم المخصص للرد التلقائي
         self.TARGET_CHANNEL_ID = 1547418557032308830
 
     @commands.Cog.listener()
@@ -24,7 +21,7 @@ class AIAutoChatCog(commands.Cog):
         async with message.channel.typing():
             try:
                 response = self.gemini_client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.5-flash',
                     contents=message.content,
                 )
                 
