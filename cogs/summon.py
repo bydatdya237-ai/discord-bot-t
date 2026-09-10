@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands
 
@@ -6,7 +7,7 @@ from discord.ext import commands
 # الإعدادات
 # =========================================================
 
-# الروم الذي يسمح باستخدام أمر الاستدعاء فيه فقط
+# الروم الذي يسمح باستخدام أوامر الاستدعاء فيه فقط
 COMMAND_ROOM_ID = 1546860236227215400
 
 # الرتب الثلاث المسموح لها باستخدام الأمر
@@ -38,17 +39,18 @@ class SummonModal(discord.ui.Modal, title="🚨 استدعاء عضو"):
         max_length=1000
     )
 
-    def __init__(self, bot, member, author):
+    def __init__(self, bot, member=None, author=None, full=False):
         super().__init__()
 
         self.bot = bot
         self.member = member
         self.author = author
+        self.full = full
 
     async def on_submit(self, interaction: discord.Interaction):
 
         # =====================================================
-        # التأكد من أن ID الروم صحيح
+        # التأكد من ID الروم
         # =====================================================
 
         try:
@@ -95,12 +97,78 @@ class SummonModal(discord.ui.Modal, title="🚨 استدعاء عضو"):
             return
 
         # =====================================================
-        # تجهيز رسالة الاستدعاء
+        # الاستدعاء الفردي
         # =====================================================
 
+        if not self.full:
+
+            embed = discord.Embed(
+                title="🚨 تنبيه استدعاء رسمي",
+                description=(
+                    "لقد تم استدعاؤك للتوجه إلى الروم المحدد."
+                ),
+                color=discord.Color.red()
+            )
+
+            embed.add_field(
+                name="📍 الروم المطلوب:",
+                value=target_channel.mention,
+                inline=False
+            )
+
+            embed.add_field(
+                name="📝 سبب الاستدعاء:",
+                value=self.reason.value,
+                inline=False
+            )
+
+            embed.set_footer(
+                text=f"بواسطة المشرف: {self.author.name}"
+            )
+
+            try:
+                await self.member.send(embed=embed)
+
+                await interaction.response.send_message(
+                    f"✅ تم استدعاء {self.member.mention} بنجاح إلى "
+                    f"{target_channel.mention}\n"
+                    "✉️ تم إرسال رسالة الاستدعاء له.",
+                    ephemeral=True
+                )
+
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "⚠️ تعذر إرسال رسالة خاصة لهذا العضو.",
+                    ephemeral=True
+                )
+
+            except discord.HTTPException:
+                await interaction.response.send_message(
+                    "⚠️ حدث خطأ أثناء إرسال الرسالة الخاصة.",
+                    ephemeral=True
+                )
+
+            return
+
+        # =====================================================
+        # الاستدعاء الكامل للسيرفر
+        # =====================================================
+
+        guild = interaction.guild
+
+        if guild is None:
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+            return
+
+        # تجهيز رسالة الاستدعاء
         embed = discord.Embed(
             title="🚨 تنبيه استدعاء رسمي",
-            description="لقد تم استدعاؤك للتوجه إلى الروم المحدد.",
+            description=(
+                "لقد تم استدعاؤك للتوجه إلى الروم المحدد."
+            ),
             color=discord.Color.red()
         )
 
@@ -120,45 +188,68 @@ class SummonModal(discord.ui.Modal, title="🚨 استدعاء عضو"):
             text=f"بواسطة المشرف: {self.author.name}"
         )
 
-        # =====================================================
-        # إرسال الاستدعاء في الخاص
-        # =====================================================
-
-        try:
-            await self.member.send(embed=embed)
-
-            dm_status = "✉️ تم إرسال رسالة الاستدعاء له."
-
-        except discord.Forbidden:
-            dm_status = "⚠️ تعذر إرسال رسالة خاصة له."
-
-        except discord.HTTPException:
-            dm_status = "⚠️ حدث خطأ أثناء إرسال الرسالة الخاصة."
-
-        # =====================================================
-        # تأكيد العملية للمشرف
-        # =====================================================
-
+        # نؤكد للمشرف أن العملية بدأت
         await interaction.response.send_message(
-            f"✅ تم استدعاء {self.member.mention} بنجاح إلى "
-            f"{target_channel.mention}\n"
-            f"{dm_status}",
+            "📨 جاري إرسال الاستدعاء لأعضاء السيرفر...",
             ephemeral=True
         )
 
+        success = 0
+        failed = 0
+
+        # =====================================================
+        # إرسال الرسالة للأعضاء
+        # =====================================================
+
+        for member in guild.members:
+
+            # عدم إرسالها للبوتات
+            if member.bot:
+                continue
+
+            try:
+                await member.send(embed=embed)
+                success += 1
+
+            except (
+                discord.Forbidden,
+                discord.HTTPException,
+                discord.NotFound
+            ):
+                failed += 1
+
+            # تأخير بسيط لتقليل مشاكل Rate Limit
+            await asyncio.sleep(1)
+
+        # =====================================================
+        # النتيجة
+        # =====================================================
+
+        try:
+            await interaction.followup.send(
+                "✅ **اكتمل الاستدعاء العام**\n\n"
+                f"📨 تم إرسال الرسالة إلى: **{success}** عضو\n"
+                f"⚠️ تعذر الإرسال إلى: **{failed}** عضو",
+                ephemeral=True
+            )
+
+        except discord.HTTPException:
+            pass
+
 
 # =========================================================
-# الزر الذي يفتح المربع
+# زر الاستدعاء
 # =========================================================
 
 class SummonView(discord.ui.View):
 
-    def __init__(self, bot, member, author):
+    def __init__(self, bot, member, author, full=False):
         super().__init__(timeout=120)
 
         self.bot = bot
         self.member = member
         self.author = author
+        self.full = full
 
     @discord.ui.button(
         label="بدء الاستدعاء",
@@ -171,7 +262,7 @@ class SummonView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        # التأكد أن الشخص الذي ضغط الزر هو نفس الشخص الذي استخدم الأمر
+        # الزر لصاحب الأمر فقط
         if interaction.user.id != self.author.id:
             await interaction.response.send_message(
                 "❌ هذا الزر ليس لك.",
@@ -184,7 +275,8 @@ class SummonView(discord.ui.View):
             SummonModal(
                 self.bot,
                 self.member,
-                self.author
+                self.author,
+                self.full
             )
         )
 
@@ -199,14 +291,10 @@ class SummonCog(commands.Cog):
         self.bot = bot
 
     @commands.command(name="استدعاء")
-    async def summon(
-        self,
-        ctx,
-        member: discord.Member
-    ):
+    async def summon(self, ctx, target=None):
 
         # =====================================================
-        # إذا استخدم الأمر في روم آخر:
+        # إذا كان الأمر في روم آخر:
         # البوت لا يرد نهائيًا
         # =====================================================
 
@@ -227,15 +315,72 @@ class SummonCog(commands.Cog):
             return
 
         # =====================================================
-        # إرسال زر بدء الاستدعاء
+        # الاستدعاء الكامل
+        # =====================================================
+
+        if target and target.lower() == "كامل":
+
+            embed = discord.Embed(
+                title="🚨 استدعاء كامل",
+                description=(
+                    "سيتم إرسال رسالة استدعاء إلى أعضاء السيرفر.\n\n"
+                    "اضغط على الزر بالأسفل لإدخال "
+                    "**ID الروم** و**سبب الاستدعاء**."
+                ),
+                color=discord.Color.red()
+            )
+
+            await ctx.send(
+                embed=embed,
+                view=SummonView(
+                    self.bot,
+                    None,
+                    ctx.author,
+                    full=True
+                )
+            )
+
+            return
+
+        # =====================================================
+        # التأكد من وجود عضو للاستدعاء الفردي
+        # =====================================================
+
+        if target is None:
+            await ctx.send(
+                "⚠️ استخدم الأمر هكذا:\n"
+                "`-استدعاء @الشخص`\n\n"
+                "أو للاستدعاء الكامل:\n"
+                "`-استدعاء كامل`"
+            )
+            return
+
+        # =====================================================
+        # Discord يحول المنشن إلى Member إذا كان صحيحًا
+        # =====================================================
+
+        try:
+            member = await commands.MemberConverter().convert(
+                ctx,
+                target
+            )
+
+        except commands.MemberNotFound:
+            await ctx.send(
+                "❌ لم أتمكن من العثور على هذا العضو."
+            )
+            return
+
+        # =====================================================
+        # الاستدعاء الفردي
         # =====================================================
 
         embed = discord.Embed(
             title="🚨 استدعاء عضو",
             description=(
                 f"تم اختيار العضو: {member.mention}\n\n"
-                "اضغط على الزر بالأسفل لإدخال **ID الروم** "
-                "و**سبب الاستدعاء**."
+                "اضغط على الزر بالأسفل لإدخال "
+                "**ID الروم** و**سبب الاستدعاء**."
             ),
             color=discord.Color.red()
         )
@@ -245,7 +390,8 @@ class SummonCog(commands.Cog):
             view=SummonView(
                 self.bot,
                 member,
-                ctx.author
+                ctx.author,
+                full=False
             )
         )
 
@@ -256,20 +402,19 @@ class SummonCog(commands.Cog):
     @summon.error
     async def summon_error(self, ctx, error):
 
-        # إذا كان الأمر في روم غير مسموح:
-        # لا يرد البوت نهائيًا
+        # في روم آخر لا يوجد أي رد
         if ctx.channel.id != COMMAND_ROOM_ID:
             return
 
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(
-                "⚠️ استخدم الأمر هكذا:\n"
-                "`-استدعاء @الشخص`"
-            )
-
-        elif isinstance(error, commands.MemberNotFound):
+        if isinstance(error, commands.MemberNotFound):
             await ctx.send(
                 "❌ لم أتمكن من العثور على هذا العضو."
+            )
+
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send(
+                "❌ العضو غير صحيح.\n"
+                "استخدم: `-استدعاء @الشخص`"
             )
 
 
