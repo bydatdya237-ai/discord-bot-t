@@ -1,6 +1,10 @@
 import discord
 from discord.ext import commands
 
+import ast
+import inspect
+import textwrap
+
 
 # =========================================================
 # الإعدادات
@@ -29,63 +33,278 @@ def has_allowed_role(member: discord.Member) -> bool:
 
 
 # =========================================================
-# الحصول على روم الأمر تلقائياً
+# فحص هل العقدة تمثل ctx.channel.id
 # =========================================================
 
-def get_command_room(command):
+def is_channel_id_node(node):
+    """
+    يتأكد أن العقدة هي:
+
+    ctx.channel.id
+    """
+
+    if not isinstance(node, ast.Attribute):
+        return False
+
+    if node.attr != "id":
+        return False
+
+    channel = node.value
+
+    if not isinstance(channel, ast.Attribute):
+        return False
+
+    if channel.attr != "channel":
+        return False
+
+    ctx = channel.value
+
+    if not isinstance(ctx, ast.Name):
+        return False
+
+    return ctx.id == "ctx"
+
+
+# =========================================================
+# استخراج قيمة الروم من AST
+# =========================================================
+
+def extract_room_value(node, command_globals):
+    """
+    يحاول استخراج رقم الروم من:
+
+    123456789
+
+    أو:
+
+    ECONOMY_ROOM_ID
+
+    أو:
+
+    SOME_ROOM_ID
+    """
+
+    # -----------------------------------------------------
+    # رقم مباشر
+    # -----------------------------------------------------
+
+    if isinstance(node, ast.Constant):
+
+        if isinstance(node.value, int):
+            return node.value
+
+        return None
+
+    # -----------------------------------------------------
+    # متغير
+    # -----------------------------------------------------
+
+    if isinstance(node, ast.Name):
+
+        value = command_globals.get(node.id)
+
+        if isinstance(value, int):
+            return value
+
+        return None
+
+    # -----------------------------------------------------
+    # دعم بعض الحالات البسيطة الأخرى
+    # -----------------------------------------------------
+
+    return None
+
+
+# =========================================================
+# استخراج الرومات من شرط ctx.channel.id
+# =========================================================
+
+def extract_rooms_from_comparison(node, command_globals):
+
+    rooms = []
+
+    if not isinstance(node, ast.Compare):
+        return rooms
+
+    # نحتاج مقارنة يكون الطرف الأيسر فيها:
+    #
+    # ctx.channel.id
+    #
+    if not is_channel_id_node(node.left):
+        return rooms
+
+    # -----------------------------------------------------
+    # مثال:
+    #
+    # ctx.channel.id != ECONOMY_ROOM_ID
+    #
+    # ctx.channel.id == 123456789
+    # -----------------------------------------------------
+
+    for comparator in node.comparators:
+
+        room_id = extract_room_value(
+            comparator,
+            command_globals
+        )
+
+        if room_id:
+            rooms.append(room_id)
+
+    return rooms
+
+
+# =========================================================
+# استخراج الرومات من شرط in / not in
+# =========================================================
+
+def extract_rooms_from_iterable(node, command_globals):
+
+    rooms = []
+
+    # -----------------------------------------------------
+    # مثال:
+    #
+    # ctx.channel.id in [123, 456]
+    # -----------------------------------------------------
+
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+
+        for element in node.elts:
+
+            room_id = extract_room_value(
+                element,
+                command_globals
+            )
+
+            if room_id:
+                rooms.append(room_id)
+
+    # -----------------------------------------------------
+    # مثال:
+    #
+    # ctx.channel.id in ROOM_IDS
+    # -----------------------------------------------------
+
+    elif isinstance(node, ast.Name):
+
+        value = command_globals.get(node.id)
+
+        if isinstance(value, (list, tuple, set)):
+
+            for room_id in value:
+
+                if isinstance(room_id, int):
+                    rooms.append(room_id)
+
+    return rooms
+
+
+# =========================================================
+# البحث داخل شرط
+# =========================================================
+
+def scan_ast_for_rooms(tree, command_globals):
+
+    rooms = []
+
+    for node in ast.walk(tree):
+
+        # -------------------------------------------------
+        # مقارنات:
+        #
+        # ctx.channel.id != ROOM_ID
+        # ctx.channel.id == ROOM_ID
+        # -------------------------------------------------
+
+        if isinstance(node, ast.Compare):
+
+            if is_channel_id_node(node.left):
+
+                # حالة in / not in
+                for operator, comparator in zip(
+                    node.ops,
+                    node.comparators
+                ):
+
+                    if isinstance(
+                        operator,
+                        (ast.In, ast.NotIn)
+                    ):
+
+                        found = extract_rooms_from_iterable(
+                            comparator,
+                            command_globals
+                        )
+
+                        rooms.extend(found)
+
+                    else:
+
+                        room_id = extract_room_value(
+                            comparator,
+                            command_globals
+                        )
+
+                        if room_id:
+                            rooms.append(room_id)
+
+    # إزالة التكرار مع المحافظة على الترتيب
+    unique_rooms = []
+
+    for room_id in rooms:
+
+        if room_id not in unique_rooms:
+            unique_rooms.append(room_id)
+
+    return unique_rooms
+
+
+# =========================================================
+# الحصول على روم الأمر من الكود نفسه
+# =========================================================
+
+def get_command_rooms(command):
+
+    rooms = []
 
     try:
+
         callback = command.callback
+
+        # -------------------------------------------------
+        # متغيرات الملف الذي يحتوي على الأمر
+        # -------------------------------------------------
+
         command_globals = callback.__globals__
 
-        # =================================================
-        # 1 - روم الاقتصاد
-        # =================================================
-        economy_room_id = command_globals.get(
-            "ECONOMY_ROOM_ID"
+        # -------------------------------------------------
+        # قراءة كود الدالة الحقيقي
+        # -------------------------------------------------
+
+        source = inspect.getsource(callback)
+
+        source = textwrap.dedent(source)
+
+        # -------------------------------------------------
+        # تحويل الكود إلى AST
+        # -------------------------------------------------
+
+        tree = ast.parse(source)
+
+        # -------------------------------------------------
+        # البحث عن شروط الرومات
+        # -------------------------------------------------
+
+        rooms = scan_ast_for_rooms(
+            tree,
+            command_globals
         )
-
-        if economy_room_id:
-            return economy_room_id
-
-        # =================================================
-        # 2 - روم الشعار
-        # =================================================
-        banner_room_id = command_globals.get(
-            "BANNER_ROOM_ID"
-        )
-
-        if banner_room_id:
-            return banner_room_id
-
-        # =================================================
-        # 3 - دعم الأكواد القديمة
-        # =================================================
-        room_id = command_globals.get(
-            "COMMAND_ROOM_ID"
-        )
-
-        if room_id:
-            return room_id
-
-        room_id = command_globals.get(
-            "ALLOWED_ROOM_ID"
-        )
-
-        if room_id:
-            return room_id
-
-        room_id = command_globals.get(
-            "COMMAND_CHANNEL_ID"
-        )
-
-        if room_id:
-            return room_id
 
     except Exception:
         pass
 
-    return None
+    return rooms
 
 
 # =========================================================
@@ -100,9 +319,11 @@ def get_command_description(command):
 
     # محاولة قراءة وصف الدالة
     try:
+
         callback = command.callback
 
         if callback.__doc__:
+
             description = callback.__doc__.strip()
 
             if description:
@@ -129,6 +350,31 @@ def get_channel_display(guild, channel_id):
         return f"❓ روم غير موجود (`{channel_id}`)"
 
     return channel.mention
+
+
+# =========================================================
+# عرض أكثر من روم
+# =========================================================
+
+def get_rooms_display(guild, room_ids):
+
+    # لا يوجد روم مكتشف
+    if not room_ids:
+        return "🌐 جميع الرومات / غير محدد"
+
+    displays = []
+
+    for room_id in room_ids:
+
+        display = get_channel_display(
+            guild,
+            room_id
+        )
+
+        if display not in displays:
+            displays.append(display)
+
+    return "، ".join(displays)
 
 
 # =========================================================
@@ -193,21 +439,25 @@ class CommandsListCog(commands.Cog):
             # الوصف
             # =============================================
 
-            description = get_command_description(command)
+            description = get_command_description(
+                command
+            )
 
             command_text += (
                 f"\n📝 {description}"
             )
 
             # =============================================
-            # الروم الذي يعمل فيه الأمر
+            # الرومات التي يعمل فيها الأمر
             # =============================================
 
-            room_id = get_command_room(command)
+            room_ids = get_command_rooms(
+                command
+            )
 
-            room_display = get_channel_display(
+            room_display = get_rooms_display(
                 ctx.guild,
-                room_id
+                room_ids
             )
 
             command_text += (
@@ -229,7 +479,9 @@ class CommandsListCog(commands.Cog):
                     f"\n↳ البدائل: {aliases}"
                 )
 
-            commands_list.append(command_text)
+            commands_list.append(
+                command_text
+            )
 
         # -------------------------------------------------
         # إذا لم توجد أوامر
@@ -261,7 +513,6 @@ class CommandsListCog(commands.Cog):
 
         for command_text in commands_list:
 
-            # Discord Embed description حدها قريب من 4096
             if (
                 len(current_chunk)
                 + len(command_text)
@@ -269,7 +520,10 @@ class CommandsListCog(commands.Cog):
                 > 3800
             ):
 
-                chunks.append(current_chunk)
+                chunks.append(
+                    current_chunk
+                )
+
                 current_chunk = ""
 
             current_chunk += (
@@ -278,7 +532,9 @@ class CommandsListCog(commands.Cog):
             )
 
         if current_chunk:
-            chunks.append(current_chunk)
+            chunks.append(
+                current_chunk
+            )
 
         # -------------------------------------------------
         # إرسال القائمة
