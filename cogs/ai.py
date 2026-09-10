@@ -7,9 +7,9 @@ from groq import Groq
 class AIAutoChatCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('GEMINI_API_KEY')
+        api_key = os.environ.get('GROQ_API_KEY')
         if not api_key:
-            print("⚠️ تحذير: مفتاح API غير موجود في متغيرات البيئة!")
+            print("⚠️ تحذير: مفتاح GROQ_API_KEY غير موجود في متغيرات البيئة!")
         
         self.groq_client = Groq(api_key=api_key)
         self.TARGET_CHANNEL_ID = 1546187533044424785
@@ -31,7 +31,6 @@ class AIAutoChatCog(commands.Cog):
 - لا تقل إن اسمك ذكاء اصطناعي أو AI. اسمك هو ضياء.
 - عندما يُسأل عن مطورك، لا تذكر اسم أي شخص آخر. المطور هو ضياء.
 - حافظ على سياق المحادثة وتحدث بشكل طبيعي وواضح."""
-
         }
         
         # ذاكرة مؤقتة تحفظ آخر الرسائل فقط لضمان السرعة وعدم الثقل
@@ -57,7 +56,7 @@ class AIAutoChatCog(commands.Cog):
 
                     chat_completion = await asyncio.to_thread(
                         self.groq_client.chat.completions.create,
-                        model="llama-3.1-8b-instant",  # أسرع وأقوى موديل على Groq
+                        model="openai/gpt-oss-20b",
                         messages=payload_messages
                     )
                     
