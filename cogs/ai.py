@@ -1,35 +1,40 @@
 import os
-import asyncio  # 1. أضفنا مكتبة asyncio عشان نستخدم القفل
+import asyncio
 import discord
 from discord.ext import commands
-from google import genai
+from groq import Groq  # 1. استبدلنا مكتبة جوجل بمكتبة Groq الرسمية
 
 class AIAutoChatCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        api_key = os.environ.get('GEMINI_API_KEY')
+        # 2. نقرأ مفتاح Groq الجديد (يقدر يقرأ GROQ_API_KEY أو GEMINI_API_KEY حسب ما سميته في Railway)
+        api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('GEMINI_API_KEY')
         if not api_key:
-            print("⚠️ تحذير: مفتاح GEMINI_API_KEY غير موجود في متغيرات البيئة!")
+            print("⚠️ تحذير: مفتاح API الخاص بـ Groq غير موجود في متغيرات البيئة!")
         
-        self.gemini_client = genai.Client(api_key=api_key)
+        # 3. تهيئة عميل Groq
+        self.groq_client = Groq(api_key=api_key)
         self.TARGET_CHANNEL_ID = 1546187533044424785
-        self.lock = asyncio.Lock()  # 2. أنشأنا قفل (Lock) خاص بالمعالجة لمنع التداخل
+        self.lock = asyncio.Lock()  # نظام القفل لحماية البوت من التعليق والزحمة
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.channel.id != self.TARGET_CHANNEL_ID:
             return
 
-        # 3. استخدمنا الـ Lock بحيث لو وصلت رسالة جديدة والبوت لسه جالس يرد، تنتظر بترتيب
         async with self.lock:
             async with message.channel.typing():
                 try:
-                    response = self.gemini_client.models.generate_content(
-                        model='gemini-3.5-flash',
-                        contents=message.content,
+                    # 4. إرسال الطلب لنموذج Groq (استخدمنا نموذج Llama القوي والسريع جداً)
+                    chat_completion = self.groq_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[
+                            {"role": "user", "content": message.content}
+                        ]
                     )
                     
-                    answer = response.text
+                    # 5. استخراج الرد بالطريقة الخاصة بـ Groq
+                    answer = chat_completion.choices[0].message.content
 
                     if len(answer) > 1900:
                         answer = answer[:1900] + "\n\n... (تم اختصار الرد لطوله)"
@@ -37,7 +42,7 @@ class AIAutoChatCog(commands.Cog):
                     await message.reply(answer)
 
                 except Exception as e:
-                    print(f"خطأ في الذكاء الاصطناعي: {e}")
+                    print(f"خطأ في الذكاء الاصطناعي (Groq): {e}")
                     await message.reply("❌ حدث خطأ أثناء معالجة رد الذكاء الاصطناعي.")
 
 async def setup(bot):
