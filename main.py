@@ -31,7 +31,7 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True  # <--- تمت الإضافة هنا
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="-", intents=intents)
 
 @bot.event
 async def on_ready():
@@ -52,9 +52,9 @@ async def load_extensions():
         if filename.endswith('.py'):
             try:
                 await bot.load_extension(f'cogs.{filename[:-3]}')
-                print(f"✅ تم تحميل الملف بنجاح: {filename}")
+                print(f'✅ تم تحميل الملف بنجاح: {filename}')
             except Exception as e:
-                print(f"❌ فشل تحميل الملف {filename} بسبب الخطأ التالي: {e}")
+                print(f'❌ فشل تحميل الملف {filename} بسبب الخطأ التالي: {e}')
 
 @bot.event
 async def setup_hook():
