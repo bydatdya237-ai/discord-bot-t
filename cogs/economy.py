@@ -15,10 +15,10 @@ from pymongo import ReturnDocument
 # روم أوامر العملة
 ECONOMY_ROOM_ID = 1544334212734124174
 
-# روم -شعار + -تعطيل + -تفعيل
+# روم التحكم + الشعار
 CONTROL_ROOM_ID = 1547711993568305232
 
-# نفس الروم الخاص بالشعار
+# روم الشعار
 BANNER_ROOM_ID = 1547711993568305232
 
 # الرتب المسموح لها باستخدام أوامر الإدارة
@@ -107,7 +107,10 @@ def format_coins(amount: int) -> str:
 # Modal الشعار
 # =========================================================
 
-class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
+class BannerModal(
+    ui.Modal,
+    title="🎁 تسليم شعار ومكافأة"
+):
 
     amount_input = ui.TextInput(
         label="💰 مبلغ المكافأة",
@@ -124,7 +127,11 @@ class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
         max_length=1000
     )
 
-    def __init__(self, cog, target_member):
+    def __init__(
+        self,
+        cog,
+        target_member
+    ):
 
         super().__init__()
 
@@ -143,7 +150,11 @@ class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
         if amount <= 0:
 
             await interaction.response.send_message(
-                "❌ المبلغ غير صحيح.",
+                "❌ المبلغ غير صحيح.\n\n"
+                "مثال:\n"
+                "`25k`\n"
+                "`50000`\n"
+                "`2 مليون`",
                 ephemeral=True
             )
 
@@ -380,7 +391,9 @@ class BannerButtonView(ui.View):
         if not member:
             return
 
-        if not self.cog.has_admin_role(member):
+        if not self.cog.has_admin_role(
+            member
+        ):
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -429,7 +442,9 @@ class DistributionButtonView(ui.View):
         if not member:
             return
 
-        if not self.cog.has_admin_role(member):
+        if not self.cog.has_admin_role(
+            member
+        ):
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -492,7 +507,9 @@ class EconomyCog(commands.Cog):
                 mongo_uri
             )
 
-            self.db = self.db_client.discord_bot_db
+            self.db = (
+                self.db_client.discord_bot_db
+            )
 
             self.balances = (
                 self.db.economy_balances
@@ -515,7 +532,7 @@ class EconomyCog(commands.Cog):
             self.settings = None
 
     # =====================================================
-    # التحقق من الرتب
+    # الرتب
     # =====================================================
 
     def has_admin_role(
@@ -529,7 +546,7 @@ class EconomyCog(commands.Cog):
         )
 
     # =====================================================
-    # التحقق من الرومات
+    # الرومات
     # =====================================================
 
     def economy_room(self, ctx):
@@ -554,7 +571,7 @@ class EconomyCog(commands.Cog):
         )
 
     # =====================================================
-    # فحص حالة العملة
+    # حالة العملة
     # =====================================================
 
     async def currency_enabled(
@@ -576,10 +593,6 @@ class EconomyCog(commands.Cog):
             "currency_enabled",
             True
         )
-
-    # =====================================================
-    # تغيير حالة العملة
-    # =====================================================
 
     async def set_currency_enabled(
         self,
@@ -619,7 +632,10 @@ class EconomyCog(commands.Cog):
         })
 
         return (
-            user_data.get("balance", 0)
+            user_data.get(
+                "balance",
+                0
+            )
             if user_data
             else 0
         )
@@ -655,14 +671,17 @@ class EconomyCog(commands.Cog):
         ctx
     ):
 
-        if not self.control_room(ctx):
+        # يجب أن يكون الأمر في روم التحكم
+        if ctx.channel.id != CONTROL_ROOM_ID:
             return
 
+        # يجب أن تكون لديه إحدى الرتب الثلاث
         if not self.has_admin_role(
             ctx.author
         ):
             return
 
+        # تعطيل العملة في MongoDB
         await self.set_currency_enabled(
             ctx.guild.id,
             False
@@ -692,14 +711,23 @@ class EconomyCog(commands.Cog):
         ctx
     ):
 
-        if not self.control_room(ctx):
+        # =================================================
+        # مهم جداً:
+        # لا يوجد هنا أي فحص لـ currency_enabled()
+        # لأن هذا الأمر يجب أن يعمل حتى بعد التعطيل.
+        # =================================================
+
+        # يجب أن يكون في روم التحكم
+        if ctx.channel.id != CONTROL_ROOM_ID:
             return
 
+        # يجب أن تكون لديه إحدى الرتب الثلاث
         if not self.has_admin_role(
             ctx.author
         ):
             return
 
+        # إجبار الحالة على True
         await self.set_currency_enabled(
             ctx.guild.id,
             True
@@ -708,7 +736,8 @@ class EconomyCog(commands.Cog):
         embed = discord.Embed(
             title="🟢 تم تفعيل العملة",
             description=(
-                "تم تفعيل **أوامر العملة** من جديد."
+                "تم تفعيل **أوامر العملة** من جديد.\n\n"
+                "جميع أوامر الاقتصاد أصبحت متاحة الآن."
             ),
             color=discord.Color.green()
         )
@@ -739,10 +768,10 @@ class EconomyCog(commands.Cog):
             title="📖 شرح أوامر نظام Ai",
             description=(
                 "💰 **-رصيد**\n"
-                "عرض رصيدك الحالي من عملة Ai.\n\n"
+                "عرض رصيدك الحالي.\n\n"
 
                 "🏆 **-توب [رقم الصفحة]**\n"
-                "عرض أعلى الأعضاء حسب الرصيد.\n"
+                "عرض أعلى الأعضاء.\n"
                 "مثال: `-توب 1`\n\n"
 
                 "🎁 **-اعطي @العضو المبلغ**\n"
@@ -752,7 +781,7 @@ class EconomyCog(commands.Cog):
                 "سحب Ai من عضو.\n\n"
 
                 "💰 **-توزيع**\n"
-                "فتح قائمة لتحديد المبلغ والسبب."
+                "فتح قائمة التوزيع."
             ),
             color=discord.Color.gold()
         )
@@ -811,10 +840,41 @@ class EconomyCog(commands.Cog):
     async def top_cmd(
         self,
         ctx,
-        page: int = 1
+        page_str: str = None
     ):
 
         if not self.economy_room(ctx):
+            return
+
+        # إذا لم يكتب رقم الصفحة
+        if page_str is None:
+            page = 1
+
+        else:
+
+            # التأكد أن الصفحة رقم
+            if not page_str.isdigit():
+
+                await ctx.send(
+                    "❌ **طريقة الاستعمال:**\n"
+                    "`-توب [رقم الصفحة]`\n\n"
+                    "مثال:\n"
+                    "`-توب 1`"
+                )
+
+                return
+
+            page = int(page_str)
+
+        if page < 1:
+
+            await ctx.send(
+                "❌ **طريقة الاستعمال:**\n"
+                "`-توب [رقم الصفحة]`\n\n"
+                "مثال:\n"
+                "`-توب 1`"
+            )
+
             return
 
         if not await self.currency_enabled(
@@ -826,14 +886,6 @@ class EconomyCog(commands.Cog):
 
             await ctx.send(
                 "❌ قاعدة البيانات غير متصلة."
-            )
-
-            return
-
-        if page < 1:
-
-            await ctx.send(
-                "❌ رقم الصفحة يجب أن يكون 1 أو أكثر."
             )
 
             return
@@ -945,14 +997,28 @@ class EconomyCog(commands.Cog):
     async def give_cmd(
         self,
         ctx,
-        member: discord.Member,
+        member: discord.Member = None,
         *,
-        amount_str: str
+        amount_str: str = None
     ):
 
         if not self.economy_room(ctx):
             return
 
+        # طريقة الاستخدام أولاً
+        if member is None or not amount_str:
+
+            await ctx.send(
+                "❌ **طريقة الاستعمال:**\n"
+                "`-اعطي @العضو المبلغ`\n\n"
+                "مثال:\n"
+                "`-اعطي @ضياء 25k`"
+            )
+
+            return
+
+        # بعد التأكد من طريقة الاستخدام
+        # نفحص هل العملة مفعلة
         if not await self.currency_enabled(
             ctx.guild.id
         ):
@@ -970,10 +1036,10 @@ class EconomyCog(commands.Cog):
         if amount <= 0:
 
             await ctx.send(
-                "⚠️ الصيغة خاطئة.\n"
+                "❌ **طريقة الاستعمال:**\n"
+                "`-اعطي @العضو المبلغ`\n\n"
                 "مثال:\n"
-                "`-اعطي @الشخص 25k`\n"
-                "`-اعطي @الشخص 5000`"
+                "`-اعطي @ضياء 25k`"
             )
 
             return
@@ -997,14 +1063,27 @@ class EconomyCog(commands.Cog):
     async def withdraw_cmd(
         self,
         ctx,
-        member: discord.Member,
+        member: discord.Member = None,
         *,
-        amount_str: str
+        amount_str: str = None
     ):
 
         if not self.economy_room(ctx):
             return
 
+        # طريقة الاستخدام أولاً
+        if member is None or not amount_str:
+
+            await ctx.send(
+                "❌ **طريقة الاستعمال:**\n"
+                "`-سحب @العضو المبلغ`\n\n"
+                "مثال:\n"
+                "`-سحب @ضياء 25k`"
+            )
+
+            return
+
+        # بعدها نفحص حالة العملة
         if not await self.currency_enabled(
             ctx.guild.id
         ):
@@ -1022,10 +1101,10 @@ class EconomyCog(commands.Cog):
         if amount <= 0:
 
             await ctx.send(
-                "⚠️ الصيغة خاطئة.\n"
+                "❌ **طريقة الاستعمال:**\n"
+                "`-سحب @العضو المبلغ`\n\n"
                 "مثال:\n"
-                "`-سحب @الشخص 25k`\n"
-                "`-سحب @الشخص 10 ألف`"
+                "`-سحب @ضياء 25k`"
             )
 
             return
@@ -1100,10 +1179,22 @@ class EconomyCog(commands.Cog):
     async def banner_cmd(
         self,
         ctx,
-        member: discord.Member
+        member: discord.Member = None
     ):
 
         if not self.banner_room(ctx):
+            return
+
+        # طريقة الاستخدام أولاً
+        if member is None:
+
+            await ctx.send(
+                "❌ **طريقة الاستعمال:**\n"
+                "`-شعار @العضو`\n\n"
+                "مثال:\n"
+                "`-شعار @ضياء`"
+            )
+
             return
 
         if not await self.currency_enabled(
@@ -1128,7 +1219,7 @@ class EconomyCog(commands.Cog):
 
 
 # =========================================================
-# استلام المكافآت
+# نظام استلام المكافآت
 # =========================================================
 
 class RewardInteractionCog(
