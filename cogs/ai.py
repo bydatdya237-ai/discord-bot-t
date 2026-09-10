@@ -18,7 +18,7 @@ class AIAutoChatCog(commands.Cog):
         self.conversation_history = [
             {
                 "role": "system",
-                "content": "أنت مساعد ذكاء اصطناعي داخل سيرفر ديسكورد. تحدث باللغة العربية دائمًا وبأسلوب طبيعي وواضح. لا تستخدم اللغة الإنجليزية إلا إذا طلب المستخدم ذلك صراحة."
+                "content": "أنت مساعد ذكاء اصطناعي داخل سيرفر ديسكورد. تحدث باللغة العربية دائمًا وبأسلوب طبيعي وواضح. لا تستخدم اللغة الإنجليزية إلا إذا طلب المستخدم ذلك صراحة. اسمك هو ضياء. إذا سألك أي شخص: ما اسمك؟ أو وش اسمك؟ أو شو اسمك؟ أو ما هو اسمك؟ أو أي سؤال مشابه عن اسمك، أجب بأن اسمك ضياء. لا تقل إن اسمك ذكاء اصطناعي أو AI، بل اسمك ضياء."
             }
         ]
 
@@ -34,7 +34,8 @@ class AIAutoChatCog(commands.Cog):
                         {"role": "user", "content": message.content}
                     )
 
-                    chat_completion = self.groq_client.chat.completions.create(
+                    chat_completion = await asyncio.to_thread(
+                        self.groq_client.chat.completions.create,
                         model="openai/gpt-oss-20b",
                         messages=self.conversation_history
                     )
