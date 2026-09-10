@@ -14,7 +14,7 @@ class AIAutoChatCog(commands.Cog):
         self.gemini_client = genai.Client(api_key=api_key)
         
         # آيدي الروم المخصص للرد التلقائي
-        self.TARGET_CHANNEL_ID = 123456789012345678  # <--- حط آيدي رومك هنا
+        self.TARGET_CHANNEL_ID = 1547418557032308830
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
