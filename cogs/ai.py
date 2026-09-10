@@ -10,7 +10,7 @@ class AIAutoChatCog(commands.Cog):
         api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('GEMINI_API_KEY')
         if not api_key:
             print("⚠️ تحذير: مفتاح API غير موجود في متغيرات البيئة!")
-        
+
         self.groq_client = Groq(api_key=api_key)
         self.TARGET_CHANNEL_ID = 1546187533044424785
         self.lock = asyncio.Lock()
@@ -24,12 +24,12 @@ class AIAutoChatCog(commands.Cog):
             async with message.channel.typing():
                 try:
                     chat_completion = self.groq_client.chat.completions.create(
-                        model="mixtral-8x7b-32768",  # موديل Mixtral المدعوم والمستقرار تماماً
+                        model="llama-3.1-8b-instant",
                         messages=[
                             {"role": "user", "content": message.content}
                         ]
                     )
-                    
+
                     answer = chat_completion.choices[0].message.content
 
                     if len(answer) > 1900:
