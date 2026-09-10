@@ -1,9 +1,12 @@
 import os
 import re
 import uuid
+import random
+
 import discord
 from discord.ext import commands
 from discord import ui
+
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
@@ -21,11 +24,15 @@ CONTROL_ROOM_ID = 1547711993568305232
 # روم الشعار
 BANNER_ROOM_ID = 1547711993568305232
 
+
+# =========================================================
 # الرتب المسموح لها باستخدام أوامر الإدارة
+# =========================================================
+
 ALLOWED_ROLE_IDS = {
-    1545851911121666108,
     1544078469657530578,
-    1544426415766896690
+    1544426415766896690,
+    1545851911121666108
 }
 
 
@@ -76,6 +83,7 @@ def parse_amount(amount_str: str) -> int:
         return int(
             float(numbers[0]) * multiplier
         )
+
     except Exception:
         return 0
 
@@ -83,18 +91,21 @@ def parse_amount(amount_str: str) -> int:
 def format_coins(amount: int) -> str:
 
     if amount >= 1_000_000_000:
+
         return f"{amount / 1_000_000_000:.2f}b".replace(
             ".00",
             ""
         )
 
     elif amount >= 1_000_000:
+
         return f"{amount / 1_000_000:.2f}m".replace(
             ".00",
             ""
         )
 
     elif amount >= 1_000:
+
         return f"{amount / 1_000:.1f}k".replace(
             ".0",
             ""
@@ -142,6 +153,17 @@ class BannerModal(
         self,
         interaction: discord.Interaction
     ):
+
+        # تأكيد أن الشخص الذي فتح المودال إداري
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
+
+        if not member:
+            return
+
+        if not self.cog.has_admin_role(member):
+            return
 
         amount = parse_amount(
             self.amount_input.value
@@ -286,6 +308,16 @@ class DistributionModal(
         interaction: discord.Interaction
     ):
 
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
+
+        if not member:
+            return
+
+        if not self.cog.has_admin_role(member):
+            return
+
         amount = parse_amount(
             self.amount_input.value
         )
@@ -391,9 +423,8 @@ class BannerButtonView(ui.View):
         if not member:
             return
 
-        if not self.cog.has_admin_role(
-            member
-        ):
+        # أي شخص ليس من الإدارة يتم تجاهله
+        if not self.cog.has_admin_role(member):
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -442,9 +473,7 @@ class DistributionButtonView(ui.View):
         if not member:
             return
 
-        if not self.cog.has_admin_role(
-            member
-        ):
+        if not self.cog.has_admin_role(member):
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -543,6 +572,20 @@ class EconomyCog(commands.Cog):
         return any(
             role.id in ALLOWED_ROLE_IDS
             for role in member.roles
+        )
+
+    # =====================================================
+    # التحقق من الإدارة
+    # =====================================================
+
+    def is_admin(
+        self,
+        ctx
+    ):
+
+        return (
+            isinstance(ctx.author, discord.Member)
+            and self.has_admin_role(ctx.author)
         )
 
     # =====================================================
@@ -671,17 +714,14 @@ class EconomyCog(commands.Cog):
         ctx
     ):
 
-        # يجب أن يكون الأمر في روم التحكم
-        if ctx.channel.id != CONTROL_ROOM_ID:
+        # الروم الصحيح
+        if not self.control_room(ctx):
             return
 
-        # يجب أن تكون لديه إحدى الرتب الثلاث
-        if not self.has_admin_role(
-            ctx.author
-        ):
+        # الإداري فقط
+        if not self.is_admin(ctx):
             return
 
-        # تعطيل العملة في MongoDB
         await self.set_currency_enabled(
             ctx.guild.id,
             False
@@ -711,23 +751,13 @@ class EconomyCog(commands.Cog):
         ctx
     ):
 
-        # =================================================
-        # مهم جداً:
-        # لا يوجد هنا أي فحص لـ currency_enabled()
-        # لأن هذا الأمر يجب أن يعمل حتى بعد التعطيل.
-        # =================================================
-
-        # يجب أن يكون في روم التحكم
-        if ctx.channel.id != CONTROL_ROOM_ID:
+        if not self.control_room(ctx):
             return
 
-        # يجب أن تكون لديه إحدى الرتب الثلاث
-        if not self.has_admin_role(
-            ctx.author
-        ):
+        if not self.is_admin(ctx):
             return
 
-        # إجبار الحالة على True
+        # لا نفحص currency_enabled هنا
         await self.set_currency_enabled(
             ctx.guild.id,
             True
@@ -774,14 +804,21 @@ class EconomyCog(commands.Cog):
                 "عرض أعلى الأعضاء.\n"
                 "مثال: `-توب 1`\n\n"
 
+                "🎁 **-مكافاة**\n"
+                "الحصول على مكافأة عشوائية "
+                "من 3000 إلى 4000 Ai.\n\n"
+
                 "🎁 **-اعطي @العضو المبلغ**\n"
-                "إعطاء Ai لعضو.\n\n"
+                "إعطاء Ai لعضو — للإدارة فقط.\n\n"
 
                 "💸 **-سحب @العضو المبلغ**\n"
-                "سحب Ai من عضو.\n\n"
+                "سحب Ai من عضو — للإدارة فقط.\n\n"
 
                 "💰 **-توزيع**\n"
-                "فتح قائمة التوزيع."
+                "فتح قائمة التوزيع — للإدارة فقط.\n\n"
+
+                "🎖️ **-شعار @العضو**\n"
+                "إرسال شعار ومكافأة — للإدارة فقط."
             ),
             color=discord.Color.gold()
         )
@@ -846,13 +883,12 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
-        # إذا لم يكتب رقم الصفحة
         if page_str is None:
+
             page = 1
 
         else:
 
-            # التأكد أن الصفحة رقم
             if not page_str.isdigit():
 
                 await ctx.send(
@@ -932,9 +968,7 @@ class EconomyCog(commands.Cog):
             "🔹"
         ]
 
-        for idx, doc in enumerate(
-            top_users
-        ):
+        for idx, doc in enumerate(top_users):
 
             user_id = doc.get(
                 "user_id"
@@ -990,6 +1024,49 @@ class EconomyCog(commands.Cog):
         )
 
     # =====================================================
+    # -مكافاة
+    # =====================================================
+
+    @commands.command(name="مكافاة")
+    async def reward_cmd(
+        self,
+        ctx
+    ):
+
+        if not self.economy_room(ctx):
+            return
+
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
+            return
+
+        # مبلغ عشوائي من 3000 إلى 4000
+        amount = random.randint(
+            3000,
+            4000
+        )
+
+        await self.update_balance(
+            ctx.author.id,
+            amount
+        )
+
+        embed = discord.Embed(
+            title="🎁 حصلت على مكافأة!",
+            description=(
+                f"مبروك {ctx.author.mention}!\n\n"
+                f"💰 المكافأة:\n"
+                f"**{format_coins(amount)} Ai**"
+            ),
+            color=discord.Color.gold()
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
     # -اعطي
     # =====================================================
 
@@ -1005,7 +1082,11 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
-        # طريقة الاستخدام أولاً
+        # الشخص العادي يتم تجاهله بالكامل
+        if not self.is_admin(ctx):
+            return
+
+        # الإداري لكن الأمر ناقص
         if member is None or not amount_str:
 
             await ctx.send(
@@ -1017,15 +1098,8 @@ class EconomyCog(commands.Cog):
 
             return
 
-        # بعد التأكد من طريقة الاستخدام
-        # نفحص هل العملة مفعلة
         if not await self.currency_enabled(
             ctx.guild.id
-        ):
-            return
-
-        if not self.has_admin_role(
-            ctx.author
         ):
             return
 
@@ -1071,7 +1145,10 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
-        # طريقة الاستخدام أولاً
+        # الشخص العادي يتم تجاهله بالكامل
+        if not self.is_admin(ctx):
+            return
+
         if member is None or not amount_str:
 
             await ctx.send(
@@ -1083,14 +1160,8 @@ class EconomyCog(commands.Cog):
 
             return
 
-        # بعدها نفحص حالة العملة
         if not await self.currency_enabled(
             ctx.guild.id
-        ):
-            return
-
-        if not self.has_admin_role(
-            ctx.author
         ):
             return
 
@@ -1151,13 +1222,12 @@ class EconomyCog(commands.Cog):
         if not self.economy_room(ctx):
             return
 
-        if not await self.currency_enabled(
-            ctx.guild.id
-        ):
+        # الشخص العادي يتم تجاهله
+        if not self.is_admin(ctx):
             return
 
-        if not self.has_admin_role(
-            ctx.author
+        if not await self.currency_enabled(
+            ctx.guild.id
         ):
             return
 
@@ -1185,7 +1255,10 @@ class EconomyCog(commands.Cog):
         if not self.banner_room(ctx):
             return
 
-        # طريقة الاستخدام أولاً
+        # الشخص العادي يتم تجاهله
+        if not self.is_admin(ctx):
+            return
+
         if member is None:
 
             await ctx.send(
@@ -1199,11 +1272,6 @@ class EconomyCog(commands.Cog):
 
         if not await self.currency_enabled(
             ctx.guild.id
-        ):
-            return
-
-        if not self.has_admin_role(
-            ctx.author
         ):
             return
 
