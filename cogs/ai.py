@@ -11,7 +11,7 @@ class AIAutoChatCog(commands.Cog):
             print("⚠️ تحذير: مفتاح GEMINI_API_KEY غير موجود في متغيرات البيئة!")
         
         self.gemini_client = genai.Client(api_key=api_key)
-        self.TARGET_CHANNEL_ID = 1547418557032308830
+        self.TARGET_CHANNEL_ID = 1546187533044424785
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
