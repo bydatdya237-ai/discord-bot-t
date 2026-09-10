@@ -49,10 +49,18 @@ REWARD_COOLDOWN_HOURS = 10
 
 
 # =========================================================
+# إعدادات حماية -سحب
+# =========================================================
+
+# منع تكرار -سحب بسرعة
+WITHDRAW_COOLDOWN_SECONDS = 2
+
+
+# =========================================================
 # أدوات المبالغ
 # =========================================================
 
-def parse_amount(amount_str: str) -> int:
+def parse_amount(amount_str: str):
 
     if not amount_str:
         return 0
@@ -100,7 +108,7 @@ def parse_amount(amount_str: str) -> int:
         return 0
 
 
-def format_coins(amount: int) -> str:
+def format_coins(amount: int):
 
     if amount >= 1_000_000_000:
 
@@ -539,6 +547,16 @@ class EconomyCog(commands.Cog):
         # قفل لمنع إرسال -مكافاة مرتين بنفس اللحظة
         self.reward_locks = {}
 
+        # =================================================
+        # حماية -سحب
+        # =================================================
+
+        # قفل لكل إداري لمنع تنفيذ عمليتي سحب بنفس اللحظة
+        self.withdraw_locks = {}
+
+        # آخر وقت تم فيه تنفيذ -سحب لكل إداري
+        self.withdraw_cooldowns = {}
+
         mongo_uri = os.environ.get(
             "MONGO_URI"
         )
@@ -745,6 +763,62 @@ class EconomyCog(commands.Cog):
             )
 
         return self.reward_locks[key]
+
+    # =====================================================
+    # قفل سحب المستخدم
+    # =====================================================
+
+    def get_withdraw_lock(
+        self,
+        guild_id: int,
+        user_id: int
+    ):
+
+        key = (
+            guild_id,
+            user_id
+        )
+
+        if key not in self.withdraw_locks:
+
+            self.withdraw_locks[key] = (
+                asyncio.Lock()
+            )
+
+        return self.withdraw_locks[key]
+
+    # =====================================================
+    # حماية تكرار -سحب
+    # =====================================================
+
+    def withdraw_is_on_cooldown(
+        self,
+        guild_id: int,
+        user_id: int
+    ):
+
+        key = (
+            guild_id,
+            user_id
+        )
+
+        now = asyncio.get_running_loop().time()
+
+        last_time = self.withdraw_cooldowns.get(
+            key,
+            0
+        )
+
+        if (
+            now - last_time
+            < WITHDRAW_COOLDOWN_SECONDS
+        ):
+
+            return True
+
+        self.withdraw_cooldowns[key] = now
+
+        return False
 
     # =====================================================
     # -تعطيل
@@ -1148,13 +1222,17 @@ class EconomyCog(commands.Cog):
 
                         if hours > 0:
 
-                            time_text = (
-                                f"**{hours} ساعة**"
-                            )
-
                             if minutes > 0:
-                                time_text += (
-                                    f" و **{minutes} دقيقة**"
+
+                                time_text = (
+                                    f"**{hours} ساعة "
+                                    f"و {minutes} دقيقة**"
+                                )
+
+                            else:
+
+                                time_text = (
+                                    f"**{hours} ساعة**"
                                 )
 
                         else:
@@ -1164,9 +1242,9 @@ class EconomyCog(commands.Cog):
                             )
 
                         await ctx.send(
-                            f"⏳ {ctx.author.mention}\n"
+                            f"⏳ {ctx.author.mention}\n\n"
                             f"لقد أخذت المكافأة مسبقًا.\n"
-                            f"يمكنك أخذ المكافأة مرة أخرى بعد "
+                            f"🎁 المكافأة القادمة متاحة بعد "
                             f"{time_text}."
                         )
 
@@ -1293,30 +1371,103 @@ class EconomyCog(commands.Cog):
         if not self.is_admin(ctx):
             return
 
-        if member is None or not amount_str:
+        # =================================================
+        # حماية السبام
+        # =================================================
 
-            await ctx.send(
-                "❌ **طريقة الاستعمال:**\n"
-                "`-سحب @العضو المبلغ`\n"
-                "أو\n"
-                "`-سحب @العضو كل`\n\n"
-                "مثال:\n"
-                "`-سحب @ضياء 25k`\n"
-                "`-سحب @ضياء كل`"
+        # إذا تم إرسال الأمر عدة مرات خلال ثانيتين
+        # يتم تجاهل التكرار بدون إرسال أي رسالة.
+        if self.withdraw_is_on_cooldown(
+            ctx.guild.id,
+            ctx.author.id
+        ):
+
+            return
+
+        # =================================================
+        # قفل السحب
+        # =================================================
+
+        lock = self.get_withdraw_lock(
+            ctx.guild.id,
+            ctx.author.id
+        )
+
+        async with lock:
+
+            if member is None or not amount_str:
+
+                await ctx.send(
+                    "❌ **طريقة الاستعمال:**\n"
+                    "`-سحب @العضو المبلغ`\n"
+                    "أو\n"
+                    "`-سحب @العضو كل`\n\n"
+                    "مثال:\n"
+                    "`-سحب @ضياء 25k`\n"
+                    "`-سحب @ضياء كل`"
+                )
+
+                return
+
+            if not await self.currency_enabled(
+                ctx.guild.id
+            ):
+                return
+
+            # =================================================
+            # سحب كامل الرصيد
+            # =================================================
+
+            if amount_str.strip() == "كل":
+
+                current_bal = await self.get_balance(
+                    member.id
+                )
+
+                if current_bal <= 0:
+
+                    await ctx.send(
+                        f"❌ {member.mention} "
+                        f"لا يملك أي Ai."
+                    )
+
+                    return
+
+                await self.update_balance(
+                    member.id,
+                    -current_bal
+                )
+
+                await ctx.send(
+                    f"✅ تم سحب كامل رصيد "
+                    f"{member.mention}.\n"
+                    f"💸 المبلغ المسحوب: "
+                    f"**{format_coins(current_bal)} Ai**"
+                )
+
+                return
+
+            # =================================================
+            # السحب بمبلغ محدد
+            # =================================================
+
+            amount = parse_amount(
+                amount_str
             )
 
-            return
+            if amount <= 0:
 
-        if not await self.currency_enabled(
-            ctx.guild.id
-        ):
-            return
+                await ctx.send(
+                    "❌ **طريقة الاستعمال:**\n"
+                    "`-سحب @العضو المبلغ`\n"
+                    "أو\n"
+                    "`-سحب @العضو كل`\n\n"
+                    "مثال:\n"
+                    "`-سحب @ضياء 25k`\n"
+                    "`-سحب @ضياء كل`"
+                )
 
-        # =================================================
-        # سحب كامل الرصيد
-        # =================================================
-
-        if amount_str.strip() == "كل":
+                return
 
             current_bal = await self.get_balance(
                 member.id
@@ -1331,70 +1482,21 @@ class EconomyCog(commands.Cog):
 
                 return
 
+            final_amount = min(
+                amount,
+                current_bal
+            )
+
             await self.update_balance(
                 member.id,
-                -current_bal
+                -final_amount
             )
 
             await ctx.send(
-                f"✅ تم سحب كامل رصيد "
-                f"{member.mention}.\n"
-                f"💸 المبلغ المسحوب: "
-                f"**{format_coins(current_bal)} Ai**"
+                f"✅ تم سحب "
+                f"**{format_coins(final_amount)} Ai** "
+                f"من رصيد {member.mention}"
             )
-
-            return
-
-        # =================================================
-        # السحب بمبلغ محدد
-        # =================================================
-
-        amount = parse_amount(
-            amount_str
-        )
-
-        if amount <= 0:
-
-            await ctx.send(
-                "❌ **طريقة الاستعمال:**\n"
-                "`-سحب @العضو المبلغ`\n"
-                "أو\n"
-                "`-سحب @العضو كل`\n\n"
-                "مثال:\n"
-                "`-سحب @ضياء 25k`\n"
-                "`-سحب @ضياء كل`"
-            )
-
-            return
-
-        current_bal = await self.get_balance(
-            member.id
-        )
-
-        if current_bal <= 0:
-
-            await ctx.send(
-                f"❌ {member.mention} "
-                f"لا يملك أي Ai."
-            )
-
-            return
-
-        final_amount = min(
-            amount,
-            current_bal
-        )
-
-        await self.update_balance(
-            member.id,
-            -final_amount
-        )
-
-        await ctx.send(
-            f"✅ تم سحب "
-            f"**{format_coins(final_amount)} Ai** "
-            f"من رصيد {member.mention}"
-        )
 
     # =====================================================
     # -تصفير كل
