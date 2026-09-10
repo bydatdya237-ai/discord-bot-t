@@ -6,11 +6,15 @@ from google import genai
 class AIAutoChatCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # جلب المفتاح مباشرة والتاكد منه
         api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            print("⚠️ تحذير: مفتاح GEMINI_API_KEY غير موجود في متغيرات البيئة!")
+        
         self.gemini_client = genai.Client(api_key=api_key)
         
-        # استبدل الأرقام تحت بـ "آيدي الروم" اللي تبي البوت يرد فيها تلقائياً بديسكورد
-        self.TARGET_CHANNEL_ID = 123456789012345678
+        # آيدي الروم المخصص للرد التلقائي
+        self.TARGET_CHANNEL_ID = 123456789012345678  # <--- حط آيدي رومك هنا
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -32,8 +36,8 @@ class AIAutoChatCog(commands.Cog):
                 await message.reply(answer)
 
             except Exception as e:
+                print(f"خطأ في الذكاء الاصطناعي: {e}")
                 await message.reply("❌ حدث خطأ أثناء معالجة رد الذكاء الاصطناعي.")
 
 async def setup(bot):
     await bot.add_cog(AIAutoChatCog(bot))
-
