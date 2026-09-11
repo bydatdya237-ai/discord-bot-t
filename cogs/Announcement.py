@@ -7,32 +7,24 @@ from discord.ext import commands
 # الإعدادات
 # =========================================================
 
-# =========================================================
 # روم مصدر رسالة التوب
-# =========================================================
 SOURCE_CHANNEL_ID = 1544380230058115244
 
+# الروم المسموح فيه استخدام الأمرين
+COMMAND_ROOM_ID = 1547711993568305232
 
-# =========================================================
-# رومات تنفيذ الأوامر
-# =========================================================
+# روم إعلان -اعلن
+ANNOUNCE_OUTPUT_CHANNEL_ID = 1544883370830602250
 
-# -اعلن
-ANNOUNCE_CHANNEL_ID = 1544883370830602250
+# روم إعلان -ت
+T_OUTPUT_CHANNEL_ID = 1547711993568305232
 
-# -اعلن 1
-ANNOUNCE_1_CHANNEL_ID = 1547711993568305232
-
-
-# =========================================================
-# رتبة MEMBER التي سيتم منشنها
-# =========================================================
-
+# رتبة MEMBER
 MEMBER_ROLE_ID = 1544078847253811331
 
 
 # =========================================================
-# الرتب المسموح لها باستخدام أوامر الإعلان
+# الرتب المسموح لها باستخدام الأوامر
 # =========================================================
 
 ALLOWED_ROLE_IDS = {
@@ -58,7 +50,7 @@ THIRD_AI = 50_000
 
 
 # =========================================================
-# استخراج النص من الرسالة
+# استخراج النص من رسالة التوب
 # =========================================================
 
 def get_message_text(message):
@@ -102,7 +94,7 @@ def get_message_text(message):
 
 
 # =========================================================
-# استخراج أول 3 مراكز
+# استخراج أول 3 مراكز من التوب
 # =========================================================
 
 def extract_top_3(message):
@@ -115,7 +107,7 @@ def extract_top_3(message):
     results = {}
 
     # =====================================================
-    # الشكل الأساسي لرسالة التوب:
+    # الشكل الأساسي:
     #
     # #`1` I <@!724763668037894155> I `1.50t`
     # #`2` I <@!1523454188330418339> I `287.25b`
@@ -179,7 +171,7 @@ def extract_top_3(message):
 
 
 # =========================================================
-# التحقق من الرتب
+# التحقق من الرتبة
 # =========================================================
 
 def has_allowed_role(member):
@@ -207,10 +199,10 @@ class AnnouncementCog(commands.Cog):
     async def announce(self, ctx):
 
         # -------------------------------------------------
-        # هذا الأمر يعمل فقط في روم -اعلن
+        # يجب أن يكون في روم الأوامر
         # -------------------------------------------------
 
-        if ctx.channel.id != ANNOUNCE_CHANNEL_ID:
+        if ctx.channel.id != COMMAND_ROOM_ID:
             return
 
         # -------------------------------------------------
@@ -222,21 +214,21 @@ class AnnouncementCog(commands.Cog):
 
         await self.send_announcement(
             ctx,
-            ANNOUNCE_CHANNEL_ID
+            ANNOUNCE_OUTPUT_CHANNEL_ID
         )
 
     # =====================================================
-    # -اعلن 1
+    # -ت
     # =====================================================
 
-    @commands.command(name="اعلن 1")
-    async def announce_one(self, ctx):
+    @commands.command(name="ت")
+    async def announce_t(self, ctx):
 
         # -------------------------------------------------
-        # هذا الأمر يعمل فقط في روم -اعلن 1
+        # يجب أن يكون في روم الأوامر
         # -------------------------------------------------
 
-        if ctx.channel.id != ANNOUNCE_1_CHANNEL_ID:
+        if ctx.channel.id != COMMAND_ROOM_ID:
             return
 
         # -------------------------------------------------
@@ -248,7 +240,7 @@ class AnnouncementCog(commands.Cog):
 
         await self.send_announcement(
             ctx,
-            ANNOUNCE_1_CHANNEL_ID
+            T_OUTPUT_CHANNEL_ID
         )
 
     # =====================================================
@@ -272,7 +264,8 @@ class AnnouncementCog(commands.Cog):
         if source_channel is None:
 
             await ctx.send(
-                "❌ لم أستطع الوصول إلى روم التوب."
+                "❌ لم أستطع الوصول إلى روم التوب.",
+                delete_after=10
             )
 
             return
@@ -288,13 +281,14 @@ class AnnouncementCog(commands.Cog):
         if announcement_channel is None:
 
             await ctx.send(
-                "❌ لم أستطع الوصول إلى روم الإعلان."
+                "❌ لم أستطع الوصول إلى روم الإعلان.",
+                delete_after=10
             )
 
             return
 
         # -------------------------------------------------
-        # رسالة انتظار
+        # رسالة الانتظار
         # -------------------------------------------------
 
         loading_message = await ctx.send(
@@ -304,7 +298,7 @@ class AnnouncementCog(commands.Cog):
         try:
 
             # =================================================
-            # البحث في آخر 30 رسالة
+            # البحث في آخر 30 رسالة عن رسالة التوب
             # =================================================
 
             top_data = None
@@ -318,7 +312,6 @@ class AnnouncementCog(commands.Cog):
                 if data is not None:
 
                     top_data = data
-
                     break
 
             # =================================================
@@ -345,34 +338,18 @@ class AnnouncementCog(commands.Cog):
             third_id = top_data[3]
 
             # =================================================
-            # جلب الأعضاء
+            # منشن الفائزين
             # =================================================
 
-            first_member = ctx.guild.get_member(first_id)
-            second_member = ctx.guild.get_member(second_id)
-            third_member = ctx.guild.get_member(third_id)
+            first_mention = f"<@{first_id}>"
+            second_mention = f"<@{second_id}>"
+            third_mention = f"<@{third_id}>"
 
             # =================================================
-            # تجهيز المنشنات
+            # منشن رتبة MEMBER
             # =================================================
 
-            first_mention = (
-                first_member.mention
-                if first_member
-                else f"<@{first_id}>"
-            )
-
-            second_mention = (
-                second_member.mention
-                if second_member
-                else f"<@{second_id}>"
-            )
-
-            third_mention = (
-                third_member.mention
-                if third_member
-                else f"<@{third_id}>"
-            )
+            member_role_mention = f"<@&{MEMBER_ROLE_ID}>"
 
             # =================================================
             # إنشاء الإعلان
@@ -395,8 +372,8 @@ class AnnouncementCog(commands.Cog):
                 name="🥇 المركز الأول",
                 value=(
                     f"{first_mention}\n\n"
-                    f"🪙 **450 ذهب**\n"
-                    f"💵 **250,000 Ai**"
+                    "🪙 **450 ذهب**\n"
+                    "💵 **250,000 Ai**"
                 ),
                 inline=False
             )
@@ -409,8 +386,8 @@ class AnnouncementCog(commands.Cog):
                 name="🥈 المركز الثاني",
                 value=(
                     f"{second_mention}\n\n"
-                    f"🪙 **250 ذهب**\n"
-                    f"💵 **150,000 Ai**"
+                    "🪙 **250 ذهب**\n"
+                    "💵 **150,000 Ai**"
                 ),
                 inline=False
             )
@@ -423,27 +400,14 @@ class AnnouncementCog(commands.Cog):
                 name="🥉 المركز الثالث",
                 value=(
                     f"{third_mention}\n\n"
-                    f"🪙 **100 ذهب**\n"
-                    f"💵 **50,000 Ai**"
+                    "🪙 **100 ذهب**\n"
+                    "💵 **50,000 Ai**"
                 ),
                 inline=False
             )
 
-            # =================================================
-            # الفوتر
-            # =================================================
-
             embed.set_footer(
                 text=f"تم الإعلان بواسطة {ctx.author.display_name}"
-            )
-
-            # =================================================
-            # المنشنات
-            # =================================================
-
-            content = (
-                "@everyone "
-                f"<@&{MEMBER_ROLE_ID}>"
             )
 
             # =================================================
@@ -451,7 +415,9 @@ class AnnouncementCog(commands.Cog):
             # =================================================
 
             await announcement_channel.send(
-                content=content,
+                content=(
+                    f"@everyone {member_role_mention}"
+                ),
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(
                     everyone=True,
@@ -461,7 +427,7 @@ class AnnouncementCog(commands.Cog):
             )
 
             # =================================================
-            # حذف رسالة الأمر
+            # حذف الأمر
             # =================================================
 
             try:
@@ -485,13 +451,11 @@ class AnnouncementCog(commands.Cog):
             )
 
             try:
-
                 await loading_message.edit(
                     content=(
-                        "❌ حدث خطأ أثناء تجهيز الإعلان."
+                        "❌ حدث خطأ أثناء إرسال الإعلان."
                     )
                 )
-
             except:
                 pass
 
