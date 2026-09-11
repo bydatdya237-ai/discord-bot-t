@@ -34,6 +34,11 @@ REWARD_MAX = 4000
 
 REWARD_COOLDOWN_HOURS = 10
 
+LUCK_MIN = 3000
+LUCK_MAX = 5000
+
+LUCK_COOLDOWN_HOURS = 10
+
 WITHDRAW_COOLDOWN_SECONDS = 2
 
 
@@ -518,6 +523,8 @@ class EconomyCog(commands.Cog):
 
         self.transfer_locks = {}
 
+        self.luck_locks = {}
+
         mongo_uri = os.environ.get("MONGO_URI")
 
         if mongo_uri:
@@ -544,6 +551,10 @@ class EconomyCog(commands.Cog):
                 self.db.economy_reward_cooldowns
             )
 
+            self.luck_cooldowns = (
+                self.db.economy_luck_cooldowns
+            )
+
         else:
 
             self.db_client = None
@@ -552,6 +563,7 @@ class EconomyCog(commands.Cog):
             self.rewards = None
             self.settings = None
             self.reward_cooldowns = None
+            self.luck_cooldowns = None
 
 
     # =====================================================
@@ -790,6 +802,30 @@ class EconomyCog(commands.Cog):
 
 
     # =====================================================
+    # أقفال الحظ
+    # =====================================================
+
+    def get_luck_lock(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        key = (
+            guild_id,
+            user_id
+        )
+
+        if key not in self.luck_locks:
+
+            self.luck_locks[key] = (
+                asyncio.Lock()
+            )
+
+        return self.luck_locks[key]
+
+
+    # =====================================================
     # تعطيل العملة
     # =====================================================
 
@@ -895,8 +931,15 @@ class EconomyCog(commands.Cog):
                 "من 3000 إلى 4000 Ai "
                 "مرة كل 10 ساعات.\n\n"
 
+                "🎲 **-حظ**\n"
+                "الحصول على مبلغ عشوائي "
+                "من 3000 إلى 5000 Ai "
+                "مرة كل 10 ساعات.\n\n"
+
                 "💸 **-تحويل @العضو المبلغ**\n"
-                "تحويل Ai من رصيدك إلى عضو آخر.\n\n"
+                "تحويل Ai من رصيدك إلى عضو آخر.\n"
+                "يمكنك استخدام مبلغ مثل `25k`.\n"
+                "أو `ربع` / `نص` / `نصف` / `كامل`.\n\n"
 
                 "🎁 **-اعطي @العضو المبلغ**\n"
                 "إعطاء Ai لعضو — للإدارة فقط.\n\n"
@@ -1331,6 +1374,192 @@ class EconomyCog(commands.Cog):
 
 
     # =====================================================
+    # الحظ
+    # =====================================================
+
+    @commands.command(name="حظ")
+    async def luck_cmd(self, ctx):
+
+        if not self.economy_room(ctx):
+            return
+
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
+            return
+
+        if (
+            self.balances is None
+            or self.luck_cooldowns is None
+        ):
+
+            await ctx.send(
+                "❌ قاعدة البيانات غير متصلة."
+            )
+
+            return
+
+        lock = self.get_luck_lock(
+            ctx.guild.id,
+            ctx.author.id
+        )
+
+        async with lock:
+
+            now = datetime.now(
+                timezone.utc
+            )
+
+            cooldown_data = (
+                await self.luck_cooldowns.find_one({
+
+                    "guild_id": ctx.guild.id,
+                    "user_id": ctx.author.id
+
+                })
+            )
+
+            if cooldown_data:
+
+                last_claim = cooldown_data.get(
+                    "last_claim"
+                )
+
+                if last_claim:
+
+                    if last_claim.tzinfo is None:
+
+                        last_claim = (
+                            last_claim.replace(
+                                tzinfo=timezone.utc
+                            )
+                        )
+
+                    else:
+
+                        last_claim = (
+                            last_claim.astimezone(
+                                timezone.utc
+                            )
+                        )
+
+                    next_claim = (
+                        last_claim
+                        + timedelta(
+                            hours=LUCK_COOLDOWN_HOURS
+                        )
+                    )
+
+                    if now < next_claim:
+
+                        remaining_seconds = int(
+
+                            (
+                                next_claim
+                                - now
+                            ).total_seconds()
+
+                        )
+
+                        hours = (
+                            remaining_seconds
+                            // 3600
+                        )
+
+                        minutes = (
+                            (
+                                remaining_seconds
+                                % 3600
+                            )
+                            // 60
+                        )
+
+                        if hours > 0:
+
+                            if minutes > 0:
+
+                                time_text = (
+                                    f"**{hours} ساعة "
+                                    f"و {minutes} دقيقة**"
+                                )
+
+                            else:
+
+                                time_text = (
+                                    f"**{hours} ساعة**"
+                                )
+
+                        else:
+
+                            time_text = (
+                                f"**{max(minutes, 1)} دقيقة**"
+                            )
+
+                        await ctx.send(
+
+                            f"⏳ {ctx.author.mention}\n\n"
+                            f"لقد استخدمت الحظ مسبقًا.\n"
+                            f"🎲 المحاولة القادمة متاحة بعد "
+                            f"{time_text}."
+
+                        )
+
+                        return
+
+            amount = random.randint(
+                LUCK_MIN,
+                LUCK_MAX
+            )
+
+            await self.luck_cooldowns.update_one(
+
+                {
+                    "guild_id": ctx.guild.id,
+                    "user_id": ctx.author.id
+                },
+
+                {
+                    "$set": {
+                        "last_claim": now
+                    }
+                },
+
+                upsert=True
+
+            )
+
+            await self.update_balance(
+
+                ctx.author.id,
+                amount
+
+            )
+
+        embed = discord.Embed(
+
+            title="🎲 حظك اليوم!",
+
+            description=(
+
+                f"مبروك {ctx.author.mention}!\n\n"
+
+                f"🍀 حصلت على:\n"
+                f"**{format_coins(amount)} Ai**\n\n"
+
+                f"⏳ يمكنك استخدام `-حظ` مرة أخرى "
+                f"بعد **10 ساعات**."
+
+            ),
+
+            color=discord.Color.gold()
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+
+    # =====================================================
     # التحويل - للجميع
     # =====================================================
 
@@ -1343,17 +1572,14 @@ class EconomyCog(commands.Cog):
         amount_str: str = None
     ):
 
-        # نفس روم الاقتصاد
         if not self.economy_room(ctx):
             return
 
-        # التأكد أن العملة مفعلة
         if not await self.currency_enabled(
             ctx.guild.id
         ):
             return
 
-        # التأكد من وجود قاعدة البيانات
         if self.balances is None:
 
             await ctx.send(
@@ -1362,7 +1588,6 @@ class EconomyCog(commands.Cog):
 
             return
 
-        # طريقة الاستخدام
         if member is None or not amount_str:
 
             await ctx.send(
@@ -1370,15 +1595,16 @@ class EconomyCog(commands.Cog):
                 "❌ **طريقة الاستعمال:**\n"
                 "`-تحويل @العضو المبلغ`\n\n"
 
-                "مثال:\n"
+                "أمثلة:\n"
                 "`-تحويل @ضياء 25k`\n"
-                "`-تحويل @ضياء 50000`"
+                "`-تحويل @ضياء ربع`\n"
+                "`-تحويل @ضياء نص`\n"
+                "`-تحويل @ضياء كامل`"
 
             )
 
             return
 
-        # منع التحويل للنفس
         if member.id == ctx.author.id:
 
             await ctx.send(
@@ -1387,7 +1613,6 @@ class EconomyCog(commands.Cog):
 
             return
 
-        # منع التحويل للبوتات
         if member.bot:
 
             await ctx.send(
@@ -1396,27 +1621,8 @@ class EconomyCog(commands.Cog):
 
             return
 
-        # قراءة المبلغ
-        amount = parse_amount(
-            amount_str
-        )
+        amount_text = amount_str.strip().lower()
 
-        if amount <= 0:
-
-            await ctx.send(
-
-                "❌ المبلغ غير صحيح.\n\n"
-
-                "أمثلة:\n"
-                "`25k`\n"
-                "`50000`\n"
-                "`2 مليون`"
-
-            )
-
-            return
-
-        # قفل خاص بالمرسل
         lock = self.get_transfer_lock(
 
             ctx.guild.id,
@@ -1432,7 +1638,73 @@ class EconomyCog(commands.Cog):
                 )
             )
 
-            # الرصيد غير كافي
+            # =============================================
+            # تحويل كامل
+            # =============================================
+
+            if amount_text in (
+                "كامل",
+                "كل"
+            ):
+
+                amount = sender_balance
+
+            # =============================================
+            # تحويل نصف
+            # =============================================
+
+            elif amount_text in (
+                "نص",
+                "نصف"
+            ):
+
+                amount = sender_balance // 2
+
+            # =============================================
+            # تحويل ربع
+            # =============================================
+
+            elif amount_text == "ربع":
+
+                amount = sender_balance // 4
+
+            # =============================================
+            # تحويل ثلاثة أرباع
+            # =============================================
+
+            elif amount_text in (
+                "ثلاث ارباع",
+                "ثلاثة ارباع",
+                "ثلاث ارباعه",
+                "ثلاثة أرباع"
+            ):
+
+                amount = (
+                    sender_balance * 3
+                ) // 4
+
+            # =============================================
+            # مبلغ عادي
+            # =============================================
+
+            else:
+
+                amount = parse_amount(
+                    amount_str
+                )
+
+            if amount <= 0:
+
+                await ctx.send(
+
+                    f"❌ لا يمكن تحويل هذا المبلغ.\n\n"
+                    f"💰 رصيدك الحالي: "
+                    f"**{format_coins(sender_balance)} Ai**"
+
+                )
+
+                return
+
             if sender_balance < amount:
 
                 await ctx.send(
@@ -1451,7 +1723,6 @@ class EconomyCog(commands.Cog):
 
                 return
 
-            # خصم المبلغ من المرسل
             await self.update_balance(
 
                 ctx.author.id,
@@ -1459,7 +1730,6 @@ class EconomyCog(commands.Cog):
 
             )
 
-            # إضافة المبلغ للمستلم
             await self.update_balance(
 
                 member.id,
@@ -1467,7 +1737,6 @@ class EconomyCog(commands.Cog):
 
             )
 
-        # رسالة نجاح
         embed = discord.Embed(
 
             title="💸 تم التحويل بنجاح",
@@ -1584,7 +1853,6 @@ class EconomyCog(commands.Cog):
         if not self.is_admin(ctx):
             return
 
-        # حماية السبام
         if self.withdraw_is_on_cooldown(
 
             ctx.guild.id,
@@ -1625,7 +1893,6 @@ class EconomyCog(commands.Cog):
             ):
                 return
 
-            # سحب كامل الرصيد
             if amount_str.strip() == "كل":
 
                 current_bal = (
