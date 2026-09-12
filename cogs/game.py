@@ -11,7 +11,7 @@ from discord import ui
 # اسم اللعبة
 GAME_NAME = "خمن الدولة من العلم"
 
-# روم تجهيز اللعبة وإضافة الصور والأسئلة
+# روم تجهيز اللعبة وإضافة الصور
 SETUP_ROOM_ID = 1548289588211097710
 
 # روم تشغيل اللعبة
@@ -35,7 +35,7 @@ class GameSession:
 
         self.creator_id = creator_id
 
-        # الأسئلة بالترتيب
+        # الأسئلة والصور بالترتيب
         self.questions = []
 
         # نقاط اللاعبين
@@ -152,8 +152,8 @@ class GameCog(commands.Cog):
 
                 await ctx.send(
                     "⚠️ توجد فعالية محفوظة حالياً.\n"
-                    "استخدم `-انهي` من روم اللعبة لمسح الصور "
-                    "والنقاط ثم أنشئ فعالية جديدة.",
+                    "استخدم `-انهي` من روم اللعبة "
+                    "لحذفها ثم أنشئ فعالية جديدة.",
                     delete_after=7
                 )
 
@@ -176,7 +176,7 @@ class GameCog(commands.Cog):
                     "اضغط الزر، ثم أرسل صورة العلم في هذا الروم، "
                     "وبعدها يتم حفظ الإجابة والصورة.\n\n"
 
-                    "يمكنك إضافة عدد غير محدود من الأسئلة "
+                    "يمكنك إضافة عدد غير محدود من الأعلام "
                     "وبدون أي وقت محدد.\n\n"
 
                     "⚠️ **مهم:**\n"
@@ -192,8 +192,12 @@ class GameCog(commands.Cog):
                     "في روم اللعبة استخدم:\n"
                     "`-ط`\n\n"
 
-                    "🗑️ **إنهاء ومسح الفعالية**\n"
-                    "في روم اللعبة استخدم:\n"
+                    "🔄 **تصفير النقاط فقط**\n"
+                    "استخدم:\n"
+                    "`-دن`\n\n"
+
+                    "🗑️ **إنهاء وحذف الفعالية**\n"
+                    "استخدم:\n"
                     "`-انهي`"
                 ),
                 color=discord.Color.blurple()
@@ -287,7 +291,7 @@ class GameCog(commands.Cog):
 
             await ctx.send(
                 f"🚀 **بدأت لعبة {GAME_NAME}!**\n\n"
-                f"📚 عدد الأسئلة: **{len(session.questions)}**\n"
+                f"📚 عدد الأعلام: **{len(session.questions)}**\n"
                 "🔥 استعدوا للعلم الأول..."
             )
 
@@ -389,7 +393,66 @@ class GameCog(commands.Cog):
         )
 
     # =====================================================
-    # إنهاء ومسح الفعالية -انهي
+    # تصفير النقاط فقط -دن
+    # يعمل فقط في روم اللعبة
+    # =====================================================
+
+    @commands.command(name="دن")
+    async def reset_scores(self, ctx):
+
+        # لازم يكون في روم اللعبة
+        if not self.is_game_room(ctx):
+            return
+
+        # الرتب
+        if not self.has_allowed_role(ctx.author):
+            return
+
+        lock = self.get_lock(GAME_ROOM_ID)
+
+        # حماية
+        if lock.locked():
+            return
+
+        async with lock:
+
+            session = self.active_games.get(
+                GAME_ROOM_ID
+            )
+
+            if not session:
+
+                await ctx.send(
+                    "⚠️ لا توجد فعالية محفوظة حالياً.",
+                    delete_after=5
+                )
+
+                return
+
+            players_count = len(
+                session.scores
+            )
+
+            # تصفير النقاط فقط
+            session.scores.clear()
+
+            await ctx.send(
+                "🔄 **تم تصفير النقاط بنجاح!**\n\n"
+                f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n"
+                f"🖼️ الأعلام والأسئلة **لم يتم حذفها**.\n\n"
+                "✅ يمكنك بدء اللعبة من جديد باستخدام `-ابدا`."
+            )
+
+            # حذف الأمر
+            try:
+
+                await ctx.message.delete()
+
+            except discord.HTTPException:
+                pass
+
+    # =====================================================
+    # إنهاء وحذف الفعالية -انهي
     # يعمل فقط في روم اللعبة
     # =====================================================
 
@@ -438,11 +501,13 @@ class GameCog(commands.Cog):
                 session.scores
             )
 
-            # مسح الأسئلة والنقاط
+            # حذف الأسئلة والصور من بيانات اللعبة
             session.questions.clear()
+
+            # تصفير النقاط
             session.scores.clear()
 
-            # مسح الجلسة
+            # حذف الجلسة بالكامل
             if self.active_games.get(
                 GAME_ROOM_ID
             ) is session:
@@ -453,9 +518,9 @@ class GameCog(commands.Cog):
 
             await ctx.send(
                 "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
-                f"🖼️ تم مسح **{questions_count}** سؤال.\n"
-                f"🏆 تم مسح نقاط **{players_count}** لاعب.\n\n"
-                "✅ أصبح بالإمكان إنشاء فعالية جديدة."
+                f"🖼️ تم حذف **{questions_count}** سؤال.\n"
+                f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n\n"
+                "✅ أصبح بإمكانك إنشاء فعالية جديدة."
             )
 
             # حذف الأمر
@@ -509,7 +574,7 @@ class GameCog(commands.Cog):
                 ),
                 description=(
                     "⚡ خمن الدولة من العلم!\n\n"
-                    "⏰ **مدة الصورة: 15 ثانية**\n\n"
+                    "⏰ **مدة العلم: 15 ثانية**\n\n"
                     "🏆 أول إجابة صحيحة تحصل على نقطة!"
                 ),
                 color=discord.Color.gold()
@@ -577,8 +642,8 @@ class GameCog(commands.Cog):
                 )
 
             # ---------------------------------------------
-            # لا يوجد فاصل بين الصور
-            # الصورة التالية ترسل مباشرة بعد انتهاء 15 ثانية
+            # الصورة التالية مباشرة
+            # بدون فاصل 7 ثواني
             # ---------------------------------------------
 
         # =================================================
@@ -591,7 +656,8 @@ class GameCog(commands.Cog):
                 f"🏁 **انتهت لعبة {GAME_NAME}!**\n\n"
                 "❤️ شكراً لحضوركم ومشاركتكم.\n"
                 "🏆 **النتائج ما زالت محفوظة.**\n"
-                "📊 استخدموا `-ط` لعرض الترتيب."
+                "📊 استخدموا `-ط` لعرض الترتيب.\n"
+                "🔄 استخدموا `-دن` لتصفير النقاط وإعادة اللعب."
             )
 
         # إيقاف اللعبة فقط
@@ -874,7 +940,7 @@ class GameControlView(ui.View):
 
             await interaction.response.send_message(
                 f"🚀 **بدأت لعبة {GAME_NAME}!**\n\n"
-                f"📚 عدد الأسئلة: **{len(session.questions)}**\n"
+                f"📚 عدد الأعلام: **{len(session.questions)}**\n"
                 "🔥 استعدوا للعلم الأول..."
             )
 
@@ -949,8 +1015,8 @@ class GameControlView(ui.View):
 
         await interaction.response.send_message(
             "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
-            f"🖼️ تم مسح **{questions_count}** سؤال.\n"
-            f"🏆 تم مسح نقاط **{players_count}** لاعب.\n\n"
+            f"🖼️ تم حذف **{questions_count}** سؤال.\n"
+            f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n\n"
             "✅ أصبح بالإمكان إنشاء فعالية جديدة."
         )
 
