@@ -124,13 +124,10 @@ class GameCog(commands.Cog):
                 channel_id
             )
 
-            # منع إنشاء لعبتين في نفس الروم
+            # منع إنشاء لعبة جديدة قبل استخدام -انهي
             if old_session:
 
-                if (
-                    old_session.is_running
-                    or old_session.starting
-                ):
+                if old_session.is_running:
 
                     await ctx.send(
                         "⚠️ توجد لعبة قيد التشغيل بالفعل!",
@@ -140,8 +137,10 @@ class GameCog(commands.Cog):
                     return
 
                 await ctx.send(
-                    "⚠️ توجد جلسة لعبة جاهزة بالفعل في هذه الروم.",
-                    delete_after=5
+                    "⚠️ توجد فعالية محفوظة حالياً.\n"
+                    "استخدم `-انهي` لمسح الصور والنقاط "
+                    "ثم أنشئ فعالية جديدة.",
+                    delete_after=7
                 )
 
                 return
@@ -174,8 +173,9 @@ class GameCog(commands.Cog):
                     "استخدم:\n"
                     "`-ط`\n\n"
 
-                    "⏹️ **إنهاء**\n"
-                    "ينهي اللعبة الحالية."
+                    "🗑️ **إنهاء ومسح الفعالية**\n"
+                    "استخدم:\n"
+                    "`-انهي`"
                 ),
                 color=discord.Color.blurple()
             )
@@ -219,11 +219,7 @@ class GameCog(commands.Cog):
 
         lock = self.get_lock(ctx.channel.id)
 
-        # =================================================
         # حماية السبام
-        # أول إداري يدخل فقط
-        # =================================================
-
         if lock.locked():
             return
 
@@ -265,10 +261,13 @@ class GameCog(commands.Cog):
 
             session.is_running = True
 
+            session.current_question_index = 0
+
             session.starting = False
 
             await ctx.send(
-                "🚀 **بدأت فعاليتنا!**\n"
+                "🚀 **بدأت فعاليتنا!**\n\n"
+                f"📚 عدد الأسئلة: **{len(session.questions)}**\n"
                 "🔥 استعدوا للسؤال الأول..."
             )
 
@@ -299,7 +298,7 @@ class GameCog(commands.Cog):
         if not session:
 
             await ctx.send(
-                "⚠️ لا توجد فعالية حالية.",
+                "⚠️ لا توجد فعالية محفوظة حالياً.",
                 delete_after=5
             )
 
@@ -369,6 +368,83 @@ class GameCog(commands.Cog):
         )
 
     # =====================================================
+    # إنهاء ومسح الفعالية -انهي
+    # =====================================================
+
+    @commands.command(name="انهي")
+    async def finish_game_command(self, ctx):
+
+        # الروم
+        if not self.is_game_room(ctx):
+            return
+
+        # الرتب
+        if not self.has_allowed_role(ctx.author):
+            return
+
+        lock = self.get_lock(ctx.channel.id)
+
+        # حماية من تنفيذ الأمر أثناء عملية أخرى
+        if lock.locked():
+            return
+
+        async with lock:
+
+            session = self.active_games.get(
+                ctx.channel.id
+            )
+
+            if not session:
+
+                await ctx.send(
+                    "⚠️ لا توجد فعالية محفوظة حالياً.",
+                    delete_after=5
+                )
+
+                return
+
+            # إيقاف اللعبة
+            session.is_running = False
+            session.starting = False
+
+            # حفظ عدد الأسئلة والنقاط قبل المسح
+            questions_count = len(
+                session.questions
+            )
+
+            players_count = len(
+                session.scores
+            )
+
+            # مسح الأسئلة والصور والنقاط
+            session.questions.clear()
+            session.scores.clear()
+
+            # مسح الجلسة بالكامل
+            if self.active_games.get(
+                ctx.channel.id
+            ) is session:
+
+                del self.active_games[
+                    ctx.channel.id
+                ]
+
+            await ctx.send(
+                "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
+                f"🖼️ تم مسح **{questions_count}** سؤال.\n"
+                f"🏆 تم مسح نقاط **{players_count}** لاعب.\n\n"
+                "✅ أصبح الروم جاهزاً لإنشاء فعالية جديدة."
+            )
+
+            # حذف أمر الأمر
+            try:
+
+                await ctx.message.delete()
+
+            except discord.HTTPException:
+                pass
+
+    # =====================================================
     # تشغيل اللعبة
     # =====================================================
 
@@ -383,6 +459,7 @@ class GameCog(commands.Cog):
 
         # =================================================
         # الأسئلة بالترتيب
+        # 1 ثم 2 ثم 3 ثم 4...
         # =================================================
 
         for index, question in enumerate(
@@ -398,15 +475,21 @@ class GameCog(commands.Cog):
             # إرسال الصورة
             # ---------------------------------------------
 
+            question_number = index + 1
+
+            total_questions = len(
+                session.questions
+            )
+
             embed = discord.Embed(
                 title=(
-                    f"📸 السؤال "
-                    f"({index + 1} من "
-                    f"{len(session.questions)})"
+                    f"📸 السؤال {question_number}"
+                    f" من {total_questions}"
                 ),
                 description=(
                     "⚡ أسرع واكتب الإجابة الصحيحة!\n\n"
-                    "⏰ الوقت: **30 ثانية**"
+                    "⏰ الوقت: **15 ثانية**\n\n"
+                    f"📌 **السؤال رقم {question_number}**"
                 ),
                 color=discord.Color.gold()
             )
@@ -442,7 +525,7 @@ class GameCog(commands.Cog):
 
                 message = await self.bot.wait_for(
                     "message",
-                    timeout=30.0,
+                    timeout=15.0,
                     check=check
                 )
 
@@ -457,22 +540,34 @@ class GameCog(commands.Cog):
 
                 await channel.send(
                     f"🎉 كفو {message.author.mention}!\n"
-                    f"✅ إجابة صحيحة! "
-                    f"حصلت على **نقطة واحدة** 🏆"
+                    f"✅ إجابة صحيحة!\n"
+                    f"🏆 حصلت على **نقطة واحدة**.\n\n"
+                    f"📊 مجموع نقاطك: "
+                    f"**{session.scores[user_id]}**"
                 )
 
             except asyncio.TimeoutError:
 
                 await channel.send(
                     "⏰ **انتهى وقت السؤال!**\n"
-                    f"الإجابة الصحيحة كانت: "
+                    f"❌ لم يتمكن أحد من الإجابة.\n"
+                    f"✅ الإجابة الصحيحة كانت: "
                     f"`{question['answer']}`"
                 )
 
-            # فاصل بسيط
+            # ---------------------------------------------
+            # فاصل بين الأسئلة
+            # ---------------------------------------------
+
             if session.is_running:
 
-                await asyncio.sleep(3)
+                if question_number < total_questions:
+
+                    await channel.send(
+                        "⏳ **استعدوا للسؤال التالي...**"
+                    )
+
+                    await asyncio.sleep(7)
 
         # =================================================
         # نهاية الفعالية
@@ -483,17 +578,14 @@ class GameCog(commands.Cog):
             await channel.send(
                 "🏁 **انتهت فعاليتنا لليوم!**\n\n"
                 "❤️ شكراً لحضوركم ومشاركتكم.\n"
-                "⏳ **انتظروا النتائج...**"
+                "🏆 **النتائج ما زالت محفوظة.**\n"
+                "📊 استخدموا `-ط` لعرض الترتيب."
             )
 
-        # إيقاف الجلسة
+        # إيقاف اللعبة فقط
+        # لا نحذف session ولا النقاط ولا الصور
         session.is_running = False
         session.starting = False
-
-        # حذف الجلسة
-        if self.active_games.get(channel.id) is session:
-
-            del self.active_games[channel.id]
 
     # =====================================================
     # النتائج النهائية
@@ -727,10 +819,12 @@ class GameControlView(ui.View):
 
             session.starting = True
             session.is_running = True
+            session.current_question_index = 0
             session.starting = False
 
             await interaction.response.send_message(
-                "🚀 **بدأت فعاليتنا!**\n"
+                "🚀 **بدأت فعاليتنا!**\n\n"
+                f"📚 عدد الأسئلة: **{len(session.questions)}**\n"
                 "🔥 استعدوا للسؤال الأول..."
             )
 
@@ -739,7 +833,7 @@ class GameControlView(ui.View):
         )
 
     # =====================================================
-    # إنهاء اللعبة
+    # إنهاء اللعبة من الزر
     # =====================================================
 
     @ui.button(
@@ -770,8 +864,21 @@ class GameControlView(ui.View):
 
             return
 
+        # نفس وظيفة -انهي
         session.is_running = False
         session.starting = False
+
+        questions_count = len(
+            session.questions
+        )
+
+        players_count = len(
+            session.scores
+        )
+
+        # مسح الصور والأسئلة والنقاط
+        session.questions.clear()
+        session.scores.clear()
 
         if self.channel_id in self.cog.active_games:
 
@@ -780,7 +887,10 @@ class GameControlView(ui.View):
             ]
 
         await interaction.response.send_message(
-            "🛑 **تم إنهاء الفعالية وتصفير نقاطها.**"
+            "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
+            f"🖼️ تم مسح **{questions_count}** سؤال.\n"
+            f"🏆 تم مسح نقاط **{players_count}** لاعب.\n\n"
+            "✅ أصبح الروم جاهزاً لإنشاء فعالية جديدة."
         )
 
         try:
