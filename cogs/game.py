@@ -8,16 +8,11 @@ from discord import ui
 # الإعدادات
 # =========================================================
 
-# اسم اللعبة
 GAME_NAME = "خمن الدولة من العلم"
 
-# روم تجهيز اللعبة وإضافة الصور
 SETUP_ROOM_ID = 1548289588211097710
-
-# روم تشغيل اللعبة
 GAME_ROOM_ID = 1545143660469813250
 
-# الرتب الثلاث المسموح لها بإدارة اللعبة
 ALLOWED_ROLE_IDS = {
     1544078469657530578,
     1545851911121666108,
@@ -32,22 +27,11 @@ ALLOWED_ROLE_IDS = {
 class GameSession:
 
     def __init__(self, creator_id):
-
         self.creator_id = creator_id
-
-        # الأسئلة والصور بالترتيب
         self.questions = []
-
-        # نقاط اللاعبين
         self.scores = {}
-
-        # حالة اللعبة
         self.is_running = False
-
-        # حماية من التشغيل المتزامن
         self.starting = False
-
-        # السؤال الحالي
         self.current_question_index = 0
 
 
@@ -58,29 +42,18 @@ class GameSession:
 class GameCog(commands.Cog):
 
     def __init__(self, bot):
-
         self.bot = bot
-
-        # الألعاب الموجودة
         self.active_games = {}
-
-        # قفل لكل روم
         self.game_locks = {}
 
     # =====================================================
-    # التحقق من روم التجهيز
+    # التحقق من الروم
     # =====================================================
 
     def is_setup_room(self, ctx):
-
         return ctx.channel.id == SETUP_ROOM_ID
 
-    # =====================================================
-    # التحقق من روم اللعبة
-    # =====================================================
-
     def is_game_room(self, ctx):
-
         return ctx.channel.id == GAME_ROOM_ID
 
     # =====================================================
@@ -98,47 +71,38 @@ class GameCog(commands.Cog):
         )
 
     # =====================================================
-    # الحصول على Lock
+    # قفل العمليات
     # =====================================================
 
     def get_lock(self, channel_id):
 
         if channel_id not in self.game_locks:
-
             self.game_locks[channel_id] = asyncio.Lock()
 
         return self.game_locks[channel_id]
 
     # =====================================================
-    # إنشاء لعبة
-    # يعمل في روم التجهيز
+    # إنشاء اللعبة
     # =====================================================
 
     @commands.command(name="انشاء-لعبة")
     async def create_game(self, ctx):
 
-        # لازم يكون في روم التجهيز
         if not self.is_setup_room(ctx):
             return
 
-        # الرتب
         if not self.has_allowed_role(ctx.author):
             return
 
         lock = self.get_lock(SETUP_ROOM_ID)
 
-        # إذا فيه عملية جارية
         if lock.locked():
             return
 
         async with lock:
 
-            # إذا فيه فعالية موجودة
-            old_session = self.active_games.get(
-                GAME_ROOM_ID
-            )
+            old_session = self.active_games.get(GAME_ROOM_ID)
 
-            # منع إنشاء لعبة جديدة قبل -انهي
             if old_session:
 
                 if old_session.is_running:
@@ -159,12 +123,8 @@ class GameCog(commands.Cog):
 
                 return
 
-            # إنشاء جلسة جديدة
-            session = GameSession(
-                ctx.author.id
-            )
+            session = GameSession(ctx.author.id)
 
-            # تخزين الجلسة مرتبطة بروم اللعبة
             self.active_games[GAME_ROOM_ID] = session
 
             embed = discord.Embed(
@@ -176,8 +136,7 @@ class GameCog(commands.Cog):
                     "اضغط الزر، ثم أرسل صورة العلم في هذا الروم، "
                     "وبعدها يتم حفظ الإجابة والصورة.\n\n"
 
-                    "يمكنك إضافة عدد غير محدود من الأعلام "
-                    "وبدون أي وقت محدد.\n\n"
+                    "يمكنك إضافة عدد غير محدود من الأعلام.\n\n"
 
                     "⚠️ **مهم:**\n"
                     "لا تحذف الصور من روم التجهيز، "
@@ -189,7 +148,7 @@ class GameCog(commands.Cog):
                     "`-ابدا`\n\n"
 
                     "🏆 **ترتيب النقاط**\n"
-                    "في روم اللعبة استخدم:\n"
+                    "استخدم:\n"
                     "`-ط`\n\n"
 
                     "🔄 **تصفير النقاط فقط**\n"
@@ -217,41 +176,33 @@ class GameCog(commands.Cog):
                 view=view
             )
 
-            # حذف أمر الإداري
             try:
-
                 await ctx.message.delete()
 
             except discord.HTTPException:
                 pass
 
     # =====================================================
-    # بدء اللعبة -ابدا
-    # يعمل فقط في روم اللعبة
+    # بدء اللعبة
     # =====================================================
 
     @commands.command(name="ابدا")
     async def start_game_command(self, ctx):
 
-        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
-        # الرتب
         if not self.has_allowed_role(ctx.author):
             return
 
         lock = self.get_lock(GAME_ROOM_ID)
 
-        # حماية السبام
         if lock.locked():
             return
 
         async with lock:
 
-            session = self.active_games.get(
-                GAME_ROOM_ID
-            )
+            session = self.active_games.get(GAME_ROOM_ID)
 
             if not session:
 
@@ -262,15 +213,12 @@ class GameCog(commands.Cog):
 
                 return
 
-            # إذا بدأت اللعبة مسبقاً
             if session.is_running:
                 return
 
-            # إذا إداري آخر بدأها بنفس اللحظة
             if session.starting:
                 return
 
-            # لا توجد أسئلة
             if not session.questions:
 
                 await ctx.send(
@@ -280,13 +228,9 @@ class GameCog(commands.Cog):
 
                 return
 
-            # قفل البداية
             session.starting = True
-
             session.is_running = True
-
             session.current_question_index = 0
-
             session.starting = False
 
             await ctx.send(
@@ -295,30 +239,22 @@ class GameCog(commands.Cog):
                 "🔥 استعدوا للعلم الأول..."
             )
 
-        # تشغيل اللعبة
-        await self.run_game_loop(
-            ctx.channel
-        )
+        await self.run_game_loop(ctx.channel)
 
     # =====================================================
-    # ترتيب النقاط -ط
-    # يعمل فقط في روم اللعبة
+    # ترتيب النقاط
     # =====================================================
 
     @commands.command(name="ط")
     async def leaderboard(self, ctx):
 
-        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
-        # الرتب
         if not self.has_allowed_role(ctx.author):
             return
 
-        session = self.active_games.get(
-            GAME_ROOM_ID
-        )
+        session = self.active_games.get(GAME_ROOM_ID)
 
         if not session:
 
@@ -344,11 +280,7 @@ class GameCog(commands.Cog):
             reverse=True
         )
 
-        medals = [
-            "🥇",
-            "🥈",
-            "🥉"
-        ]
+        medals = ["🥇", "🥈", "🥉"]
 
         description = []
 
@@ -356,16 +288,11 @@ class GameCog(commands.Cog):
             sorted_scores[:10]
         ):
 
-            member = ctx.guild.get_member(
-                user_id
-            )
+            member = ctx.guild.get_member(user_id)
 
             if member:
-
                 name = member.mention
-
             else:
-
                 name = f"<@{user_id}>"
 
             medal = (
@@ -388,37 +315,29 @@ class GameCog(commands.Cog):
             text=f"عدد اللاعبين: {len(sorted_scores)}"
         )
 
-        await ctx.send(
-            embed=embed
-        )
+        await ctx.send(embed=embed)
 
     # =====================================================
-    # تصفير النقاط فقط -دن
-    # يعمل فقط في روم اللعبة
+    # تصفير النقاط فقط
     # =====================================================
 
     @commands.command(name="دن")
     async def reset_scores(self, ctx):
 
-        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
-        # الرتب
         if not self.has_allowed_role(ctx.author):
             return
 
         lock = self.get_lock(GAME_ROOM_ID)
 
-        # حماية
         if lock.locked():
             return
 
         async with lock:
 
-            session = self.active_games.get(
-                GAME_ROOM_ID
-            )
+            session = self.active_games.get(GAME_ROOM_ID)
 
             if not session:
 
@@ -429,55 +348,44 @@ class GameCog(commands.Cog):
 
                 return
 
-            players_count = len(
-                session.scores
-            )
+            players_count = len(session.scores)
 
-            # تصفير النقاط فقط
             session.scores.clear()
 
             await ctx.send(
                 "🔄 **تم تصفير النقاط بنجاح!**\n\n"
                 f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n"
-                f"🖼️ الأعلام والأسئلة **لم يتم حذفها**.\n\n"
+                "🖼️ الأعلام والأسئلة **لم يتم حذفها**.\n\n"
                 "✅ يمكنك بدء اللعبة من جديد باستخدام `-ابدا`."
             )
 
-            # حذف الأمر
             try:
-
                 await ctx.message.delete()
 
             except discord.HTTPException:
                 pass
 
     # =====================================================
-    # إنهاء وحذف الفعالية -انهي
-    # يعمل فقط في روم اللعبة
+    # إنهاء اللعبة بالكامل
     # =====================================================
 
     @commands.command(name="انهي")
     async def finish_game_command(self, ctx):
 
-        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
-        # الرتب
         if not self.has_allowed_role(ctx.author):
             return
 
         lock = self.get_lock(GAME_ROOM_ID)
 
-        # حماية
         if lock.locked():
             return
 
         async with lock:
 
-            session = self.active_games.get(
-                GAME_ROOM_ID
-            )
+            session = self.active_games.get(GAME_ROOM_ID)
 
             if not session:
 
@@ -488,33 +396,17 @@ class GameCog(commands.Cog):
 
                 return
 
-            # إيقاف اللعبة
             session.is_running = False
             session.starting = False
 
-            # حفظ العدد
-            questions_count = len(
-                session.questions
-            )
+            questions_count = len(session.questions)
+            players_count = len(session.scores)
 
-            players_count = len(
-                session.scores
-            )
-
-            # حذف الأسئلة والصور من بيانات اللعبة
             session.questions.clear()
-
-            # تصفير النقاط
             session.scores.clear()
 
-            # حذف الجلسة بالكامل
-            if self.active_games.get(
-                GAME_ROOM_ID
-            ) is session:
-
-                del self.active_games[
-                    GAME_ROOM_ID
-                ]
+            if self.active_games.get(GAME_ROOM_ID) is session:
+                del self.active_games[GAME_ROOM_ID]
 
             await ctx.send(
                 "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
@@ -523,49 +415,42 @@ class GameCog(commands.Cog):
                 "✅ أصبح بإمكانك إنشاء فعالية جديدة."
             )
 
-            # حذف الأمر
             try:
-
                 await ctx.message.delete()
 
             except discord.HTTPException:
                 pass
 
     # =====================================================
-    # تشغيل اللعبة
+    # تشغيل الأسئلة
     # =====================================================
 
     async def run_game_loop(self, channel):
 
-        session = self.active_games.get(
-            GAME_ROOM_ID
-        )
+        session = self.active_games.get(GAME_ROOM_ID)
 
         if not session:
             return
 
-        # =================================================
-        # الأسئلة بالترتيب
-        # =================================================
-
-        for index, question in enumerate(
-            session.questions
-        ):
+        for index, question in enumerate(session.questions):
 
             if not session.is_running:
                 break
 
             session.current_question_index = index
 
-            # ---------------------------------------------
-            # إرسال الصورة
-            # ---------------------------------------------
-
             question_number = index + 1
+            total_questions = len(session.questions)
 
-            total_questions = len(
-                session.questions
-            )
+            # -------------------------------------------------
+            # وقت بداية السؤال
+            # -------------------------------------------------
+
+            question_start_time = asyncio.get_running_loop().time()
+
+            # -------------------------------------------------
+            # Embed السؤال
+            # -------------------------------------------------
 
             embed = discord.Embed(
                 title=(
@@ -573,8 +458,8 @@ class GameCog(commands.Cog):
                     f"السؤال {question_number} من {total_questions}"
                 ),
                 description=(
-                    "⚡ خمن الدولة من العلم!\n\n"
-                    "⏰ **مدة العلم: 15 ثانية**\n\n"
+                    "⚡ **خمن الدولة من العلم!**\n\n"
+                    "⏰ **مدة السؤال: 15 ثانية**\n\n"
                     "🏆 أول إجابة صحيحة تحصل على نقطة!"
                 ),
                 color=discord.Color.gold()
@@ -584,13 +469,13 @@ class GameCog(commands.Cog):
                 url=question["image"]
             )
 
+            # -------------------------------------------------
+            # إرسال السؤال
+            # -------------------------------------------------
+
             await channel.send(
                 embed=embed
             )
-
-            # ---------------------------------------------
-            # استقبال الإجابة لمدة 15 ثانية
-            # ---------------------------------------------
 
             correct_answer = (
                 question["answer"]
@@ -607,6 +492,12 @@ class GameCog(commands.Cog):
                     == correct_answer
                 )
 
+            answered_correctly = False
+
+            # -------------------------------------------------
+            # انتظار الإجابة
+            # -------------------------------------------------
+
             try:
 
                 message = await self.bot.wait_for(
@@ -615,40 +506,95 @@ class GameCog(commands.Cog):
                     check=check
                 )
 
+                # -------------------------------------------------
+                # حساب كم مضى من وقت السؤال
+                # -------------------------------------------------
+
+                elapsed = (
+                    asyncio.get_running_loop().time()
+                    - question_start_time
+                )
+
+                # -------------------------------------------------
+                # تسجيل النقطة
+                # -------------------------------------------------
+
                 user_id = message.author.id
 
                 session.scores[user_id] = (
-                    session.scores.get(
-                        user_id,
-                        0
-                    ) + 1
+                    session.scores.get(user_id, 0) + 1
                 )
+
+                answered_correctly = True
 
                 await channel.send(
                     f"🎉 كفو {message.author.mention}!\n"
-                    f"✅ إجابة صحيحة!\n"
-                    f"🏆 حصلت على **نقطة واحدة**.\n\n"
+                    "✅ **إجابة صحيحة!**\n"
+                    "🏆 حصلت على **نقطة واحدة**.\n"
                     f"📊 مجموع نقاطك: "
                     f"**{session.scores[user_id]}**"
                 )
 
+                # -------------------------------------------------
+                # حساب الوقت المتبقي من الـ15 ثانية
+                # -------------------------------------------------
+
+                remaining_time = max(
+                    0,
+                    15.0 - elapsed
+                )
+
+                # -------------------------------------------------
+                # انتظار باقي وقت السؤال
+                # -------------------------------------------------
+
+                if remaining_time > 0:
+
+                    await asyncio.sleep(
+                        remaining_time
+                    )
+
             except asyncio.TimeoutError:
 
+                # -------------------------------------------------
+                # انتهت الـ15 ثانية بدون إجابة صحيحة
+                # -------------------------------------------------
+
                 await channel.send(
-                    "⏰ **انتهى وقت العلم!**\n"
-                    f"❌ لم يتمكن أحد من الإجابة.\n"
+                    "⏰ **انتهى وقت السؤال!**\n"
+                    "❌ لم يتمكن أحد من الإجابة.\n"
                     f"✅ الدولة الصحيحة كانت: "
                     f"`{question['answer']}`"
                 )
 
-            # ---------------------------------------------
-            # الصورة التالية مباشرة
-            # بدون فاصل 7 ثواني
-            # ---------------------------------------------
+            # -----------------------------------------------------
+            # حماية إضافية:
+            # التأكد أن 15 ثانية كاملة مرت قبل السؤال التالي
+            # -----------------------------------------------------
 
-        # =================================================
-        # نهاية الفعالية
-        # =================================================
+            total_elapsed = (
+                asyncio.get_running_loop().time()
+                - question_start_time
+            )
+
+            remaining_after_processing = max(
+                0,
+                15.0 - total_elapsed
+            )
+
+            if remaining_after_processing > 0:
+
+                await asyncio.sleep(
+                    remaining_after_processing
+                )
+
+            # -----------------------------------------------------
+            # هنا فقط ينتقل للسؤال التالي
+            # -----------------------------------------------------
+
+        # =====================================================
+        # نهاية جميع الأسئلة
+        # =====================================================
 
         if session.is_running:
 
@@ -660,8 +606,6 @@ class GameCog(commands.Cog):
                 "🔄 استخدموا `-دن` لتصفير النقاط وإعادة اللعب."
             )
 
-        # إيقاف اللعبة فقط
-        # لا نحذف الأسئلة ولا النقاط
         session.is_running = False
         session.starting = False
 
@@ -689,11 +633,7 @@ class GameCog(commands.Cog):
             reverse=True
         )
 
-        medals = [
-            "🥇",
-            "🥈",
-            "🥉"
-        ]
+        medals = ["🥇", "🥈", "🥉"]
 
         description = []
 
@@ -706,11 +646,8 @@ class GameCog(commands.Cog):
             )
 
             if member:
-
                 name = member.mention
-
             else:
-
                 name = f"<@{user_id}>"
 
             medal = (
@@ -740,11 +677,7 @@ class GameCog(commands.Cog):
 
 class GameControlView(ui.View):
 
-    def __init__(
-        self,
-        cog,
-        channel_id
-    ):
+    def __init__(self, cog, channel_id):
 
         super().__init__(
             timeout=None
@@ -754,7 +687,7 @@ class GameControlView(ui.View):
         self.channel_id = channel_id
 
     # =====================================================
-    # التحقق من الصلاحية
+    # فحص الصلاحيات
     # =====================================================
 
     async def check_permission(
@@ -762,7 +695,6 @@ class GameControlView(ui.View):
         interaction
     ):
 
-        # زر الإضافة يعمل في روم التجهيز
         if interaction.channel_id == SETUP_ROOM_ID:
 
             if not self.cog.has_allowed_role(
@@ -778,7 +710,6 @@ class GameControlView(ui.View):
 
             return True
 
-        # أزرار التشغيل تعمل في روم اللعبة
         if interaction.channel_id == GAME_ROOM_ID:
 
             if not self.cog.has_allowed_role(
@@ -802,8 +733,7 @@ class GameControlView(ui.View):
         return False
 
     # =====================================================
-    # إضافة سؤال
-    # يعمل فقط في روم التجهيز
+    # زر إضافة سؤال
     # =====================================================
 
     @ui.button(
@@ -813,10 +743,9 @@ class GameControlView(ui.View):
     async def add_question(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
-        # إضافة الأسئلة فقط في روم التجهيز
         if interaction.channel_id != SETUP_ROOM_ID:
 
             await interaction.response.send_message(
@@ -854,7 +783,6 @@ class GameControlView(ui.View):
 
             return
 
-        # فتح Modal
         modal = QuestionAnswerModal(
             self.cog,
             session,
@@ -866,8 +794,7 @@ class GameControlView(ui.View):
         )
 
     # =====================================================
-    # بدء اللعبة من الزر
-    # يعمل فقط في روم اللعبة
+    # زر بدء اللعبة
     # =====================================================
 
     @ui.button(
@@ -877,10 +804,9 @@ class GameControlView(ui.View):
     async def start_game_button(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
-        # لازم يكون في روم اللعبة
         if interaction.channel_id != GAME_ROOM_ID:
 
             await interaction.response.send_message(
@@ -949,8 +875,7 @@ class GameControlView(ui.View):
         )
 
     # =====================================================
-    # إنهاء اللعبة من الزر
-    # يعمل فقط في روم اللعبة
+    # زر إنهاء
     # =====================================================
 
     @ui.button(
@@ -960,10 +885,9 @@ class GameControlView(ui.View):
     async def end_game(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
-        # لازم يكون في روم اللعبة
         if interaction.channel_id != GAME_ROOM_ID:
 
             await interaction.response.send_message(
@@ -991,7 +915,6 @@ class GameControlView(ui.View):
 
             return
 
-        # إيقاف اللعبة
         session.is_running = False
         session.starting = False
 
@@ -1003,7 +926,6 @@ class GameControlView(ui.View):
             session.scores
         )
 
-        # مسح الأسئلة والنقاط
         session.questions.clear()
         session.scores.clear()
 
@@ -1021,7 +943,6 @@ class GameControlView(ui.View):
         )
 
         try:
-
             await interaction.message.delete()
 
         except discord.HTTPException:
@@ -1067,7 +988,6 @@ class QuestionAnswerModal(
         interaction: discord.Interaction
     ):
 
-        # التأكد أن العملية من روم التجهيز
         if interaction.channel_id != SETUP_ROOM_ID:
 
             await interaction.response.send_message(
@@ -1088,7 +1008,6 @@ class QuestionAnswerModal(
 
             return
 
-        # رد فوري
         await interaction.response.send_message(
             "🖼️ **تم تجهيز العلم!**\n\n"
             "الآن أرسل صورة العلم في هذا الروم.\n"
@@ -1097,10 +1016,6 @@ class QuestionAnswerModal(
             "لأن البوت سيستخدم رابطها أثناء اللعبة.",
             ephemeral=True
         )
-
-        # =================================================
-        # انتظار الصورة بدون Timeout
-        # =================================================
 
         def image_check(message):
 
@@ -1111,7 +1026,6 @@ class QuestionAnswerModal(
                 and len(message.attachments) > 0
             )
 
-        # انتظار بلا وقت محدد
         message = await self.cog.bot.wait_for(
             "message",
             check=image_check
@@ -1119,7 +1033,6 @@ class QuestionAnswerModal(
 
         attachment = message.attachments[0]
 
-        # التأكد أنها صورة
         if not attachment.content_type:
 
             await interaction.followup.send(
@@ -1142,16 +1055,10 @@ class QuestionAnswerModal(
 
             return
 
-        # =================================================
-        # حفظ السؤال
-        # =================================================
-
-        self.session.questions.append(
-            {
-                "image": attachment.url,
-                "answer": answer
-            }
-        )
+        self.session.questions.append({
+            "image": attachment.url,
+            "answer": answer
+        })
 
         question_number = len(
             self.session.questions
@@ -1167,11 +1074,10 @@ class QuestionAnswerModal(
 
 
 # =========================================================
-# تحميل Cog
+# Setup
 # =========================================================
 
 async def setup(bot):
-
     await bot.add_cog(
         GameCog(bot)
     )
