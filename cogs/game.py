@@ -8,6 +8,9 @@ from discord import ui
 # الإعدادات
 # =========================================================
 
+# اسم اللعبة
+GAME_NAME = "خمن الدولة من العلم"
+
 # روم تجهيز اللعبة وإضافة الصور والأسئلة
 SETUP_ROOM_ID = 1548289588211097710
 
@@ -165,12 +168,12 @@ class GameCog(commands.Cog):
             self.active_games[GAME_ROOM_ID] = session
 
             embed = discord.Embed(
-                title="🎮 لوحة التحكم بلعبة الصور",
+                title=f"🎮 {GAME_NAME}",
                 description=(
                     "تم تجهيز فعالية جديدة بنجاح! 🔥\n\n"
 
                     "🖼️ **إضافة سؤال**\n"
-                    "اضغط الزر، ثم أرسل الصورة في هذا الروم، "
+                    "اضغط الزر، ثم أرسل صورة العلم في هذا الروم، "
                     "وبعدها يتم حفظ الإجابة والصورة.\n\n"
 
                     "يمكنك إضافة عدد غير محدود من الأسئلة "
@@ -283,9 +286,9 @@ class GameCog(commands.Cog):
             session.starting = False
 
             await ctx.send(
-                "🚀 **بدأت فعاليتنا!**\n\n"
+                f"🚀 **بدأت لعبة {GAME_NAME}!**\n\n"
                 f"📚 عدد الأسئلة: **{len(session.questions)}**\n"
-                "🔥 استعدوا للسؤال الأول..."
+                "🔥 استعدوا للعلم الأول..."
             )
 
         # تشغيل اللعبة
@@ -501,13 +504,13 @@ class GameCog(commands.Cog):
 
             embed = discord.Embed(
                 title=(
-                    f"📸 السؤال {question_number}"
-                    f" من {total_questions}"
+                    f"🏳️ {GAME_NAME} | "
+                    f"السؤال {question_number} من {total_questions}"
                 ),
                 description=(
-                    "⚡ أسرع واكتب الإجابة الصحيحة!\n\n"
-                    "⏰ الوقت: **15 ثانية**\n\n"
-                    f"📌 **السؤال رقم {question_number}**"
+                    "⚡ خمن الدولة من العلم!\n\n"
+                    "⏰ **مدة الصورة: 15 ثانية**\n\n"
+                    "🏆 أول إجابة صحيحة تحصل على نقطة!"
                 ),
                 color=discord.Color.gold()
             )
@@ -521,7 +524,7 @@ class GameCog(commands.Cog):
             )
 
             # ---------------------------------------------
-            # الإجابة
+            # استقبال الإجابة لمدة 15 ثانية
             # ---------------------------------------------
 
             correct_answer = (
@@ -567,25 +570,16 @@ class GameCog(commands.Cog):
             except asyncio.TimeoutError:
 
                 await channel.send(
-                    "⏰ **انتهى وقت السؤال!**\n"
+                    "⏰ **انتهى وقت العلم!**\n"
                     f"❌ لم يتمكن أحد من الإجابة.\n"
-                    f"✅ الإجابة الصحيحة كانت: "
+                    f"✅ الدولة الصحيحة كانت: "
                     f"`{question['answer']}`"
                 )
 
             # ---------------------------------------------
-            # فاصل بين الأسئلة
+            # لا يوجد فاصل بين الصور
+            # الصورة التالية ترسل مباشرة بعد انتهاء 15 ثانية
             # ---------------------------------------------
-
-            if session.is_running:
-
-                if question_number < total_questions:
-
-                    await channel.send(
-                        "⏳ **استعدوا للسؤال التالي...**"
-                    )
-
-                    await asyncio.sleep(7)
 
         # =================================================
         # نهاية الفعالية
@@ -594,7 +588,7 @@ class GameCog(commands.Cog):
         if session.is_running:
 
             await channel.send(
-                "🏁 **انتهت فعاليتنا لليوم!**\n\n"
+                f"🏁 **انتهت لعبة {GAME_NAME}!**\n\n"
                 "❤️ شكراً لحضوركم ومشاركتكم.\n"
                 "🏆 **النتائج ما زالت محفوظة.**\n"
                 "📊 استخدموا `-ط` لعرض الترتيب."
@@ -664,7 +658,7 @@ class GameCog(commands.Cog):
             )
 
         embed = discord.Embed(
-            title="🏆 النتائج النهائية!",
+            title=f"🏆 النتائج النهائية - {GAME_NAME}",
             description="\n".join(description),
             color=discord.Color.gold()
         )
@@ -879,9 +873,9 @@ class GameControlView(ui.View):
             session.starting = False
 
             await interaction.response.send_message(
-                "🚀 **بدأت فعاليتنا!**\n\n"
+                f"🚀 **بدأت لعبة {GAME_NAME}!**\n\n"
                 f"📚 عدد الأسئلة: **{len(session.questions)}**\n"
-                "🔥 استعدوا للسؤال الأول..."
+                "🔥 استعدوا للعلم الأول..."
             )
 
         await self.cog.run_game_loop(
@@ -991,8 +985,8 @@ class QuestionAnswerModal(
         self.user_id = user_id
 
         self.answer_input = ui.TextInput(
-            label="الإجابة الصحيحة",
-            placeholder="اكتب الإجابة الصحيحة للصورة...",
+            label="الدولة الصحيحة",
+            placeholder="اكتب اسم الدولة صاحبة العلم...",
             required=True,
             max_length=200,
             style=discord.TextStyle.short
@@ -1022,7 +1016,7 @@ class QuestionAnswerModal(
         if not answer:
 
             await interaction.response.send_message(
-                "❌ يجب كتابة الإجابة.",
+                "❌ يجب كتابة اسم الدولة.",
                 ephemeral=True
             )
 
@@ -1030,8 +1024,8 @@ class QuestionAnswerModal(
 
         # رد فوري
         await interaction.response.send_message(
-            "🖼️ **تم تجهيز السؤال!**\n\n"
-            "الآن أرسل الصورة في هذا الروم.\n"
+            "🖼️ **تم تجهيز العلم!**\n\n"
+            "الآن أرسل صورة العلم في هذا الروم.\n"
             "⏳ **لا يوجد وقت محدد، أرسلها متى ما تريد.**\n\n"
             "⚠️ **مهم:** لا تحذف الصورة بعد إرسالها، "
             "لأن البوت سيستخدم رابطها أثناء اللعبة.",
@@ -1064,7 +1058,7 @@ class QuestionAnswerModal(
 
             await interaction.followup.send(
                 "❌ الملف المرسل ليس صورة واضحة.\n"
-                "أرسل صورة ثم حاول إضافة السؤال مرة أخرى.",
+                "أرسل صورة ثم حاول إضافة العلم مرة أخرى.",
                 ephemeral=True
             )
 
@@ -1098,9 +1092,9 @@ class QuestionAnswerModal(
         )
 
         await interaction.followup.send(
-            "✅ **تم حفظ السؤال بنجاح!**\n"
-            f"🖼️ رقم السؤال: `{question_number}`\n"
-            f"📚 إجمالي الأسئلة: `{question_number}`\n\n"
+            "✅ **تم حفظ العلم بنجاح!**\n"
+            f"🏳️ رقم السؤال: `{question_number}`\n"
+            f"📚 إجمالي الأعلام: `{question_number}`\n\n"
             "🔒 اترك الصورة في روم التجهيز ولا تحذفها.",
             ephemeral=True
         )
