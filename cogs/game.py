@@ -8,7 +8,10 @@ from discord import ui
 # الإعدادات
 # =========================================================
 
-# الروم الوحيد الذي تعمل فيه ألعاب الصور
+# روم تجهيز اللعبة وإضافة الصور والأسئلة
+SETUP_ROOM_ID = 1548289588211097710
+
+# روم تشغيل اللعبة
 GAME_ROOM_ID = 1545143660469813250
 
 # الرتب الثلاث المسموح لها بإدارة اللعبة
@@ -55,14 +58,22 @@ class GameCog(commands.Cog):
 
         self.bot = bot
 
-        # الألعاب الموجودة حسب الروم
+        # الألعاب الموجودة
         self.active_games = {}
 
-        # قفل لكل روم لمنع السبام
+        # قفل لكل روم
         self.game_locks = {}
 
     # =====================================================
-    # التحقق من الروم
+    # التحقق من روم التجهيز
+    # =====================================================
+
+    def is_setup_room(self, ctx):
+
+        return ctx.channel.id == SETUP_ROOM_ID
+
+    # =====================================================
+    # التحقق من روم اللعبة
     # =====================================================
 
     def is_game_room(self, ctx):
@@ -84,7 +95,7 @@ class GameCog(commands.Cog):
         )
 
     # =====================================================
-    # الحصول على Lock للروم
+    # الحصول على Lock
     # =====================================================
 
     def get_lock(self, channel_id):
@@ -97,34 +108,34 @@ class GameCog(commands.Cog):
 
     # =====================================================
     # إنشاء لعبة
+    # يعمل في روم التجهيز
     # =====================================================
 
     @commands.command(name="انشاء-لعبة")
     async def create_game(self, ctx):
 
-        # الروم
-        if not self.is_game_room(ctx):
+        # لازم يكون في روم التجهيز
+        if not self.is_setup_room(ctx):
             return
 
         # الرتب
         if not self.has_allowed_role(ctx.author):
             return
 
-        lock = self.get_lock(ctx.channel.id)
+        lock = self.get_lock(SETUP_ROOM_ID)
 
-        # إذا فيه عملية إنشاء جارية، تجاهل الأمر
+        # إذا فيه عملية جارية
         if lock.locked():
             return
 
         async with lock:
 
-            channel_id = ctx.channel.id
-
+            # إذا فيه فعالية موجودة
             old_session = self.active_games.get(
-                channel_id
+                GAME_ROOM_ID
             )
 
-            # منع إنشاء لعبة جديدة قبل استخدام -انهي
+            # منع إنشاء لعبة جديدة قبل -انهي
             if old_session:
 
                 if old_session.is_running:
@@ -138,8 +149,8 @@ class GameCog(commands.Cog):
 
                 await ctx.send(
                     "⚠️ توجد فعالية محفوظة حالياً.\n"
-                    "استخدم `-انهي` لمسح الصور والنقاط "
-                    "ثم أنشئ فعالية جديدة.",
+                    "استخدم `-انهي` من روم اللعبة لمسح الصور "
+                    "والنقاط ثم أنشئ فعالية جديدة.",
                     delete_after=7
                 )
 
@@ -150,7 +161,8 @@ class GameCog(commands.Cog):
                 ctx.author.id
             )
 
-            self.active_games[channel_id] = session
+            # تخزين الجلسة مرتبطة بروم اللعبة
+            self.active_games[GAME_ROOM_ID] = session
 
             embed = discord.Embed(
                 title="🎮 لوحة التحكم بلعبة الصور",
@@ -158,23 +170,27 @@ class GameCog(commands.Cog):
                     "تم تجهيز فعالية جديدة بنجاح! 🔥\n\n"
 
                     "🖼️ **إضافة سؤال**\n"
-                    "اضغط الزر، ثم أرسل الصورة في الشات، "
-                    "وبعدها اكتب الإجابة الصحيحة.\n\n"
+                    "اضغط الزر، ثم أرسل الصورة في هذا الروم، "
+                    "وبعدها يتم حفظ الإجابة والصورة.\n\n"
 
                     "يمكنك إضافة عدد غير محدود من الأسئلة "
                     "وبدون أي وقت محدد.\n\n"
 
+                    "⚠️ **مهم:**\n"
+                    "لا تحذف الصور من روم التجهيز، "
+                    "لأن البوت يحتاج رابط الصورة أثناء اللعبة.\n\n"
+
                     "▶️ **بدء اللعبة**\n"
                     "بعد الانتهاء من إضافة جميع الصور، "
-                    "اكتب:\n"
+                    "اذهب إلى روم اللعبة واستخدم:\n"
                     "`-ابدا`\n\n"
 
                     "🏆 **ترتيب النقاط**\n"
-                    "استخدم:\n"
+                    "في روم اللعبة استخدم:\n"
                     "`-ط`\n\n"
 
                     "🗑️ **إنهاء ومسح الفعالية**\n"
-                    "استخدم:\n"
+                    "في روم اللعبة استخدم:\n"
                     "`-انهي`"
                 ),
                 color=discord.Color.blurple()
@@ -186,7 +202,7 @@ class GameCog(commands.Cog):
 
             view = GameControlView(
                 self,
-                channel_id
+                GAME_ROOM_ID
             )
 
             await ctx.send(
@@ -204,12 +220,13 @@ class GameCog(commands.Cog):
 
     # =====================================================
     # بدء اللعبة -ابدا
+    # يعمل فقط في روم اللعبة
     # =====================================================
 
     @commands.command(name="ابدا")
     async def start_game_command(self, ctx):
 
-        # الروم
+        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
@@ -217,7 +234,7 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        lock = self.get_lock(ctx.channel.id)
+        lock = self.get_lock(GAME_ROOM_ID)
 
         # حماية السبام
         if lock.locked():
@@ -226,7 +243,7 @@ class GameCog(commands.Cog):
         async with lock:
 
             session = self.active_games.get(
-                ctx.channel.id
+                GAME_ROOM_ID
             )
 
             if not session:
@@ -256,7 +273,7 @@ class GameCog(commands.Cog):
 
                 return
 
-            # قفل البداية فوراً
+            # قفل البداية
             session.starting = True
 
             session.is_running = True
@@ -271,19 +288,20 @@ class GameCog(commands.Cog):
                 "🔥 استعدوا للسؤال الأول..."
             )
 
-        # تشغيل اللعبة خارج الـLock
+        # تشغيل اللعبة
         await self.run_game_loop(
             ctx.channel
         )
 
     # =====================================================
     # ترتيب النقاط -ط
+    # يعمل فقط في روم اللعبة
     # =====================================================
 
     @commands.command(name="ط")
     async def leaderboard(self, ctx):
 
-        # الروم
+        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
@@ -292,7 +310,7 @@ class GameCog(commands.Cog):
             return
 
         session = self.active_games.get(
-            ctx.channel.id
+            GAME_ROOM_ID
         )
 
         if not session:
@@ -369,12 +387,13 @@ class GameCog(commands.Cog):
 
     # =====================================================
     # إنهاء ومسح الفعالية -انهي
+    # يعمل فقط في روم اللعبة
     # =====================================================
 
     @commands.command(name="انهي")
     async def finish_game_command(self, ctx):
 
-        # الروم
+        # لازم يكون في روم اللعبة
         if not self.is_game_room(ctx):
             return
 
@@ -382,16 +401,16 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        lock = self.get_lock(ctx.channel.id)
+        lock = self.get_lock(GAME_ROOM_ID)
 
-        # حماية من تنفيذ الأمر أثناء عملية أخرى
+        # حماية
         if lock.locked():
             return
 
         async with lock:
 
             session = self.active_games.get(
-                ctx.channel.id
+                GAME_ROOM_ID
             )
 
             if not session:
@@ -407,7 +426,7 @@ class GameCog(commands.Cog):
             session.is_running = False
             session.starting = False
 
-            # حفظ عدد الأسئلة والنقاط قبل المسح
+            # حفظ العدد
             questions_count = len(
                 session.questions
             )
@@ -416,27 +435,27 @@ class GameCog(commands.Cog):
                 session.scores
             )
 
-            # مسح الأسئلة والصور والنقاط
+            # مسح الأسئلة والنقاط
             session.questions.clear()
             session.scores.clear()
 
-            # مسح الجلسة بالكامل
+            # مسح الجلسة
             if self.active_games.get(
-                ctx.channel.id
+                GAME_ROOM_ID
             ) is session:
 
                 del self.active_games[
-                    ctx.channel.id
+                    GAME_ROOM_ID
                 ]
 
             await ctx.send(
                 "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
                 f"🖼️ تم مسح **{questions_count}** سؤال.\n"
                 f"🏆 تم مسح نقاط **{players_count}** لاعب.\n\n"
-                "✅ أصبح الروم جاهزاً لإنشاء فعالية جديدة."
+                "✅ أصبح بالإمكان إنشاء فعالية جديدة."
             )
 
-            # حذف أمر الأمر
+            # حذف الأمر
             try:
 
                 await ctx.message.delete()
@@ -451,7 +470,7 @@ class GameCog(commands.Cog):
     async def run_game_loop(self, channel):
 
         session = self.active_games.get(
-            channel.id
+            GAME_ROOM_ID
         )
 
         if not session:
@@ -459,7 +478,6 @@ class GameCog(commands.Cog):
 
         # =================================================
         # الأسئلة بالترتيب
-        # 1 ثم 2 ثم 3 ثم 4...
         # =================================================
 
         for index, question in enumerate(
@@ -583,7 +601,7 @@ class GameCog(commands.Cog):
             )
 
         # إيقاف اللعبة فقط
-        # لا نحذف session ولا النقاط ولا الصور
+        # لا نحذف الأسئلة ولا النقاط
         session.is_running = False
         session.starting = False
 
@@ -684,30 +702,48 @@ class GameControlView(ui.View):
         interaction
     ):
 
-        if interaction.channel_id != GAME_ROOM_ID:
+        # زر الإضافة يعمل في روم التجهيز
+        if interaction.channel_id == SETUP_ROOM_ID:
 
-            await interaction.response.send_message(
-                "❌ هذا الزر غير متاح هنا.",
-                ephemeral=True
-            )
+            if not self.cog.has_allowed_role(
+                interaction.user
+            ):
 
-            return False
+                await interaction.response.send_message(
+                    "❌ ليس لديك صلاحية استخدام لوحة الألعاب.",
+                    ephemeral=True
+                )
 
-        if not self.cog.has_allowed_role(
-            interaction.user
-        ):
+                return False
 
-            await interaction.response.send_message(
-                "❌ ليس لديك صلاحية استخدام لوحة الألعاب.",
-                ephemeral=True
-            )
+            return True
 
-            return False
+        # أزرار التشغيل تعمل في روم اللعبة
+        if interaction.channel_id == GAME_ROOM_ID:
 
-        return True
+            if not self.cog.has_allowed_role(
+                interaction.user
+            ):
+
+                await interaction.response.send_message(
+                    "❌ ليس لديك صلاحية استخدام لوحة الألعاب.",
+                    ephemeral=True
+                )
+
+                return False
+
+            return True
+
+        await interaction.response.send_message(
+            "❌ هذا الزر غير متاح هنا.",
+            ephemeral=True
+        )
+
+        return False
 
     # =====================================================
     # إضافة سؤال
+    # يعمل فقط في روم التجهيز
     # =====================================================
 
     @ui.button(
@@ -720,19 +756,30 @@ class GameControlView(ui.View):
         button: ui.Button
     ):
 
+        # إضافة الأسئلة فقط في روم التجهيز
+        if interaction.channel_id != SETUP_ROOM_ID:
+
+            await interaction.response.send_message(
+                "❌ إضافة الأسئلة متاحة فقط في روم التجهيز.",
+                ephemeral=True
+            )
+
+            return
+
         if not await self.check_permission(
             interaction
         ):
             return
 
         session = self.cog.active_games.get(
-            self.channel_id
+            GAME_ROOM_ID
         )
 
         if not session:
 
             await interaction.response.send_message(
-                "❌ لا توجد جلسة لعبة حالياً.",
+                "❌ لا توجد جلسة لعبة حالياً.\n"
+                "استخدم `-انشاء-لعبة` أولاً.",
                 ephemeral=True
             )
 
@@ -747,10 +794,7 @@ class GameControlView(ui.View):
 
             return
 
-        # =================================================
-        # فتح Modal للإجابة
-        # =================================================
-
+        # فتح Modal
         modal = QuestionAnswerModal(
             self.cog,
             session,
@@ -763,6 +807,7 @@ class GameControlView(ui.View):
 
     # =====================================================
     # بدء اللعبة من الزر
+    # يعمل فقط في روم اللعبة
     # =====================================================
 
     @ui.button(
@@ -775,13 +820,23 @@ class GameControlView(ui.View):
         button: ui.Button
     ):
 
+        # لازم يكون في روم اللعبة
+        if interaction.channel_id != GAME_ROOM_ID:
+
+            await interaction.response.send_message(
+                "❌ بدء اللعبة متاح فقط في روم اللعبة.",
+                ephemeral=True
+            )
+
+            return
+
         if not await self.check_permission(
             interaction
         ):
             return
 
         lock = self.cog.get_lock(
-            self.channel_id
+            GAME_ROOM_ID
         )
 
         if lock.locked():
@@ -790,7 +845,7 @@ class GameControlView(ui.View):
         async with lock:
 
             session = self.cog.active_games.get(
-                self.channel_id
+                GAME_ROOM_ID
             )
 
             if not session:
@@ -811,7 +866,8 @@ class GameControlView(ui.View):
             if not session.questions:
 
                 await interaction.response.send_message(
-                    "⚠️ أضف سؤالاً واحداً على الأقل.",
+                    "⚠️ أضف سؤالاً واحداً على الأقل "
+                    "من روم التجهيز.",
                     ephemeral=True
                 )
 
@@ -834,6 +890,7 @@ class GameControlView(ui.View):
 
     # =====================================================
     # إنهاء اللعبة من الزر
+    # يعمل فقط في روم اللعبة
     # =====================================================
 
     @ui.button(
@@ -846,13 +903,23 @@ class GameControlView(ui.View):
         button: ui.Button
     ):
 
+        # لازم يكون في روم اللعبة
+        if interaction.channel_id != GAME_ROOM_ID:
+
+            await interaction.response.send_message(
+                "❌ إنهاء اللعبة متاح فقط في روم اللعبة.",
+                ephemeral=True
+            )
+
+            return
+
         if not await self.check_permission(
             interaction
         ):
             return
 
         session = self.cog.active_games.get(
-            self.channel_id
+            GAME_ROOM_ID
         )
 
         if not session:
@@ -864,7 +931,7 @@ class GameControlView(ui.View):
 
             return
 
-        # نفس وظيفة -انهي
+        # إيقاف اللعبة
         session.is_running = False
         session.starting = False
 
@@ -876,21 +943,21 @@ class GameControlView(ui.View):
             session.scores
         )
 
-        # مسح الصور والأسئلة والنقاط
+        # مسح الأسئلة والنقاط
         session.questions.clear()
         session.scores.clear()
 
-        if self.channel_id in self.cog.active_games:
+        if GAME_ROOM_ID in self.cog.active_games:
 
             del self.cog.active_games[
-                self.channel_id
+                GAME_ROOM_ID
             ]
 
         await interaction.response.send_message(
             "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
             f"🖼️ تم مسح **{questions_count}** سؤال.\n"
             f"🏆 تم مسح نقاط **{players_count}** لاعب.\n\n"
-            "✅ أصبح الروم جاهزاً لإنشاء فعالية جديدة."
+            "✅ أصبح بالإمكان إنشاء فعالية جديدة."
         )
 
         try:
@@ -940,6 +1007,16 @@ class QuestionAnswerModal(
         interaction: discord.Interaction
     ):
 
+        # التأكد أن العملية من روم التجهيز
+        if interaction.channel_id != SETUP_ROOM_ID:
+
+            await interaction.response.send_message(
+                "❌ إضافة الأسئلة متاحة فقط في روم التجهيز.",
+                ephemeral=True
+            )
+
+            return
+
         answer = self.answer_input.value.strip()
 
         if not answer:
@@ -951,23 +1028,24 @@ class QuestionAnswerModal(
 
             return
 
-        # إرسال رد فوري
+        # رد فوري
         await interaction.response.send_message(
             "🖼️ **تم تجهيز السؤال!**\n\n"
             "الآن أرسل الصورة في هذا الروم.\n"
             "⏳ **لا يوجد وقت محدد، أرسلها متى ما تريد.**\n\n"
-            "سيتم حفظ الصورة تلقائياً وربطها بالإجابة.",
+            "⚠️ **مهم:** لا تحذف الصورة بعد إرسالها، "
+            "لأن البوت سيستخدم رابطها أثناء اللعبة.",
             ephemeral=True
         )
 
         # =================================================
-        # انتظار الصورة بدون أي Timeout
+        # انتظار الصورة بدون Timeout
         # =================================================
 
         def image_check(message):
 
             return (
-                message.channel.id == GAME_ROOM_ID
+                message.channel.id == SETUP_ROOM_ID
                 and message.author.id == self.user_id
                 and not message.author.bot
                 and len(message.attachments) > 0
@@ -981,7 +1059,7 @@ class QuestionAnswerModal(
 
         attachment = message.attachments[0]
 
-        # التأكد من أنها صورة
+        # التأكد أنها صورة
         if not attachment.content_type:
 
             await interaction.followup.send(
@@ -1022,7 +1100,8 @@ class QuestionAnswerModal(
         await interaction.followup.send(
             "✅ **تم حفظ السؤال بنجاح!**\n"
             f"🖼️ رقم السؤال: `{question_number}`\n"
-            f"📚 إجمالي الأسئلة: `{question_number}`",
+            f"📚 إجمالي الأسئلة: `{question_number}`\n\n"
+            "🔒 اترك الصورة في روم التجهيز ولا تحذفها.",
             ephemeral=True
         )
 
