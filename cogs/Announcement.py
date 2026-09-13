@@ -50,6 +50,70 @@ THIRD_AI = 50_000
 
 
 # =========================================================
+# تحويل الأرقام المختصرة
+# =========================================================
+
+def parse_amount(value):
+
+    value = value.strip().lower()
+
+    # -----------------------------------------------------
+    # إزالة الفواصل والمسافات
+    # -----------------------------------------------------
+
+    value = value.replace(",", "")
+    value = value.replace(" ", "")
+
+    # -----------------------------------------------------
+    # الاختصارات
+    # k = ألف
+    # m = مليون
+    # b = مليار
+    # t = تريليون
+    # -----------------------------------------------------
+
+    multipliers = {
+        "k": 1_000,
+        "m": 1_000_000,
+        "b": 1_000_000_000,
+        "t": 1_000_000_000_000
+    }
+
+    # -----------------------------------------------------
+    # إذا كان الرقم ينتهي باختصار
+    # -----------------------------------------------------
+
+    if value and value[-1] in multipliers:
+
+        number_part = value[:-1]
+
+        try:
+            number = float(number_part)
+        except ValueError:
+            raise ValueError
+
+        result = number * multipliers[value[-1]]
+
+        # -------------------------------------------------
+        # التأكد أن الناتج رقم صحيح
+        # -------------------------------------------------
+
+        if not result.is_integer():
+            raise ValueError
+
+        return int(result)
+
+    # -----------------------------------------------------
+    # رقم عادي
+    # -----------------------------------------------------
+
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError
+
+
+# =========================================================
 # استخراج النص من رسالة التوب
 # =========================================================
 
@@ -217,10 +281,10 @@ class PrizeEditModal(discord.ui.Modal):
 
         self.gold_input = discord.ui.TextInput(
             label="🪙 الذهب",
-            placeholder="اكتب كمية الذهب",
+            placeholder="مثال: 100k أو 1.5m",
             default=str(current_gold),
             required=True,
-            max_length=20
+            max_length=30
         )
 
         # -------------------------------------------------
@@ -229,7 +293,7 @@ class PrizeEditModal(discord.ui.Modal):
 
         self.ai_input = discord.ui.TextInput(
             label="💵 Ai",
-            placeholder="اكتب كمية Ai",
+            placeholder="مثال: 250k أو 2m",
             default=str(current_ai),
             required=True,
             max_length=30
@@ -242,12 +306,12 @@ class PrizeEditModal(discord.ui.Modal):
 
         try:
 
-            gold = int(
-                self.gold_input.value.replace(",", "").strip()
+            gold = parse_amount(
+                self.gold_input.value
             )
 
-            ai = int(
-                self.ai_input.value.replace(",", "").strip()
+            ai = parse_amount(
+                self.ai_input.value
             )
 
             if gold < 0 or ai < 0:
@@ -262,7 +326,15 @@ class PrizeEditModal(discord.ui.Modal):
         except ValueError:
 
             await interaction.response.send_message(
-                "❌ يجب أن تكون قيمة الذهب و Ai أرقامًا صحيحة.",
+                (
+                    "❌ صيغة الرقم غير صحيحة.\n\n"
+                    "يمكنك استخدام:\n"
+                    "`100k` = 100,000\n"
+                    "`1.5k` = 1,500\n"
+                    "`2m` = 2,000,000\n"
+                    "`1b` = 1,000,000,000\n"
+                    "أو كتابة الرقم كاملًا مثل `250000`."
+                ),
                 ephemeral=True
             )
 
