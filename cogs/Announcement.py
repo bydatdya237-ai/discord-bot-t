@@ -36,7 +36,7 @@ ALLOWED_ROLE_IDS = {
 
 
 # =========================================================
-# الجوائز
+# الجوائز الافتراضية
 # =========================================================
 
 FIRST_GOLD = 450
@@ -107,12 +107,7 @@ def extract_top_3(message):
     results = {}
 
     # =====================================================
-    # الشكل الأساسي:
-    #
-    # #`1` I <@!724763668037894155> I `1.50t`
-    # #`2` I <@!1523454188330418339> I `287.25b`
-    # #`3` I <@!1498403413157744852> I `62.25b`
-    #
+    # الشكل الأساسي
     # =====================================================
 
     pattern = re.compile(
@@ -183,6 +178,527 @@ def has_allowed_role(member):
 
 
 # =========================================================
+# Modal تحديد الجوائز
+# =========================================================
+
+class PrizeModal(discord.ui.Modal):
+
+    def __init__(self, announcement_view):
+
+        super().__init__(
+            title="🏆 تحديد جوائز التوب"
+        )
+
+        self.announcement_view = announcement_view
+
+        self.first_gold = discord.ui.TextInput(
+            label="🥇 ذهب المركز الأول",
+            placeholder="مثال: 450",
+            default=str(
+                announcement_view.first_gold
+            ),
+            required=True,
+            max_length=20
+        )
+
+        self.first_ai = discord.ui.TextInput(
+            label="🥇 Ai المركز الأول",
+            placeholder="مثال: 250000",
+            default=str(
+                announcement_view.first_ai
+            ),
+            required=True,
+            max_length=30
+        )
+
+        self.second_gold = discord.ui.TextInput(
+            label="🥈 ذهب المركز الثاني",
+            placeholder="مثال: 250",
+            default=str(
+                announcement_view.second_gold
+            ),
+            required=True,
+            max_length=20
+        )
+
+        self.second_ai = discord.ui.TextInput(
+            label="🥈 Ai المركز الثاني",
+            placeholder="مثال: 150000",
+            default=str(
+                announcement_view.second_ai
+            ),
+            required=True,
+            max_length=30
+        )
+
+        self.third_gold = discord.ui.TextInput(
+            label="🥉 ذهب المركز الثالث",
+            placeholder="مثال: 100",
+            default=str(
+                announcement_view.third_gold
+            ),
+            required=True,
+            max_length=20
+        )
+
+        self.third_ai = discord.ui.TextInput(
+            label="🥉 Ai المركز الثالث",
+            placeholder="مثال: 50000",
+            default=str(
+                announcement_view.third_ai
+            ),
+            required=True,
+            max_length=30
+        )
+
+        self.add_item(self.first_gold)
+        self.add_item(self.first_ai)
+        self.add_item(self.second_gold)
+        self.add_item(self.second_ai)
+        self.add_item(self.third_gold)
+        self.add_item(self.third_ai)
+
+    async def on_submit(self, interaction):
+
+        try:
+
+            first_gold = int(
+                self.first_gold.value.replace(",", "")
+            )
+
+            first_ai = int(
+                self.first_ai.value.replace(",", "")
+            )
+
+            second_gold = int(
+                self.second_gold.value.replace(",", "")
+            )
+
+            second_ai = int(
+                self.second_ai.value.replace(",", "")
+            )
+
+            third_gold = int(
+                self.third_gold.value.replace(",", "")
+            )
+
+            third_ai = int(
+                self.third_ai.value.replace(",", "")
+            )
+
+            if any(
+                value < 0
+                for value in [
+                    first_gold,
+                    first_ai,
+                    second_gold,
+                    second_ai,
+                    third_gold,
+                    third_ai
+                ]
+            ):
+                await interaction.response.send_message(
+                    "❌ لا يمكن أن تكون الجوائز أرقامًا سالبة.",
+                    ephemeral=True
+                )
+                return
+
+        except ValueError:
+
+            await interaction.response.send_message(
+                "❌ تأكد أن جميع الجوائز أرقام صحيحة.",
+                ephemeral=True
+            )
+
+            return
+
+        # -------------------------------------------------
+        # حفظ الجوائز
+        # -------------------------------------------------
+
+        self.announcement_view.first_gold = first_gold
+        self.announcement_view.first_ai = first_ai
+
+        self.announcement_view.second_gold = second_gold
+        self.announcement_view.second_ai = second_ai
+
+        self.announcement_view.third_gold = third_gold
+        self.announcement_view.third_ai = third_ai
+
+        # -------------------------------------------------
+        # تحديث رسالة الواجهة
+        # -------------------------------------------------
+
+        await interaction.response.edit_message(
+            embed=self.announcement_view.create_setup_embed(),
+            view=self.announcement_view
+        )
+
+
+# =========================================================
+# واجهة إعلان التوب
+# =========================================================
+
+class AnnouncementView(discord.ui.View):
+
+    def __init__(
+        self,
+        cog,
+        ctx,
+        top_data
+    ):
+
+        super().__init__(
+            timeout=300
+        )
+
+        self.cog = cog
+        self.ctx = ctx
+        self.top_data = top_data
+
+        # -------------------------------------------------
+        # الجوائز الافتراضية
+        # -------------------------------------------------
+
+        self.first_gold = FIRST_GOLD
+        self.first_ai = FIRST_AI
+
+        self.second_gold = SECOND_GOLD
+        self.second_ai = SECOND_AI
+
+        self.third_gold = THIRD_GOLD
+        self.third_ai = THIRD_AI
+
+        self.finished = False
+
+    # =====================================================
+    # التحقق من صاحب العملية
+    # =====================================================
+
+    async def check_user(self, interaction):
+
+        if interaction.user.id != self.ctx.author.id:
+
+            await interaction.response.send_message(
+                "❌ هذه الواجهة ليست لك.",
+                ephemeral=True
+            )
+
+            return False
+
+        return True
+
+    # =====================================================
+    # Embed الواجهة الرئيسية
+    # =====================================================
+
+    def create_setup_embed(self):
+
+        first_id = self.top_data[1]
+        second_id = self.top_data[2]
+        third_id = self.top_data[3]
+
+        embed = discord.Embed(
+            title="✅ تم حفظ أسماء الفائزين",
+            description=(
+                "تم سحب المراكز الثلاثة الأولى من التوب بنجاح.\n\n"
+                "يمكنك الآن تحديد الجوائز أو معاينة الإعلان "
+                "قبل إرساله."
+            ),
+            color=discord.Color.gold()
+        )
+
+        embed.add_field(
+            name="🥇 المركز الأول",
+            value=f"<@{first_id}>",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🥈 المركز الثاني",
+            value=f"<@{second_id}>",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🥉 المركز الثالث",
+            value=f"<@{third_id}>",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🎁 الجوائز الحالية",
+            value=(
+                f"🥇 **الأول:** {self.first_gold:,} ذهب — "
+                f"{self.first_ai:,} Ai\n"
+                f"🥈 **الثاني:** {self.second_gold:,} ذهب — "
+                f"{self.second_ai:,} Ai\n"
+                f"🥉 **الثالث:** {self.third_gold:,} ذهب — "
+                f"{self.third_ai:,} Ai"
+            ),
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"تم تجهيز الإعلان بواسطة {self.ctx.author.display_name}"
+        )
+
+        return embed
+
+    # =====================================================
+    # زر تحديد الجوائز
+    # =====================================================
+
+    @discord.ui.button(
+        label="تحديد الجوائز",
+        emoji="🎁",
+        style=discord.ButtonStyle.primary
+    )
+    async def prizes_button(
+        self,
+        interaction,
+        button
+    ):
+
+        if not await self.check_user(interaction):
+            return
+
+        await interaction.response.send_modal(
+            PrizeModal(self)
+        )
+
+    # =====================================================
+    # زر معاينة الإعلان
+    # =====================================================
+
+    @discord.ui.button(
+        label="معاينة الإعلان",
+        emoji="👀",
+        style=discord.ButtonStyle.secondary
+    )
+    async def preview_button(
+        self,
+        interaction,
+        button
+    ):
+
+        if not await self.check_user(interaction):
+            return
+
+        embed = self.create_announcement_embed()
+
+        await interaction.response.send_message(
+            content=(
+                "👀 **هذه معاينة الإعلان فقط — لم يتم إرساله.**"
+            ),
+            embed=embed,
+            ephemeral=True
+        )
+
+    # =====================================================
+    # زر الإعلان
+    # =====================================================
+
+    @discord.ui.button(
+        label="إعلان",
+        emoji="✅",
+        style=discord.ButtonStyle.success
+    )
+    async def announce_button(
+        self,
+        interaction,
+        button
+    ):
+
+        if not await self.check_user(interaction):
+            return
+
+        if self.finished:
+            return
+
+        self.finished = True
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        try:
+
+            output_channel = self.cog.bot.get_channel(
+                ANNOUNCE_OUTPUT_CHANNEL_ID
+            )
+
+            if output_channel is None:
+
+                await interaction.followup.send(
+                    "❌ لم أستطع الوصول إلى روم الإعلان.",
+                    ephemeral=True
+                )
+
+                self.finished = False
+                return
+
+            embed = self.create_announcement_embed()
+
+            member_role_mention = (
+                f"<@&{MEMBER_ROLE_ID}>"
+            )
+
+            await output_channel.send(
+                content=(
+                    f"@everyone {member_role_mention}"
+                ),
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=True,
+                    roles=True,
+                    users=True
+                )
+            )
+
+            await interaction.followup.send(
+                "✅ تم إرسال إعلان التوب بنجاح.",
+                ephemeral=True
+            )
+
+            # -------------------------------------------------
+            # تعطيل جميع الأزرار
+            # -------------------------------------------------
+
+            for item in self.children:
+                item.disabled = True
+
+            try:
+
+                await interaction.message.edit(
+                    content=(
+                        "✅ **تم إرسال الإعلان بنجاح.**"
+                    ),
+                    embed=self.create_setup_embed(),
+                    view=self
+                )
+
+            except:
+                pass
+
+        except Exception as e:
+
+            print(
+                f"❌ خطأ أثناء إرسال إعلان التوب: {e}"
+            )
+
+            self.finished = False
+
+            await interaction.followup.send(
+                "❌ حدث خطأ أثناء إرسال الإعلان.",
+                ephemeral=True
+            )
+
+    # =====================================================
+    # زر الإلغاء
+    # =====================================================
+
+    @discord.ui.button(
+        label="إلغاء",
+        emoji="❌",
+        style=discord.ButtonStyle.danger
+    )
+    async def cancel_button(
+        self,
+        interaction,
+        button
+    ):
+
+        if not await self.check_user(interaction):
+            return
+
+        if self.finished:
+            return
+
+        self.finished = True
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.edit_message(
+            content="❌ **تم إلغاء عملية إعلان التوب.**",
+            embed=None,
+            view=self
+        )
+
+    # =====================================================
+    # إنشاء Embed الإعلان النهائي
+    # =====================================================
+
+    def create_announcement_embed(self):
+
+        first_id = self.top_data[1]
+        second_id = self.top_data[2]
+        third_id = self.top_data[3]
+
+        first_mention = f"<@{first_id}>"
+        second_mention = f"<@{second_id}>"
+        third_mention = f"<@{third_id}>"
+
+        embed = discord.Embed(
+            title="🏆 توب السيرفر",
+            description=(
+                "🎉 **نتائج التوب الحالية** 🎉\n\n"
+                "مبروك للفائزين وحظ أوفر للجميع في التوب القادم!"
+            ),
+            color=discord.Color.gold()
+        )
+
+        # -------------------------------------------------
+        # المركز الأول
+        # -------------------------------------------------
+
+        embed.add_field(
+            name="🥇 المركز الأول",
+            value=(
+                f"{first_mention}\n\n"
+                f"🪙 **{self.first_gold:,} ذهب**\n"
+                f"💵 **{self.first_ai:,} Ai**"
+            ),
+            inline=False
+        )
+
+        # -------------------------------------------------
+        # المركز الثاني
+        # -------------------------------------------------
+
+        embed.add_field(
+            name="🥈 المركز الثاني",
+            value=(
+                f"{second_mention}\n\n"
+                f"🪙 **{self.second_gold:,} ذهب**\n"
+                f"💵 **{self.second_ai:,} Ai**"
+            ),
+            inline=False
+        )
+
+        # -------------------------------------------------
+        # المركز الثالث
+        # -------------------------------------------------
+
+        embed.add_field(
+            name="🥉 المركز الثالث",
+            value=(
+                f"{third_mention}\n\n"
+                f"🪙 **{self.third_gold:,} ذهب**\n"
+                f"💵 **{self.third_ai:,} Ai**"
+            ),
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"تم الإعلان بواسطة {self.ctx.author.display_name}"
+        )
+
+        return embed
+
+
+# =========================================================
 # Announcement Cog
 # =========================================================
 
@@ -212,10 +728,114 @@ class AnnouncementCog(commands.Cog):
         if not has_allowed_role(ctx.author):
             return
 
-        await self.send_announcement(
-            ctx,
-            ANNOUNCE_OUTPUT_CHANNEL_ID
+        # -------------------------------------------------
+        # الحصول على روم مصدر التوب
+        # -------------------------------------------------
+
+        source_channel = self.bot.get_channel(
+            SOURCE_CHANNEL_ID
         )
+
+        if source_channel is None:
+
+            await ctx.send(
+                "❌ لم أستطع الوصول إلى روم التوب.",
+                delete_after=10
+            )
+
+            return
+
+        # -------------------------------------------------
+        # رسالة الانتظار
+        # -------------------------------------------------
+
+        loading_message = await ctx.send(
+            "⏳ جاري قراءة التوب وتجهيز القائمة..."
+        )
+
+        try:
+
+            # =================================================
+            # البحث في آخر 30 رسالة عن رسالة التوب
+            # =================================================
+
+            top_data = None
+
+            async for message in source_channel.history(
+                limit=30
+            ):
+
+                data = extract_top_3(message)
+
+                if data is not None:
+
+                    top_data = data
+                    break
+
+            # =================================================
+            # لم يتم العثور على التوب
+            # =================================================
+
+            if top_data is None:
+
+                await loading_message.edit(
+                    content=(
+                        "❌ لم أجد رسالة التوب تحتوي على "
+                        "المراكز الثلاثة الأولى."
+                    )
+                )
+
+                return
+
+            # =================================================
+            # حذف رسالة الانتظار
+            # =================================================
+
+            try:
+                await loading_message.delete()
+            except:
+                pass
+
+            # =================================================
+            # إنشاء الواجهة
+            # =================================================
+
+            view = AnnouncementView(
+                self,
+                ctx,
+                top_data
+            )
+
+            await ctx.send(
+                embed=view.create_setup_embed(),
+                view=view
+            )
+
+            # =================================================
+            # حذف الأمر
+            # =================================================
+
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+
+        except Exception as e:
+
+            print(
+                f"❌ خطأ في تجهيز AnnouncementCog: {e}"
+            )
+
+            try:
+
+                await loading_message.edit(
+                    content=(
+                        "❌ حدث خطأ أثناء تجهيز إعلان التوب."
+                    )
+                )
+
+            except:
+                pass
 
     # =====================================================
     # -ت
@@ -244,7 +864,7 @@ class AnnouncementCog(commands.Cog):
         )
 
     # =====================================================
-    # إرسال الإعلان
+    # إرسال الإعلان المباشر - خاص بأمر -ت
     # =====================================================
 
     async def send_announcement(
