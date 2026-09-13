@@ -178,158 +178,227 @@ def has_allowed_role(member):
 
 
 # =========================================================
-# Modal تحديد الجوائز
+# Modal تعديل جائزة المركز
 # =========================================================
 
-class PrizeModal(discord.ui.Modal):
+class PrizeEditModal(discord.ui.Modal):
 
-    def __init__(self, announcement_view):
-
-        super().__init__(
-            title="🏆 تحديد جوائز التوب"
-        )
+    def __init__(
+        self,
+        announcement_view,
+        rank
+    ):
 
         self.announcement_view = announcement_view
+        self.rank = rank
 
-        self.first_gold = discord.ui.TextInput(
-            label="🥇 ذهب المركز الأول",
-            placeholder="مثال: 450",
-            default=str(
-                announcement_view.first_gold
-            ),
+        if rank == 1:
+            title = "🥇 تعديل جائزة المركز الأول"
+            current_gold = announcement_view.first_gold
+            current_ai = announcement_view.first_ai
+
+        elif rank == 2:
+            title = "🥈 تعديل جائزة المركز الثاني"
+            current_gold = announcement_view.second_gold
+            current_ai = announcement_view.second_ai
+
+        else:
+            title = "🥉 تعديل جائزة المركز الثالث"
+            current_gold = announcement_view.third_gold
+            current_ai = announcement_view.third_ai
+
+        super().__init__(
+            title=title
+        )
+
+        # -------------------------------------------------
+        # خانة الذهب
+        # -------------------------------------------------
+
+        self.gold_input = discord.ui.TextInput(
+            label="🪙 الذهب",
+            placeholder="اكتب كمية الذهب",
+            default=str(current_gold),
             required=True,
             max_length=20
         )
 
-        self.first_ai = discord.ui.TextInput(
-            label="🥇 Ai المركز الأول",
-            placeholder="مثال: 250000",
-            default=str(
-                announcement_view.first_ai
-            ),
+        # -------------------------------------------------
+        # خانة Ai
+        # -------------------------------------------------
+
+        self.ai_input = discord.ui.TextInput(
+            label="💵 Ai",
+            placeholder="اكتب كمية Ai",
+            default=str(current_ai),
             required=True,
             max_length=30
         )
 
-        self.second_gold = discord.ui.TextInput(
-            label="🥈 ذهب المركز الثاني",
-            placeholder="مثال: 250",
-            default=str(
-                announcement_view.second_gold
-            ),
-            required=True,
-            max_length=20
-        )
-
-        self.second_ai = discord.ui.TextInput(
-            label="🥈 Ai المركز الثاني",
-            placeholder="مثال: 150000",
-            default=str(
-                announcement_view.second_ai
-            ),
-            required=True,
-            max_length=30
-        )
-
-        self.third_gold = discord.ui.TextInput(
-            label="🥉 ذهب المركز الثالث",
-            placeholder="مثال: 100",
-            default=str(
-                announcement_view.third_gold
-            ),
-            required=True,
-            max_length=20
-        )
-
-        self.third_ai = discord.ui.TextInput(
-            label="🥉 Ai المركز الثالث",
-            placeholder="مثال: 50000",
-            default=str(
-                announcement_view.third_ai
-            ),
-            required=True,
-            max_length=30
-        )
-
-        self.add_item(self.first_gold)
-        self.add_item(self.first_ai)
-        self.add_item(self.second_gold)
-        self.add_item(self.second_ai)
-        self.add_item(self.third_gold)
-        self.add_item(self.third_ai)
+        self.add_item(self.gold_input)
+        self.add_item(self.ai_input)
 
     async def on_submit(self, interaction):
 
         try:
 
-            first_gold = int(
-                self.first_gold.value.replace(",", "")
+            gold = int(
+                self.gold_input.value.replace(",", "").strip()
             )
 
-            first_ai = int(
-                self.first_ai.value.replace(",", "")
+            ai = int(
+                self.ai_input.value.replace(",", "").strip()
             )
 
-            second_gold = int(
-                self.second_gold.value.replace(",", "")
-            )
+            if gold < 0 or ai < 0:
 
-            second_ai = int(
-                self.second_ai.value.replace(",", "")
-            )
-
-            third_gold = int(
-                self.third_gold.value.replace(",", "")
-            )
-
-            third_ai = int(
-                self.third_ai.value.replace(",", "")
-            )
-
-            if any(
-                value < 0
-                for value in [
-                    first_gold,
-                    first_ai,
-                    second_gold,
-                    second_ai,
-                    third_gold,
-                    third_ai
-                ]
-            ):
                 await interaction.response.send_message(
-                    "❌ لا يمكن أن تكون الجوائز أرقامًا سالبة.",
+                    "❌ لا يمكن وضع أرقام سالبة.",
                     ephemeral=True
                 )
+
                 return
 
         except ValueError:
 
             await interaction.response.send_message(
-                "❌ تأكد أن جميع الجوائز أرقام صحيحة.",
+                "❌ يجب أن تكون قيمة الذهب و Ai أرقامًا صحيحة.",
                 ephemeral=True
             )
 
             return
 
-        # -------------------------------------------------
-        # حفظ الجوائز
-        # -------------------------------------------------
+        # =================================================
+        # حفظ الجائزة حسب المركز
+        # =================================================
 
-        self.announcement_view.first_gold = first_gold
-        self.announcement_view.first_ai = first_ai
+        if self.rank == 1:
 
-        self.announcement_view.second_gold = second_gold
-        self.announcement_view.second_ai = second_ai
+            self.announcement_view.first_gold = gold
+            self.announcement_view.first_ai = ai
 
-        self.announcement_view.third_gold = third_gold
-        self.announcement_view.third_ai = third_ai
+        elif self.rank == 2:
 
-        # -------------------------------------------------
-        # تحديث رسالة الواجهة
-        # -------------------------------------------------
+            self.announcement_view.second_gold = gold
+            self.announcement_view.second_ai = ai
+
+        elif self.rank == 3:
+
+            self.announcement_view.third_gold = gold
+            self.announcement_view.third_ai = ai
+
+        # =================================================
+        # العودة للقائمة الرئيسية
+        # =================================================
 
         await interaction.response.edit_message(
+            content=None,
+            embed=self.announcement_view.create_setup_embed(),
+            view=self.announcement_view
+        )
+
+
+# =========================================================
+# قائمة اختيار المركز لتعديل جائزته
+# =========================================================
+
+class PrizeSelectView(discord.ui.View):
+
+    def __init__(
+        self,
+        announcement_view
+    ):
+
+        super().__init__(
+            timeout=300
+        )
+
+        self.announcement_view = announcement_view
+
+    # =====================================================
+    # التحقق من المستخدم
+    # =====================================================
+
+    async def check_user(self, interaction):
+
+        if interaction.user.id != self.announcement_view.ctx.author.id:
+
+            await interaction.response.send_message(
+                "❌ هذه الواجهة ليست لك.",
+                ephemeral=True
+            )
+
+            return False
+
+        return True
+
+    # =====================================================
+    # القائمة
+    # =====================================================
+
+    @discord.ui.select(
+        placeholder="🏆 اختر المركز الذي تريد تعديل جائزته",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(
+                label="المركز الأول",
+                description="تعديل جائزة المركز الأول",
+                emoji="🥇",
+                value="1"
+            ),
+            discord.SelectOption(
+                label="المركز الثاني",
+                description="تعديل جائزة المركز الثاني",
+                emoji="🥈",
+                value="2"
+            ),
+            discord.SelectOption(
+                label="المركز الثالث",
+                description="تعديل جائزة المركز الثالث",
+                emoji="🥉",
+                value="3"
+            ),
+        ]
+    )
+    async def prize_select(
+        self,
+        interaction,
+        select
+    ):
+
+        if not await self.check_user(interaction):
+            return
+
+        rank = int(select.values[0])
+
+        await interaction.response.send_modal(
+            PrizeEditModal(
+                self.announcement_view,
+                rank
+            )
+        )
+
+    # =====================================================
+    # زر الرجوع
+    # =====================================================
+
+    @discord.ui.button(
+        label="رجوع",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary
+    )
+    async def back_button(
+        self,
+        interaction,
+        button
+    ):
+
+        if not await self.check_user(interaction):
+            return
+
+        await interaction.response.edit_message(
+            content=None,
             embed=self.announcement_view.create_setup_embed(),
             view=self.announcement_view
         )
@@ -408,11 +477,19 @@ class AnnouncementView(discord.ui.View):
             color=discord.Color.gold()
         )
 
+        # -------------------------------------------------
+        # الأول
+        # -------------------------------------------------
+
         embed.add_field(
             name="🥇 المركز الأول",
             value=f"<@{first_id}>",
             inline=False
         )
+
+        # -------------------------------------------------
+        # الثاني
+        # -------------------------------------------------
 
         embed.add_field(
             name="🥈 المركز الثاني",
@@ -420,27 +497,41 @@ class AnnouncementView(discord.ui.View):
             inline=False
         )
 
+        # -------------------------------------------------
+        # الثالث
+        # -------------------------------------------------
+
         embed.add_field(
             name="🥉 المركز الثالث",
             value=f"<@{third_id}>",
             inline=False
         )
 
+        # -------------------------------------------------
+        # الجوائز
+        # -------------------------------------------------
+
         embed.add_field(
             name="🎁 الجوائز الحالية",
             value=(
-                f"🥇 **الأول:** {self.first_gold:,} ذهب — "
+                f"🥇 **الأول:** "
+                f"{self.first_gold:,} ذهب — "
                 f"{self.first_ai:,} Ai\n"
-                f"🥈 **الثاني:** {self.second_gold:,} ذهب — "
+                f"🥈 **الثاني:** "
+                f"{self.second_gold:,} ذهب — "
                 f"{self.second_ai:,} Ai\n"
-                f"🥉 **الثالث:** {self.third_gold:,} ذهب — "
+                f"🥉 **الثالث:** "
+                f"{self.third_gold:,} ذهب — "
                 f"{self.third_ai:,} Ai"
             ),
             inline=False
         )
 
         embed.set_footer(
-            text=f"تم تجهيز الإعلان بواسطة {self.ctx.author.display_name}"
+            text=(
+                f"تم تجهيز الإعلان بواسطة "
+                f"{self.ctx.author.display_name}"
+            )
         )
 
         return embed
@@ -452,7 +543,8 @@ class AnnouncementView(discord.ui.View):
     @discord.ui.button(
         label="تحديد الجوائز",
         emoji="🎁",
-        style=discord.ButtonStyle.primary
+        style=discord.ButtonStyle.primary,
+        row=0
     )
     async def prizes_button(
         self,
@@ -463,8 +555,15 @@ class AnnouncementView(discord.ui.View):
         if not await self.check_user(interaction):
             return
 
-        await interaction.response.send_modal(
-            PrizeModal(self)
+        prize_view = PrizeSelectView(self)
+
+        await interaction.response.edit_message(
+            content=(
+                "🎁 **تحديد الجوائز**\n\n"
+                "اختر المركز الذي تريد تعديل جائزته:"
+            ),
+            embed=None,
+            view=prize_view
         )
 
     # =====================================================
@@ -474,7 +573,8 @@ class AnnouncementView(discord.ui.View):
     @discord.ui.button(
         label="معاينة الإعلان",
         emoji="👀",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.secondary,
+        row=0
     )
     async def preview_button(
         self,
@@ -502,7 +602,8 @@ class AnnouncementView(discord.ui.View):
     @discord.ui.button(
         label="إعلان",
         emoji="✅",
-        style=discord.ButtonStyle.success
+        style=discord.ButtonStyle.success,
+        row=1
     )
     async def announce_button(
         self,
@@ -544,6 +645,10 @@ class AnnouncementView(discord.ui.View):
                 f"<@&{MEMBER_ROLE_ID}>"
             )
 
+            # =================================================
+            # إرسال الإعلان
+            # =================================================
+
             await output_channel.send(
                 content=(
                     f"@everyone {member_role_mention}"
@@ -561,9 +666,9 @@ class AnnouncementView(discord.ui.View):
                 ephemeral=True
             )
 
-            # -------------------------------------------------
-            # تعطيل جميع الأزرار
-            # -------------------------------------------------
+            # =================================================
+            # تعطيل الأزرار
+            # =================================================
 
             for item in self.children:
                 item.disabled = True
@@ -571,9 +676,7 @@ class AnnouncementView(discord.ui.View):
             try:
 
                 await interaction.message.edit(
-                    content=(
-                        "✅ **تم إرسال الإعلان بنجاح.**"
-                    ),
+                    content="✅ **تم إرسال الإعلان بنجاح.**",
                     embed=self.create_setup_embed(),
                     view=self
                 )
@@ -601,7 +704,8 @@ class AnnouncementView(discord.ui.View):
     @discord.ui.button(
         label="إلغاء",
         emoji="❌",
-        style=discord.ButtonStyle.danger
+        style=discord.ButtonStyle.danger,
+        row=1
     )
     async def cancel_button(
         self,
@@ -692,7 +796,10 @@ class AnnouncementView(discord.ui.View):
         )
 
         embed.set_footer(
-            text=f"تم الإعلان بواسطة {self.ctx.author.display_name}"
+            text=(
+                f"تم الإعلان بواسطة "
+                f"{self.ctx.author.display_name}"
+            )
         )
 
         return embed
