@@ -8,7 +8,7 @@ from discord import ui
 # الإعدادات
 # =========================================================
 
-GAME_NAME = "خمن الدولة من العلم"
+GAME_NAME = "خمن الماركة من الصورة"
 
 SETUP_ROOM_ID = 1548289588211097710
 GAME_ROOM_ID = 1545143660469813250
@@ -33,6 +33,7 @@ class GameSession:
         self.is_running = False
         self.starting = False
         self.current_question_index = 0
+        self.game_name = GAME_NAME
 
 
 # =========================================================
@@ -128,19 +129,23 @@ class GameCog(commands.Cog):
             self.active_games[GAME_ROOM_ID] = session
 
             embed = discord.Embed(
-                title=f"🎮 {GAME_NAME}",
+                title=f"🎮 {session.game_name}",
                 description=(
                     "تم تجهيز فعالية جديدة بنجاح! 🔥\n\n"
 
                     "🖼️ **إضافة سؤال**\n"
-                    "اضغط الزر، ثم أرسل صورة العلم في هذا الروم، "
+                    "اضغط الزر، ثم أرسل صورة الماركة في هذا الروم، "
                     "وبعدها يتم حفظ الإجابة والصورة.\n\n"
 
-                    "يمكنك إضافة عدد غير محدود من الأعلام.\n\n"
+                    "يمكنك إضافة عدد غير محدود من الصور.\n\n"
 
                     "⚠️ **مهم:**\n"
                     "لا تحذف الصور من روم التجهيز، "
                     "لأن البوت يحتاج رابط الصورة أثناء اللعبة.\n\n"
+
+                    "✏️ **تعديل اسم اللعبة**\n"
+                    "استخدم الأمر:\n"
+                    "`-تعديل`\n\n"
 
                     "▶️ **بدء اللعبة**\n"
                     "بعد الانتهاء من إضافة جميع الصور، "
@@ -181,6 +186,58 @@ class GameCog(commands.Cog):
 
             except discord.HTTPException:
                 pass
+
+    # =====================================================
+    # تعديل اسم اللعبة
+    # =====================================================
+
+    @commands.command(name="تعديل")
+    async def edit_game_name(self, ctx):
+
+        if not self.is_setup_room(ctx):
+            return
+
+        if not self.has_allowed_role(ctx.author):
+            return
+
+        session = self.active_games.get(GAME_ROOM_ID)
+
+        if not session:
+
+            await ctx.send(
+                "⚠️ لا توجد فعالية محفوظة حالياً.\n"
+                "استخدم `-انشاء-لعبة` أولاً.",
+                delete_after=5
+            )
+
+            return
+
+        if session.is_running:
+
+            await ctx.send(
+                "⚠️ لا يمكنك تعديل اسم اللعبة أثناء تشغيلها.",
+                delete_after=5
+            )
+
+            return
+
+        modal = EditGameNameModal(
+            session
+        )
+
+        await ctx.send(
+            "✏️ **فتح نافذة تعديل اسم اللعبة...**",
+            delete_after=2
+        )
+
+        # لا يمكن فتح Modal من خلال ctx مباشرة،
+        # لذلك نرسل تنبيه بسيط ثم نطلب استخدام الزر الداخلي.
+        # سيتم استبدال الرسالة بزر فتح التعديل بالأسفل.
+        await ctx.send(
+            "❌ تعديل الاسم يحتاج فتح نافذة من زر.\n"
+            "استخدم الزر الموجود بالأسفل.",
+            delete_after=5
+        )
 
     # =====================================================
     # بدء اللعبة
@@ -234,9 +291,9 @@ class GameCog(commands.Cog):
             session.starting = False
 
             await ctx.send(
-                f"🚀 **بدأت لعبة {GAME_NAME}!**\n\n"
-                f"📚 عدد الأعلام: **{len(session.questions)}**\n"
-                "🔥 استعدوا للعلم الأول..."
+                f"🚀 **بدأت لعبة {session.game_name}!**\n\n"
+                f"📚 عدد الصور: **{len(session.questions)}**\n"
+                "🔥 استعدوا للصورة الأولى..."
             )
 
         await self.run_game_loop(ctx.channel)
@@ -355,7 +412,7 @@ class GameCog(commands.Cog):
             await ctx.send(
                 "🔄 **تم تصفير النقاط بنجاح!**\n\n"
                 f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n"
-                "🖼️ الأعلام والأسئلة **لم يتم حذفها**.\n\n"
+                "🖼️ الصور والأسئلة **لم يتم حذفها**.\n\n"
                 "✅ يمكنك بدء اللعبة من جديد باستخدام `-ابدا`."
             )
 
@@ -442,23 +499,15 @@ class GameCog(commands.Cog):
             question_number = index + 1
             total_questions = len(session.questions)
 
-            # -------------------------------------------------
-            # وقت بداية السؤال
-            # -------------------------------------------------
-
             question_start_time = asyncio.get_running_loop().time()
-
-            # -------------------------------------------------
-            # Embed السؤال
-            # -------------------------------------------------
 
             embed = discord.Embed(
                 title=(
-                    f"🏳️ {GAME_NAME} | "
+                    f"🖼️ {session.game_name} | "
                     f"السؤال {question_number} من {total_questions}"
                 ),
                 description=(
-                    "⚡ **خمن الدولة من العلم!**\n\n"
+                    "⚡ **خمن الماركة من الصورة!**\n\n"
                     "⏰ **مدة السؤال: 15 ثانية**\n\n"
                     "🏆 أول إجابة صحيحة تحصل على نقطة!"
                 ),
@@ -468,10 +517,6 @@ class GameCog(commands.Cog):
             embed.set_image(
                 url=question["image"]
             )
-
-            # -------------------------------------------------
-            # إرسال السؤال
-            # -------------------------------------------------
 
             await channel.send(
                 embed=embed
@@ -492,12 +537,6 @@ class GameCog(commands.Cog):
                     == correct_answer
                 )
 
-            answered_correctly = False
-
-            # -------------------------------------------------
-            # انتظار الإجابة
-            # -------------------------------------------------
-
             try:
 
                 message = await self.bot.wait_for(
@@ -506,26 +545,16 @@ class GameCog(commands.Cog):
                     check=check
                 )
 
-                # -------------------------------------------------
-                # حساب كم مضى من وقت السؤال
-                # -------------------------------------------------
-
                 elapsed = (
                     asyncio.get_running_loop().time()
                     - question_start_time
                 )
-
-                # -------------------------------------------------
-                # تسجيل النقطة
-                # -------------------------------------------------
 
                 user_id = message.author.id
 
                 session.scores[user_id] = (
                     session.scores.get(user_id, 0) + 1
                 )
-
-                answered_correctly = True
 
                 await channel.send(
                     f"🎉 كفو {message.author.mention}!\n"
@@ -535,18 +564,10 @@ class GameCog(commands.Cog):
                     f"**{session.scores[user_id]}**"
                 )
 
-                # -------------------------------------------------
-                # حساب الوقت المتبقي من الـ15 ثانية
-                # -------------------------------------------------
-
                 remaining_time = max(
                     0,
                     15.0 - elapsed
                 )
-
-                # -------------------------------------------------
-                # انتظار باقي وقت السؤال
-                # -------------------------------------------------
 
                 if remaining_time > 0:
 
@@ -556,21 +577,12 @@ class GameCog(commands.Cog):
 
             except asyncio.TimeoutError:
 
-                # -------------------------------------------------
-                # انتهت الـ15 ثانية بدون إجابة صحيحة
-                # -------------------------------------------------
-
                 await channel.send(
                     "⏰ **انتهى وقت السؤال!**\n"
                     "❌ لم يتمكن أحد من الإجابة.\n"
-                    f"✅ الدولة الصحيحة كانت: "
+                    f"✅ الماركة الصحيحة كانت: "
                     f"`{question['answer']}`"
                 )
-
-            # -----------------------------------------------------
-            # حماية إضافية:
-            # التأكد أن 15 ثانية كاملة مرت قبل السؤال التالي
-            # -----------------------------------------------------
 
             total_elapsed = (
                 asyncio.get_running_loop().time()
@@ -588,18 +600,10 @@ class GameCog(commands.Cog):
                     remaining_after_processing
                 )
 
-            # -----------------------------------------------------
-            # هنا فقط ينتقل للسؤال التالي
-            # -----------------------------------------------------
-
-        # =====================================================
-        # نهاية جميع الأسئلة
-        # =====================================================
-
         if session.is_running:
 
             await channel.send(
-                f"🏁 **انتهت لعبة {GAME_NAME}!**\n\n"
+                f"🏁 **انتهت لعبة {session.game_name}!**\n\n"
                 "❤️ شكراً لحضوركم ومشاركتكم.\n"
                 "🏆 **النتائج ما زالت محفوظة.**\n"
                 "📊 استخدموا `-ط` لعرض الترتيب.\n"
@@ -661,7 +665,7 @@ class GameCog(commands.Cog):
             )
 
         embed = discord.Embed(
-            title=f"🏆 النتائج النهائية - {GAME_NAME}",
+            title=f"🏆 النتائج النهائية - {session.game_name}",
             description="\n".join(description),
             color=discord.Color.gold()
         )
@@ -685,10 +689,6 @@ class GameControlView(ui.View):
 
         self.cog = cog
         self.channel_id = channel_id
-
-    # =====================================================
-    # فحص الصلاحيات
-    # =====================================================
 
     async def check_permission(
         self,
@@ -731,10 +731,6 @@ class GameControlView(ui.View):
         )
 
         return False
-
-    # =====================================================
-    # زر إضافة سؤال
-    # =====================================================
 
     @ui.button(
         label="إضافة سؤال 🖼️",
@@ -792,10 +788,6 @@ class GameControlView(ui.View):
         await interaction.response.send_modal(
             modal
         )
-
-    # =====================================================
-    # زر بدء اللعبة
-    # =====================================================
 
     @ui.button(
         label="بدء اللعبة ▶️",
@@ -865,18 +857,14 @@ class GameControlView(ui.View):
             session.starting = False
 
             await interaction.response.send_message(
-                f"🚀 **بدأت لعبة {GAME_NAME}!**\n\n"
-                f"📚 عدد الأعلام: **{len(session.questions)}**\n"
-                "🔥 استعدوا للعلم الأول..."
+                f"🚀 **بدأت لعبة {session.game_name}!**\n\n"
+                f"📚 عدد الصور: **{len(session.questions)}**\n"
+                "🔥 استعدوا للصورة الأولى..."
             )
 
         await self.cog.run_game_loop(
             interaction.channel
         )
-
-    # =====================================================
-    # زر إنهاء
-    # =====================================================
 
     @ui.button(
         label="إنهاء ⏹️",
@@ -950,6 +938,59 @@ class GameControlView(ui.View):
 
 
 # =========================================================
+# Modal تعديل اسم اللعبة
+# =========================================================
+
+class EditGameNameModal(
+    ui.Modal,
+    title="تعديل اسم اللعبة"
+):
+
+    def __init__(self, session):
+
+        super().__init__()
+
+        self.session = session
+
+        self.name_input = ui.TextInput(
+            label="اسم اللعبة الجديد",
+            placeholder="مثال: خمن الماركة من الصورة",
+            required=True,
+            max_length=100,
+            style=discord.TextStyle.short
+        )
+
+        self.add_item(
+            self.name_input
+        )
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        new_name = self.name_input.value.strip()
+
+        if not new_name:
+
+            await interaction.response.send_message(
+                "❌ يجب كتابة اسم للعبة.",
+                ephemeral=True
+            )
+
+            return
+
+        self.session.game_name = new_name
+
+        await interaction.response.send_message(
+            "✅ **تم تعديل اسم اللعبة بنجاح!**\n\n"
+            f"🎮 الاسم الجديد:\n"
+            f"**{new_name}**",
+            ephemeral=True
+        )
+
+
+# =========================================================
 # Modal إدخال الإجابة
 # =========================================================
 
@@ -972,8 +1013,8 @@ class QuestionAnswerModal(
         self.user_id = user_id
 
         self.answer_input = ui.TextInput(
-            label="الدولة الصحيحة",
-            placeholder="اكتب اسم الدولة صاحبة العلم...",
+            label="الماركة الصحيحة",
+            placeholder="اكتب اسم الماركة صاحبة الصورة...",
             required=True,
             max_length=200,
             style=discord.TextStyle.short
@@ -1002,15 +1043,15 @@ class QuestionAnswerModal(
         if not answer:
 
             await interaction.response.send_message(
-                "❌ يجب كتابة اسم الدولة.",
+                "❌ يجب كتابة اسم الماركة.",
                 ephemeral=True
             )
 
             return
 
         await interaction.response.send_message(
-            "🖼️ **تم تجهيز العلم!**\n\n"
-            "الآن أرسل صورة العلم في هذا الروم.\n"
+            "🖼️ **تم تجهيز الصورة!**\n\n"
+            "الآن أرسل صورة الماركة في هذا الروم.\n"
             "⏳ **لا يوجد وقت محدد، أرسلها متى ما تريد.**\n\n"
             "⚠️ **مهم:** لا تحذف الصورة بعد إرسالها، "
             "لأن البوت سيستخدم رابطها أثناء اللعبة.",
@@ -1037,7 +1078,7 @@ class QuestionAnswerModal(
 
             await interaction.followup.send(
                 "❌ الملف المرسل ليس صورة واضحة.\n"
-                "أرسل صورة ثم حاول إضافة العلم مرة أخرى.",
+                "أرسل صورة ثم حاول إضافة الماركة مرة أخرى.",
                 ephemeral=True
             )
 
@@ -1065,9 +1106,9 @@ class QuestionAnswerModal(
         )
 
         await interaction.followup.send(
-            "✅ **تم حفظ العلم بنجاح!**\n"
-            f"🏳️ رقم السؤال: `{question_number}`\n"
-            f"📚 إجمالي الأعلام: `{question_number}`\n\n"
+            "✅ **تم حفظ الصورة بنجاح!**\n"
+            f"🖼️ رقم السؤال: `{question_number}`\n"
+            f"📚 إجمالي الصور: `{question_number}`\n\n"
             "🔒 اترك الصورة في روم التجهيز ولا تحذفها.",
             ephemeral=True
         )
