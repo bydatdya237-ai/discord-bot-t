@@ -22,51 +22,23 @@ class TestCog(commands.Cog):
         self.bot = bot
 
     # =====================================================
-    # مراقبة طريقة كتابة الأمر
-    # =====================================================
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-
-        # تجاهل البوتات
-        if message.author.bot:
-            return
-
-        # فقط الروم المحدد
-        if message.channel.id != COMMAND_ROOM_ID:
-            return
-
-        # فقط صاحب الرتبة المحددة
-        if not any(role.id == ALLOWED_ROLE_ID for role in message.author.roles):
-            return
-
-        content = message.content.strip()
-
-        # إذا بدأ بـ -تسفير لكنه ليس الأمر الصحيح
-        if content.startswith("-تسفير") and content != "-تسفير-الكل":
-
-            await message.channel.send(
-                "❌ **غلط، طريقة الاستخدام:**\n"
-                "`-تسفير-الكل`"
-            )
-
-            return
-
-        # السماح لباقي أوامر البوت بالعمل
-        await self.bot.process_commands(message)
-
-    # =====================================================
     # أمر تسفير الكل
     # =====================================================
 
     @commands.command(name="تسفير-الكل")
     async def tasfeer_all(self, ctx):
 
+        # -------------------------------------------------
         # يعمل فقط في الروم المحدد
+        # -------------------------------------------------
+
         if ctx.channel.id != COMMAND_ROOM_ID:
             return
 
+        # -------------------------------------------------
         # يعمل فقط مع الرتبة المحددة
+        # -------------------------------------------------
+
         if not any(role.id == ALLOWED_ROLE_ID for role in ctx.author.roles):
             return
 
@@ -80,7 +52,7 @@ class TestCog(commands.Cog):
         )
 
         # -------------------------------------------------
-        # العد التنازلي 30 → 1
+        # العد التنازلي من 30 إلى 1
         # -------------------------------------------------
 
         for number in range(29, 0, -1):
