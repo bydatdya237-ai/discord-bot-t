@@ -1,7 +1,6 @@
 import os
 import asyncio
 import random
-import time
 
 import discord
 from discord.ext import commands
@@ -14,12 +13,30 @@ from pymongo import MongoClient
 
 GAME_CHANNEL_ID = 1550797517237518417
 
-ALLOWED_ROLE_ID = 1544078469657530578
+# رتبة التحكم بالألعاب والبوت
+CONTROL_ROLE_ID = 1544078469657530578
+
+# رتبة اللاعبين
+PLAYER_ROLE_ID = 1544078847253811331
+
+# عدد اللاعبين
+MIN_PLAYERS = 2
+MAX_PLAYERS = 15
+
+# مدة الـ Lobby
+LOBBY_TIMEOUT = 600
+
+
+# =========================================================
+# MongoDB
+# =========================================================
 
 MONGO_URI = os.environ.get("MONGO_URI")
 
 if not MONGO_URI:
-    raise RuntimeError("❌ MONGO_URI غير موجود في Environment Variables")
+    raise RuntimeError(
+        "❌ MONGO_URI غير موجود في Environment Variables"
+    )
 
 mongo_client = MongoClient(MONGO_URI)
 
@@ -29,50 +46,57 @@ GAME_STATS = db["game_stats"]
 
 
 # =========================================================
-# إعدادات عامة
+# أدوات مساعدة
 # =========================================================
 
-MIN_PLAYERS = 2
-MAX_PLAYERS = 15
-
-GAME_TIMEOUT = 600
-
-
-# =========================================================
-# دوال مساعدة
-# =========================================================
-
-def has_game_role(member: discord.Member) -> bool:
-    return any(role.id == ALLOWED_ROLE_ID for role in member.roles)
+def is_control_member(member: discord.Member) -> bool:
+    return any(
+        role.id == CONTROL_ROLE_ID
+        for role in member.roles
+    )
 
 
-def format_number(number: int) -> str:
-    return f"{number:,}"
+def is_player_member(member: discord.Member) -> bool:
+    return any(
+        role.id == PLAYER_ROLE_ID
+        for role in member.roles
+    )
 
 
 def get_stats(user_id: int):
-    data = GAME_STATS.find_one({"user_id": user_id})
 
-    if not data:
+    data = GAME_STATS.find_one(
+        {"user_id": user_id}
+    )
+
+    if data is None:
+
         data = {
             "user_id": user_id,
-            "wins": 0,
+            "points": 0,
             "games": 0,
-            "points": 0
+            "wins": 0
         }
+
         GAME_STATS.insert_one(data)
 
     return data
 
 
-def add_game(user_id: int, win=False, points=0):
+def add_stats(
+    user_id: int,
+    points: int = 0,
+    games: int = 0,
+    wins: int = 0
+):
+
     GAME_STATS.update_one(
         {"user_id": user_id},
         {
             "$inc": {
-                "games": 1,
-                "wins": 1 if win else 0,
-                "points": points
+                "points": points,
+                "games": games,
+                "wins": wins
             },
             "$setOnInsert": {
                 "user_id": user_id
@@ -82,8 +106,23 @@ def add_game(user_id: int, win=False, points=0):
     )
 
 
+def reset_player(user_id: int):
+
+    GAME_STATS.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "points": 0,
+                "games": 0,
+                "wins": 0
+            }
+        },
+        upsert=True
+    )
+
+
 # =========================================================
-# Game Manager
+# مدير الألعاب
 # =========================================================
 
 class GameManager:
@@ -105,112 +144,152 @@ GAME_MANAGER = GameManager()
 
 
 # =========================================================
-# Base View
+# View أساسي
 # =========================================================
 
-class BaseGameView(discord.ui.View):
+class BaseView(discord.ui.View):
 
-    def __init__(self, cog, timeout=GAME_TIMEOUT):
-        super().__init__(timeout=timeout)
+    def __init__(
+        self,
+        cog,
+        timeout=LOBBY_TIMEOUT
+    ):
+
+        super().__init__(
+            timeout=timeout
+        )
+
         self.cog = cog
-        self.message = None
-
-    async def interaction_check(self, interaction: discord.Interaction):
-
-        if interaction.channel_id != GAME_CHANNEL_ID:
-            await interaction.response.send_message(
-                "هذه اللعبة لا تعمل هنا.",
-                ephemeral=True
-            )
-            return False
-
-        if not has_game_role(interaction.user):
-            await interaction.response.send_message(
-                "❌ ليس لديك صلاحية استخدام ألعاب السيرفر.",
-                ephemeral=True
-            )
-            return False
-
-        return True
 
 
 # =========================================================
-# القائمة الرئيسية
+# القائمة الرئيسية للألعاب
 # =========================================================
 
-class GamesMenuView(BaseGameView):
+class GamesSelectView(BaseView):
 
     def __init__(self, cog):
-        super().__init__(cog, timeout=180)
 
-    @discord.ui.button(
-        label="🎲 أعلى نرد",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def dice_game(self, interaction, button):
-
-        await self.cog.create_game(
-            interaction,
-            DiceGame(self.cog)
+        super().__init__(
+            cog,
+            timeout=180
         )
 
-    @discord.ui.button(
-        label="⚡ أسرع إجابة",
-        style=discord.ButtonStyle.success,
-        row=0
-    )
-    async def speed_game(self, interaction, button):
-
-        await self.cog.create_game(
-            interaction,
-            SpeedGame(self.cog)
+        self.add_item(
+            GamesSelect(cog)
         )
 
-    @discord.ui.button(
-        label="💣 القنبلة",
-        style=discord.ButtonStyle.danger,
-        row=1
-    )
-    async def bomb_game(self, interaction, button):
 
-        await self.cog.create_game(
-            interaction,
-            BombGame(self.cog)
+class GamesSelect(discord.ui.Select):
+
+    def __init__(self, cog):
+
+        self.cog = cog
+
+        options = [
+
+            discord.SelectOption(
+                label="أعلى نرد",
+                description="ارمِ النرد وحاول الحصول على أعلى رقم",
+                emoji="🎲",
+                value="dice"
+            ),
+
+            discord.SelectOption(
+                label="أسرع إجابة",
+                description="كن أسرع لاعب في اختيار الإجابة الصحيحة",
+                emoji="⚡",
+                value="speed"
+            ),
+
+            discord.SelectOption(
+                label="القنبلة",
+                description="مرر القنبلة وحاول ألا تنفجر معك",
+                emoji="💣",
+                value="bomb"
+            ),
+
+            discord.SelectOption(
+                label="خمن الرقم",
+                description="حاول معرفة الرقم السري",
+                emoji="🔢",
+                value="guess"
+            ),
+
+            discord.SelectOption(
+                label="الهروب من الغرفة",
+                description="حل الألغاز مع اللاعبين واهرب",
+                emoji="🔐",
+                value="escape"
+            )
+
+        ]
+
+        super().__init__(
+            placeholder="🎮 اختر اللعبة التي تريد تشغيلها...",
+            min_values=1,
+            max_values=1,
+            options=options
         )
 
-    @discord.ui.button(
-        label="🔢 خمن الرقم",
-        style=discord.ButtonStyle.primary,
-        row=1
-    )
-    async def guess_game(self, interaction, button):
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
-        await self.cog.create_game(
+        if interaction.channel_id != GAME_CHANNEL_ID:
+            return
+
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية تشغيل الألعاب.",
+                ephemeral=True
+            )
+
+            return
+
+        if GAME_MANAGER.is_active():
+
+            await interaction.response.send_message(
+                "🎮 **يوجد لعبة جارية بالفعل!**",
+                ephemeral=True
+            )
+
+            return
+
+        value = self.values[0]
+
+        if value == "dice":
+            game = DiceGame(self.cog)
+
+        elif value == "speed":
+            game = SpeedGame(self.cog)
+
+        elif value == "bomb":
+            game = BombGame(self.cog)
+
+        elif value == "guess":
+            game = GuessGame(self.cog)
+
+        elif value == "escape":
+            game = EscapeGame(self.cog)
+
+        else:
+            return
+
+        await self.cog.start_game(
             interaction,
-            GuessGame(self.cog)
+            game
         )
-
-    @discord.ui.button(
-        label="🔐 الهروب من الغرفة",
-        style=discord.ButtonStyle.secondary,
-        row=2
-    )
-    async def escape_game(self, interaction, button):
-
-        await self.cog.create_game(
-            interaction,
-            EscapeGame(self.cog)
-        )
-
-    @discord.ui.button(
-        label="🏆 الترتيب",
-        style=discord.ButtonStyle.secondary,
-        row=2
-    )
-    async def leaderboard(self, interaction, button):
-
-        await self.cog.show_leaderboard(interaction)
 
 
 # =========================================================
@@ -220,6 +299,8 @@ class GamesMenuView(BaseGameView):
 class BaseGame:
 
     name = "لعبة"
+
+    description = ""
 
     def __init__(self, cog):
 
@@ -233,9 +314,12 @@ class BaseGame:
 
         self.finished = False
 
-        self.lock = asyncio.Lock()
+    # -----------------------------------------------------
 
-    def add_player(self, member):
+    def add_player(
+        self,
+        member: discord.Member
+    ):
 
         if member.id in self.players:
             return False
@@ -243,75 +327,62 @@ class BaseGame:
         if len(self.players) >= MAX_PLAYERS:
             return False
 
-        self.players[member.id] = member
+        self.players[
+            member.id
+        ] = member
 
         return True
 
-    def remove_player(self, user_id):
+    # -----------------------------------------------------
 
-        self.players.pop(user_id, None)
-
-    def player_mentions(self):
+    def player_list(self):
 
         if not self.players:
+
             return "لا يوجد لاعبين حتى الآن."
 
         return "\n".join(
-            f"{index}. {member.mention}"
+            f"**{index}.** {member.mention}"
             for index, member in enumerate(
                 self.players.values(),
                 start=1
             )
         )
 
+    # -----------------------------------------------------
+
     def lobby_embed(self):
 
         embed = discord.Embed(
             title=f"🎮 {self.name}",
             description=(
-                "اضغط **انضمام** للدخول إلى اللعبة.\n\n"
-                f"👥 اللاعبين: **{len(self.players)}/{MAX_PLAYERS}**\n\n"
-                "عندما يصل العدد إلى لاعبين أو أكثر "
-                "يمكن بدء اللعبة."
+                f"{self.description}\n\n"
+                "اضغط **انضمام** للدخول إلى اللعبة.\n"
+                "بعد دخول اللاعبين يستطيع المشرف بدء اللعبة."
             )
         )
 
         embed.add_field(
-            name="👥 اللاعبون",
-            value=self.player_mentions(),
+            name="👥 اللاعبين",
+            value=(
+                f"**{len(self.players)}/{MAX_PLAYERS}**"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="📋 القائمة",
+            value=self.player_list(),
             inline=False
+        )
+
+        embed.set_footer(
+            text="اللاعبون يحتاجون رتبة المشاركة"
         )
 
         return embed
 
-    async def start_game(self, interaction):
-
-        if len(self.players) < MIN_PLAYERS:
-
-            await interaction.response.send_message(
-                f"❌ تحتاج إلى {MIN_PLAYERS} لاعبين على الأقل.",
-                ephemeral=True
-            )
-
-            return
-
-        if self.started:
-
-            await interaction.response.send_message(
-                "اللعبة بدأت بالفعل.",
-                ephemeral=True
-            )
-
-            return
-
-        self.started = True
-
-        await interaction.response.defer()
-
-        await self.run()
-
-    async def run(self):
-        raise NotImplementedError
+    # -----------------------------------------------------
 
     async def finish(self):
 
@@ -322,29 +393,78 @@ class BaseGame:
 
         GAME_MANAGER.stop()
 
+    # -----------------------------------------------------
+
+    async def run(self):
+
+        raise NotImplementedError
+
 
 # =========================================================
 # Lobby View
 # =========================================================
 
-class GameLobbyView(BaseGameView):
+class GameLobbyView(BaseView):
 
-    def __init__(self, cog, game):
+    def __init__(
+        self,
+        cog,
+        game
+    ):
 
-        super().__init__(cog)
+        super().__init__(
+            cog,
+            timeout=LOBBY_TIMEOUT
+        )
 
         self.game = game
 
+    # -----------------------------------------------------
+
     @discord.ui.button(
-        label="🎮 انضمام",
+        label="انضمام",
+        emoji="🎮",
         style=discord.ButtonStyle.success
     )
-    async def join(self, interaction, button):
+    async def join(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if interaction.channel_id != GAME_CHANNEL_ID:
+            return
+
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ):
+            return
 
         if self.game.started:
 
             await interaction.response.send_message(
-                "اللعبة بدأت بالفعل.",
+                "❌ اللعبة بدأت بالفعل.",
+                ephemeral=True
+            )
+
+            return
+
+        if not is_player_member(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "❌ تحتاج رتبة المشاركة حتى تنضم إلى الألعاب.",
+                ephemeral=True
+            )
+
+            return
+
+        if interaction.user.id in self.game.players:
+
+            await interaction.response.send_message(
+                "✅ أنت داخل اللعبة بالفعل.",
                 ephemeral=True
             )
 
@@ -353,122 +473,206 @@ class GameLobbyView(BaseGameView):
         if len(self.game.players) >= MAX_PLAYERS:
 
             await interaction.response.send_message(
-                "❌ اللعبة ممتلئة.",
+                "❌ اللعبة وصلت للحد الأقصى من اللاعبين.",
                 ephemeral=True
             )
 
             return
 
-        if self.game.add_player(interaction.user):
+        self.game.add_player(
+            interaction.user
+        )
 
-            await interaction.response.edit_message(
-                embed=self.game.lobby_embed(),
-                view=self
-            )
+        await interaction.response.edit_message(
+            embed=self.game.lobby_embed(),
+            view=self
+        )
 
-        else:
+    # -----------------------------------------------------
+
+    @discord.ui.button(
+        label="بدء اللعبة",
+        emoji="🚀",
+        style=discord.ButtonStyle.primary
+    )
+    async def start(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            interaction.user
+        ):
 
             await interaction.response.send_message(
-                "أنت داخل اللعبة بالفعل.",
+                "❌ فقط رتبة التحكم تستطيع بدء اللعبة.",
                 ephemeral=True
             )
 
-    @discord.ui.button(
-        label="🚀 بدء اللعبة",
-        style=discord.ButtonStyle.primary
-    )
-    async def start(self, interaction, button):
+            return
 
-        await self.game.start_game(interaction)
+        if len(self.game.players) < MIN_PLAYERS:
+
+            await interaction.response.send_message(
+                f"❌ تحتاج إلى {MIN_PLAYERS} لاعبين على الأقل.",
+                ephemeral=True
+            )
+
+            return
+
+        if self.game.started:
+
+            await interaction.response.send_message(
+                "❌ اللعبة بدأت بالفعل.",
+                ephemeral=True
+            )
+
+            return
+
+        self.game.started = True
+
+        await interaction.response.defer()
+
+        await self.game.run()
+
+    # -----------------------------------------------------
 
     @discord.ui.button(
-        label="❌ إلغاء",
+        label="إلغاء اللعبة",
+        emoji="❌",
         style=discord.ButtonStyle.danger
     )
-    async def cancel(self, interaction, button):
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "❌ فقط رتبة التحكم تستطيع إلغاء اللعبة.",
+                ephemeral=True
+            )
+
+            return
 
         await self.game.finish()
 
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title="❌ تم إلغاء اللعبة",
-                description="تم إلغاء اللعبة من قبل أحد اللاعبين."
+                description=(
+                    "تم إلغاء اللعبة من قبل الإدارة."
+                )
             ),
             view=None
         )
 
 
 # =========================================================
-# 🎲 لعبة أعلى نرد
+# 🎲 أعلى نرد
 # =========================================================
 
 class DiceGame(BaseGame):
 
     name = "🎲 أعلى نرد"
 
+    description = (
+        "كل لاعب يرمي النرد مرة واحدة.\n"
+        "صاحب أعلى نتيجة يفوز."
+    )
+
     async def run(self):
 
-        results = {}
+        self.results = {}
 
         embed = discord.Embed(
-            title=self.name,
+            title="🎲 أعلى نرد",
             description=(
-                "🎲 حان وقت النرد!\n\n"
-                "كل لاعب لديه محاولة واحدة."
+                "اضغط الزر بالأسفل وارمِ النرد.\n\n"
+                "كل لاعب لديه **محاولة واحدة فقط**."
             )
         )
 
-        view = DiceView(self)
+        self.view = DiceView(
+            self
+        )
 
         await self.message.edit(
             embed=embed,
-            view=view
+            view=self.view
         )
 
     async def finish_rolls(self):
 
-        if len(results := getattr(self, "results", {})) < len(self.players):
-
+        if len(self.results) < len(
+            self.players
+        ):
             return
 
         winner_id = max(
-            results,
-            key=results.get
+            self.results,
+            key=self.results.get
         )
 
-        winner = self.players[winner_id]
+        winner = self.players[
+            winner_id
+        ]
 
-        text = []
+        lines = []
 
-        for user_id, number in results.items():
+        for user_id, number in sorted(
+            self.results.items(),
+            key=lambda x: x[1],
+            reverse=True
+        ):
 
-            member = self.players[user_id]
-
-            text.append(
-                f"{member.mention} → 🎲 **{number}**"
+            lines.append(
+                f"{self.players[user_id].mention} "
+                f"→ 🎲 **{number}**"
             )
 
-        add_game(
+        for user_id in self.players:
+
+            add_stats(
+                user_id,
+                points=20
+            )
+
+        add_stats(
             winner.id,
-            win=True,
-            points=100
+            points=100,
+            wins=1
         )
 
         for user_id in self.players:
 
-            if user_id != winner.id:
-
-                add_game(
-                    user_id,
-                    win=False,
-                    points=20
-                )
+            add_stats(
+                user_id,
+                games=1
+            )
 
         embed = discord.Embed(
             title="🏆 انتهت لعبة أعلى نرد!",
             description=(
                 f"👑 الفائز: {winner.mention}\n\n"
-                + "\n".join(text)
+                + "\n".join(lines)
             )
         )
 
@@ -480,19 +684,30 @@ class DiceGame(BaseGame):
         await self.finish()
 
 
-class DiceView(BaseGameView):
+class DiceView(BaseView):
 
-    def __init__(self, game):
+    def __init__(
+        self,
+        game
+    ):
 
-        super().__init__(game.cog)
+        super().__init__(
+            game.cog,
+            timeout=120
+        )
 
         self.game = game
 
     @discord.ui.button(
-        label="🎲 ارمي النرد",
+        label="ارمِ النرد",
+        emoji="🎲",
         style=discord.ButtonStyle.primary
     )
-    async def roll(self, interaction, button):
+    async def roll(
+        self,
+        interaction,
+        button
+    ):
 
         if interaction.user.id not in self.game.players:
 
@@ -503,22 +718,23 @@ class DiceView(BaseGameView):
 
             return
 
-        if not hasattr(self.game, "results"):
-
-            self.game.results = {}
-
         if interaction.user.id in self.game.results:
 
             await interaction.response.send_message(
-                "لقد رميت النرد بالفعل.",
+                "❌ لقد رميت النرد بالفعل.",
                 ephemeral=True
             )
 
             return
 
-        number = random.randint(1, 100)
+        number = random.randint(
+            1,
+            100
+        )
 
-        self.game.results[interaction.user.id] = number
+        self.game.results[
+            interaction.user.id
+        ] = number
 
         await interaction.response.send_message(
             f"🎲 نتيجتك: **{number}**",
@@ -535,34 +751,60 @@ class DiceView(BaseGameView):
 QUESTIONS = [
 
     {
-        "q": "كم عدد أيام الأسبوع؟",
-        "answers": ["5", "6", "7", "8"],
+        "question": "كم عدد أيام الأسبوع؟",
+        "answers": [
+            "5",
+            "6",
+            "7",
+            "8"
+        ],
         "correct": "7"
     },
 
     {
-        "q": "ما هو الكوكب المعروف بالكوكب الأحمر؟",
-        "answers": ["المريخ", "الأرض", "الزهرة", "عطارد"],
-        "correct": "المريخ"
-    },
-
-    {
-        "q": "كم يساوي 10 × 10؟",
-        "answers": ["50", "100", "150", "200"],
-        "correct": "100"
-    },
-
-    {
-        "q": "ما عاصمة الأردن؟",
-        "answers": ["عمان", "إربد", "العقبة", "الزرقاء"],
+        "question": "ما عاصمة الأردن؟",
+        "answers": [
+            "عمان",
+            "إربد",
+            "العقبة",
+            "الزرقاء"
+        ],
         "correct": "عمان"
     },
 
     {
-        "q": "كم عدد أشهر السنة؟",
-        "answers": ["10", "11", "12", "13"],
+        "question": "كم يساوي 10 × 10؟",
+        "answers": [
+            "50",
+            "100",
+            "150",
+            "200"
+        ],
+        "correct": "100"
+    },
+
+    {
+        "question": "ما هو الكوكب الأحمر؟",
+        "answers": [
+            "الأرض",
+            "المريخ",
+            "الزهرة",
+            "عطارد"
+        ],
+        "correct": "المريخ"
+    },
+
+    {
+        "question": "كم عدد أشهر السنة؟",
+        "answers": [
+            "10",
+            "11",
+            "12",
+            "13"
+        ],
         "correct": "12"
     }
+
 ]
 
 
@@ -570,14 +812,19 @@ class SpeedGame(BaseGame):
 
     name = "⚡ أسرع إجابة"
 
-    async def run(self):
+    description = (
+        "أجب بأسرع ما يمكنك.\n"
+        "كل إجابة صحيحة تمنحك نقطة."
+    )
 
-        self.round = 0
+    async def run(self):
 
         self.scores = {
             user_id: 0
             for user_id in self.players
         }
+
+        self.round = 0
 
         await self.next_question()
 
@@ -589,55 +836,67 @@ class SpeedGame(BaseGame):
 
             return
 
-        question = QUESTIONS[self.round]
+        self.current_question = QUESTIONS[
+            self.round
+        ]
 
         embed = discord.Embed(
             title="⚡ أسرع إجابة",
             description=(
-                f"**السؤال {self.round + 1}/{len(QUESTIONS)}**\n\n"
-                f"🧠 {question['q']}"
+                f"### السؤال {self.round + 1}/"
+                f"{len(QUESTIONS)}\n\n"
+                f"🧠 **{self.current_question['question']}**"
             )
         )
 
         embed.add_field(
-            name="📊 النقاط",
+            name="🏆 النقاط",
             value="\n".join(
-                f"{self.players[user_id].mention} — {score}"
+                f"{self.players[user_id].mention} "
+                f"→ **{score}**"
                 for user_id, score in self.scores.items()
             ),
             inline=False
         )
 
-        self.current_question = question
-
-        view = SpeedAnswerView(self)
+        view = SpeedView(
+            self
+        )
 
         await self.message.edit(
             embed=embed,
             view=view
         )
 
-    async def answer(self, interaction, answer):
+    async def answer(
+        self,
+        interaction,
+        answer
+    ):
 
         if answer == self.current_question["correct"]:
 
-            self.scores[interaction.user.id] += 1
+            self.scores[
+                interaction.user.id
+            ] += 1
 
             await interaction.response.send_message(
-                "✅ إجابة صحيحة! +1 نقطة",
+                "✅ إجابة صحيحة! **+1**",
                 ephemeral=True
             )
 
             self.round += 1
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(
+                0.8
+            )
 
             await self.next_question()
 
         else:
 
             await interaction.response.send_message(
-                "❌ إجابة خاطئة!",
+                "❌ إجابة خاطئة.",
                 ephemeral=True
             )
 
@@ -648,8 +907,6 @@ class SpeedGame(BaseGame):
             key=self.scores.get
         )
 
-        winner = self.players[winner_id]
-
         ranking = sorted(
             self.scores.items(),
             key=lambda x: x[1],
@@ -658,20 +915,29 @@ class SpeedGame(BaseGame):
 
         lines = []
 
-        for index, (user_id, score) in enumerate(
+        for index, (
+            user_id,
+            score
+        ) in enumerate(
             ranking,
             start=1
         ):
 
             lines.append(
-                f"**{index}.** {self.players[user_id].mention} — "
-                f"**{score}** نقطة"
+                f"**{index}.** "
+                f"{self.players[user_id].mention} "
+                f"→ **{score} نقطة**"
             )
 
-            add_game(
+            add_stats(
                 user_id,
-                win=user_id == winner_id,
-                points=score * 25
+                games=1,
+                points=score * 25,
+                wins=(
+                    1
+                    if user_id == winner_id
+                    else 0
+                )
             )
 
         embed = discord.Embed(
@@ -687,17 +953,23 @@ class SpeedGame(BaseGame):
         await self.finish()
 
 
-class SpeedAnswerView(BaseGameView):
+class SpeedView(BaseView):
 
-    def __init__(self, game):
+    def __init__(
+        self,
+        game
+    ):
 
-        super().__init__(game.cog, timeout=20)
+        super().__init__(
+            game.cog,
+            timeout=30
+        )
 
         self.game = game
 
-        answers = game.current_question["answers"]
-
-        for index, answer in enumerate(answers):
+        for index, answer in enumerate(
+            game.current_question["answers"]
+        ):
 
             button = discord.ui.Button(
                 label=answer,
@@ -713,7 +985,7 @@ class SpeedAnswerView(BaseGameView):
                 if interaction.user.id not in self.game.players:
 
                     await interaction.response.send_message(
-                        "أنت لست داخل اللعبة.",
+                        "❌ أنت لست داخل اللعبة.",
                         ephemeral=True
                     )
 
@@ -726,42 +998,58 @@ class SpeedAnswerView(BaseGameView):
 
             button.callback = callback
 
-            self.add_item(button)
+            self.add_item(
+                button
+            )
 
 
 # =========================================================
-# 💣 لعبة القنبلة
+# 💣 القنبلة
 # =========================================================
 
 class BombGame(BaseGame):
 
     name = "💣 القنبلة"
 
+    description = (
+        "القنبلة تنتقل بين اللاعبين.\n"
+        "إذا انفجرت معك تخرج من اللعبة."
+    )
+
     async def run(self):
 
-        self.alive = list(self.players.keys())
+        self.alive = list(
+            self.players.keys()
+        )
 
-        self.holder = random.choice(self.alive)
+        self.holder = random.choice(
+            self.alive
+        )
 
-        self.round_number = 1
+        await self.update_bomb()
 
-        await self.bomb_round()
-
-    async def bomb_round(self):
+    async def update_bomb(self):
 
         if len(self.alive) <= 1:
 
-            winner = self.players[self.alive[0]]
+            winner = self.players[
+                self.alive[0]
+            ]
 
-            add_game(
+            add_stats(
                 winner.id,
-                win=True,
-                points=150
+                points=150,
+                games=1,
+                wins=1
             )
 
             embed = discord.Embed(
-                title="🏆 الناجي الأخير!",
-                description=f"👑 الفائز: {winner.mention}"
+                title="🏆 انتهت لعبة القنبلة!",
+                description=(
+                    f"👑 الناجي الأخير: "
+                    f"{winner.mention}\n\n"
+                    "💰 حصل على **150 نقطة**."
+                )
             )
 
             await self.message.edit(
@@ -773,37 +1061,43 @@ class BombGame(BaseGame):
 
             return
 
-        holder = self.players[self.holder]
+        holder = self.players[
+            self.holder
+        ]
 
         embed = discord.Embed(
             title="💣 القنبلة",
             description=(
-                f"💣 القنبلة الآن مع {holder.mention}\n\n"
-                "اضغط زر **تمرير القنبلة** واختر لاعبًا."
+                f"💣 القنبلة مع الآن: "
+                f"{holder.mention}\n\n"
+                "يجب على حامل القنبلة اختيار لاعب "
+                "لتمريرها إليه."
             )
         )
 
         embed.add_field(
-            name="👥 اللاعبون",
+            name="👥 اللاعبين المتبقين",
             value="\n".join(
                 self.players[user_id].mention
                 for user_id in self.alive
             )
         )
 
-        view = BombView(self)
-
         await self.message.edit(
             embed=embed,
-            view=view
+            view=BombView(self)
         )
 
-    async def pass_bomb(self, interaction, target_id):
+    async def pass_bomb(
+        self,
+        interaction,
+        target_id
+    ):
 
         if interaction.user.id != self.holder:
 
             await interaction.response.send_message(
-                "❌ القنبلة ليست معك!",
+                "❌ القنبلة ليست معك.",
                 ephemeral=True
             )
 
@@ -812,7 +1106,7 @@ class BombGame(BaseGame):
         if target_id not in self.alive:
 
             await interaction.response.send_message(
-                "هذا اللاعب خرج من اللعبة.",
+                "❌ هذا اللاعب خرج من اللعبة.",
                 ephemeral=True
             )
 
@@ -823,23 +1117,38 @@ class BombGame(BaseGame):
         await interaction.response.defer()
 
         await asyncio.sleep(
-            random.uniform(2, 5)
+            random.uniform(
+                1.5,
+                3
+            )
         )
 
-        # احتمال انفجار القنبلة
-        if random.random() < 0.25:
+        exploded = random.random() < 0.25
+
+        if exploded:
 
             eliminated = self.holder
 
-            self.alive.remove(eliminated)
+            self.alive.remove(
+                eliminated
+            )
 
-            member = self.players[eliminated]
+            member = self.players[
+                eliminated
+            ]
+
+            add_stats(
+                eliminated,
+                games=1
+            )
 
             embed = discord.Embed(
                 title="💥 انفجرت القنبلة!",
                 description=(
-                    f"💥 خرج {member.mention} من اللعبة!\n\n"
-                    f"👥 المتبقون: **{len(self.alive)}**"
+                    f"💣 خرج {member.mention} "
+                    "من اللعبة!\n\n"
+                    f"👥 المتبقون: "
+                    f"**{len(self.alive)}**"
                 )
             )
 
@@ -848,24 +1157,34 @@ class BombGame(BaseGame):
                 view=None
             )
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(
+                1.5
+            )
 
             if self.alive:
 
-                self.holder = random.choice(self.alive)
+                self.holder = random.choice(
+                    self.alive
+                )
 
-            await self.bomb_round()
+            await self.update_bomb()
 
         else:
 
-            await self.bomb_round()
+            await self.update_bomb()
 
 
-class BombView(BaseGameView):
+class BombView(BaseView):
 
-    def __init__(self, game):
+    def __init__(
+        self,
+        game
+    ):
 
-        super().__init__(game.cog, timeout=30)
+        super().__init__(
+            game.cog,
+            timeout=60
+        )
 
         self.game = game
 
@@ -876,7 +1195,10 @@ class BombView(BaseGameView):
 
 class BombSelect(discord.ui.Select):
 
-    def __init__(self, game):
+    def __init__(
+        self,
+        game
+    ):
 
         self.game = game
 
@@ -884,7 +1206,9 @@ class BombSelect(discord.ui.Select):
 
         for user_id in game.alive:
 
-            member = game.players[user_id]
+            member = game.players[
+                user_id
+            ]
 
             options.append(
                 discord.SelectOption(
@@ -894,13 +1218,20 @@ class BombSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="💣 اختر اللاعب الذي ستمرر له القنبلة...",
+            placeholder="💣 اختر لاعبًا لتمرير القنبلة...",
+            min_values=1,
+            max_values=1,
             options=options
         )
 
-    async def callback(self, interaction):
+    async def callback(
+        self,
+        interaction
+    ):
 
-        target_id = int(self.values[0])
+        target_id = int(
+            self.values[0]
+        )
 
         await self.game.pass_bomb(
             interaction,
@@ -916,9 +1247,17 @@ class GuessGame(BaseGame):
 
     name = "🔢 خمن الرقم"
 
+    description = (
+        "البوت اختار رقمًا من 1 إلى 100.\n"
+        "أول لاعب يجده يفوز."
+    )
+
     async def run(self):
 
-        self.number = random.randint(1, 100)
+        self.number = random.randint(
+            1,
+            100
+        )
 
         self.attempts = {
             user_id: 0
@@ -928,41 +1267,54 @@ class GuessGame(BaseGame):
         embed = discord.Embed(
             title="🔢 خمن الرقم",
             description=(
-                "البوت اختار رقمًا من **1 إلى 100**.\n\n"
-                "كل لاعب لديه محاولات حتى يجد الرقم."
+                "لقد اخترت رقمًا سريًا من **1 إلى 100**.\n\n"
+                "اضغط **خمن** وأدخل رقمك."
             )
         )
 
-        view = GuessView(self)
-
         await self.message.edit(
             embed=embed,
-            view=view
+            view=GuessView(self)
         )
 
-    async def guess(self, interaction, number):
+    async def guess(
+        self,
+        interaction,
+        number
+    ):
 
-        self.attempts[interaction.user.id] += 1
+        self.attempts[
+            interaction.user.id
+        ] += 1
 
         if number == self.number:
 
-            attempts = self.attempts[interaction.user.id]
+            attempts = self.attempts[
+                interaction.user.id
+            ]
 
-            add_game(
-                interaction.user.id,
-                win=True,
-                points=max(
-                    50,
-                    200 - attempts * 20
+            points = max(
+                50,
+                200 - (
+                    attempts * 20
                 )
+            )
+
+            add_stats(
+                interaction.user.id,
+                points=points,
+                games=1,
+                wins=1
             )
 
             embed = discord.Embed(
                 title="🏆 تم العثور على الرقم!",
                 description=(
-                    f"🎯 الرقم كان: **{self.number}**\n\n"
-                    f"👑 الفائز: {interaction.user.mention}\n"
-                    f"🔢 عدد محاولاته: **{attempts}**"
+                    f"🎯 الرقم هو: **{self.number}**\n\n"
+                    f"👑 الفائز: "
+                    f"{interaction.user.mention}\n"
+                    f"🔢 المحاولات: **{attempts}**\n"
+                    f"⭐ النقاط: **{points}**"
                 )
             )
 
@@ -977,21 +1329,24 @@ class GuessGame(BaseGame):
 
         if number < self.number:
 
-            message = "⬆️ الرقم أكبر."
+            text = "⬆️ الرقم أكبر."
 
         else:
 
-            message = "⬇️ الرقم أصغر."
+            text = "⬇️ الرقم أصغر."
 
         await interaction.response.send_message(
-            message,
+            text,
             ephemeral=True
         )
 
 
 class GuessModal(discord.ui.Modal):
 
-    def __init__(self, game):
+    def __init__(
+        self,
+        game
+    ):
 
         super().__init__(
             title="🔢 خمن الرقم"
@@ -1006,18 +1361,25 @@ class GuessModal(discord.ui.Modal):
             max_length=3
         )
 
-        self.add_item(self.number)
+        self.add_item(
+            self.number
+        )
 
-    async def on_submit(self, interaction):
+    async def on_submit(
+        self,
+        interaction
+    ):
 
         try:
 
-            number = int(self.number.value)
+            number = int(
+                self.number.value
+            )
 
         except ValueError:
 
             await interaction.response.send_message(
-                "❌ يجب إدخال رقم صحيح.",
+                "❌ أدخل رقمًا صحيحًا.",
                 ephemeral=True
             )
 
@@ -1038,19 +1400,29 @@ class GuessModal(discord.ui.Modal):
         )
 
 
-class GuessView(BaseGameView):
+class GuessView(BaseView):
 
-    def __init__(self, game):
+    def __init__(
+        self,
+        game
+    ):
 
-        super().__init__(game.cog)
+        super().__init__(
+            game.cog
+        )
 
         self.game = game
 
     @discord.ui.button(
-        label="🔢 خمن",
+        label="خمن",
+        emoji="🔢",
         style=discord.ButtonStyle.primary
     )
-    async def guess(self, interaction, button):
+    async def guess(
+        self,
+        interaction,
+        button
+    ):
 
         if interaction.user.id not in self.game.players:
 
@@ -1062,7 +1434,9 @@ class GuessView(BaseGameView):
             return
 
         await interaction.response.send_modal(
-            GuessModal(self.game)
+            GuessModal(
+                self.game
+            )
         )
 
 
@@ -1074,11 +1448,15 @@ class EscapeGame(BaseGame):
 
     name = "🔐 الهروب من الغرفة"
 
+    description = (
+        "تعاونوا لحل 3 ألغاز والهروب من الغرفة."
+    )
+
     async def run(self):
 
         self.stage = 1
 
-        self.correct_answers = {
+        self.answers = {
             1: "مفتاح",
             2: "247",
             3: "المرآة"
@@ -1090,22 +1468,21 @@ class EscapeGame(BaseGame):
 
         if self.stage > 3:
 
-            winners = list(self.players.values())
+            for user_id in self.players:
 
-            for member in winners:
-
-                add_game(
-                    member.id,
-                    win=True,
-                    points=100
+                add_stats(
+                    user_id,
+                    points=100,
+                    games=1,
+                    wins=1
                 )
 
             embed = discord.Embed(
                 title="🎉 نجحتم في الهروب!",
                 description=(
-                    "🔐 تمكن جميع اللاعبين من حل الألغاز "
-                    "والخروج من الغرفة!\n\n"
-                    "🏆 جميع المشاركين حصلوا على **100 نقطة**."
+                    "🔐 تم حل جميع الألغاز!\n\n"
+                    "🏆 جميع اللاعبين حصلوا على "
+                    "**100 نقطة**."
                 )
             )
 
@@ -1120,11 +1497,10 @@ class EscapeGame(BaseGame):
 
         if self.stage == 1:
 
-            text = (
+            question = (
                 "🔐 **الغرفة الأولى**\n\n"
                 "الباب مغلق.\n"
-                "أمامك عدة أشياء، لكن أحدها سيساعدك على فتح الباب.\n\n"
-                "ما الشيء الذي تبحث عنه؟"
+                "ما الشيء الذي تحتاجه لفتحه؟"
             )
 
             options = [
@@ -1136,13 +1512,10 @@ class EscapeGame(BaseGame):
 
         elif self.stage == 2:
 
-            text = (
+            question = (
                 "🔐 **الغرفة الثانية**\n\n"
-                "وجدتم خزنة تحتاج إلى رقم مكون من 3 أرقام.\n\n"
-                "🧩 التلميح:\n"
-                "2 + 4 = 6\n"
-                "2 × 4 = 8\n"
-                "لكن الرمز المطلوب هو الرقم السري الموجود في اللغز."
+                "وجدتم خزنة مكونة من 3 أرقام.\n\n"
+                "🧩 التلميح يقودكم إلى الرمز الصحيح."
             )
 
             options = [
@@ -1154,10 +1527,9 @@ class EscapeGame(BaseGame):
 
         else:
 
-            text = (
+            question = (
                 "🔐 **الغرفة الأخيرة**\n\n"
-                "أمامكم باب لا يفتح إلا إذا عرفتم الشيء "
-                "الذي يعكس كل شيء أمامه.\n\n"
+                "شيء يعكس كل شيء أمامه.\n\n"
                 "ما هو؟"
             )
 
@@ -1170,57 +1542,69 @@ class EscapeGame(BaseGame):
 
         embed = discord.Embed(
             title="🔐 الهروب من الغرفة",
-            description=text
+            description=question
         )
 
         embed.set_footer(
             text=f"المرحلة {self.stage}/3"
         )
 
-        view = EscapeView(
-            self,
-            options
-        )
-
         await self.message.edit(
             embed=embed,
-            view=view
+            view=EscapeView(
+                self,
+                options
+            )
         )
 
-    async def answer(self, interaction, answer):
+    async def answer(
+        self,
+        interaction,
+        answer
+    ):
 
-        correct = self.correct_answers[self.stage]
-
-        if answer == correct:
+        if answer == self.answers[
+            self.stage
+        ]:
 
             await interaction.response.send_message(
-                "✅ صحيح! تقدمتوا للمرحلة التالية.",
+                "✅ إجابة صحيحة!",
                 ephemeral=True
             )
 
             self.stage += 1
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(
+                0.8
+            )
 
             await self.update_room()
 
         else:
 
             await interaction.response.send_message(
-                "❌ إجابة خاطئة.",
+                "❌ إجابة خاطئة، حاولوا مرة أخرى.",
                 ephemeral=True
             )
 
 
-class EscapeView(BaseGameView):
+class EscapeView(BaseView):
 
-    def __init__(self, game, options):
+    def __init__(
+        self,
+        game,
+        options
+    ):
 
-        super().__init__(game.cog)
+        super().__init__(
+            game.cog
+        )
 
         self.game = game
 
-        for index, option in enumerate(options):
+        for index, option in enumerate(
+            options
+        ):
 
             button = discord.ui.Button(
                 label=option,
@@ -1249,56 +1633,52 @@ class EscapeView(BaseGameView):
 
             button.callback = callback
 
-            self.add_item(button)
+            self.add_item(
+                button
+            )
 
 
 # =========================================================
-# Cog الرئيسي
+# Cog
 # =========================================================
 
 class GamesCog(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
     # =====================================================
-    # الأمر الرئيسي
+    # -العاب-العب
     # =====================================================
 
     @commands.command(
         name="العاب-العب"
     )
-    async def games(self, ctx):
+    async def games_play(
+        self,
+        ctx
+    ):
 
-        # -------------------------------------------------
-        # الروم
-        # -------------------------------------------------
-
+        # خارج روم الألعاب = تجاهل كامل
         if ctx.channel.id != GAME_CHANNEL_ID:
-
             return
 
-        # -------------------------------------------------
-        # الرتبة
-        # -------------------------------------------------
-
-        if not isinstance(ctx.author, discord.Member):
-
+        if not isinstance(
+            ctx.author,
+            discord.Member
+        ):
             return
 
-        if not has_game_role(ctx.author):
-
-            await ctx.send(
-                "❌ لا تملك رتبة السماح باستخدام ألعاب السيرفر.",
-                delete_after=5
-            )
+        # فقط رتبة التحكم تستطيع فتح قائمة الألعاب
+        if not is_control_member(
+            ctx.author
+        ):
 
             return
-
-        # -------------------------------------------------
-        # منع تشغيل لعبتين
-        # -------------------------------------------------
 
         if GAME_MANAGER.is_active():
 
@@ -1310,27 +1690,32 @@ class GamesCog(commands.Cog):
 
             return
 
-        # -------------------------------------------------
-        # القائمة
-        # -------------------------------------------------
-
         embed = discord.Embed(
             title="🎮 ألعاب السيرفر",
             description=(
-                "اختر اللعبة التي تريد تشغيلها من الأسفل.\n\n"
-                "⚠️ يمكن تشغيل **لعبة واحدة فقط** في نفس الوقت."
+                "اختر اللعبة التي تريد تشغيلها "
+                "من القائمة الموجودة بالأسفل.\n\n"
+                "👑 **الإدارة:** تستطيع تشغيل الألعاب.\n"
+                "👥 **اللاعبون:** يستطيعون الانضمام "
+                "بعد بدء الـLobby."
             )
         )
 
         embed.add_field(
             name="🎲 ألعاب الحظ",
-            value="🎲 أعلى نرد\n💣 القنبلة",
+            value=(
+                "🎲 أعلى نرد\n"
+                "💣 القنبلة"
+            ),
             inline=True
         )
 
         embed.add_field(
             name="🧠 ألعاب الذكاء",
-            value="⚡ أسرع إجابة\n🔢 خمن الرقم",
+            value=(
+                "⚡ أسرع إجابة\n"
+                "🔢 خمن الرقم"
+            ),
             inline=True
         )
 
@@ -1340,20 +1725,20 @@ class GamesCog(commands.Cog):
             inline=True
         )
 
-        embed.set_footer(
-            text="اختر لعبة من الأزرار بالأسفل"
-        )
-
         await ctx.send(
             embed=embed,
-            view=GamesMenuView(self)
+            view=GamesSelectView(self)
         )
 
     # =====================================================
-    # إنشاء اللعبة
+    # بدء اللعبة
     # =====================================================
 
-    async def create_game(self, interaction, game):
+    async def start_game(
+        self,
+        interaction,
+        game
+    ):
 
         if GAME_MANAGER.is_active():
 
@@ -1364,42 +1749,224 @@ class GamesCog(commands.Cog):
 
             return
 
-        GAME_MANAGER.start(game)
-
-        embed = game.lobby_embed()
-
-        view = GameLobbyView(
-            self,
+        GAME_MANAGER.start(
             game
         )
 
+        # نغلق قائمة الاختيار
         await interaction.response.edit_message(
-            embed=embed,
-            view=view
+            embed=discord.Embed(
+                title="🎮 تم اختيار اللعبة",
+                description=(
+                    f"تم اختيار **{game.name}**.\n\n"
+                    "جاري إنشاء Lobby اللعبة..."
+                )
+            ),
+            view=None
         )
 
-        game.message = await interaction.original_response()
+        # رسالة جديدة خاصة باللعبة
+        embed = game.lobby_embed()
+
+        message = await interaction.channel.send(
+            content=(
+                f"🎮 **بدأت لعبة {game.name}!**\n"
+                "يمكن للاعبين الآن الانضمام."
+            ),
+            embed=embed,
+            view=GameLobbyView(
+                self,
+                game
+            )
+        )
+
+        game.message = message
 
     # =====================================================
-    # الترتيب
+    # -تصفير-لاعب
     # =====================================================
 
-    async def show_leaderboard(self, interaction):
+    @commands.command(
+        name="تصفير-لاعب"
+    )
+    async def reset_player_command(
+        self,
+        ctx,
+        member: discord.Member = None
+    ):
+
+        if ctx.channel.id != GAME_CHANNEL_ID:
+            return
+
+        if not isinstance(
+            ctx.author,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            ctx.author
+        ):
+            return
+
+        if member is None:
+
+            await ctx.send(
+                "❌ الاستخدام الصحيح:\n"
+                "`-تصفير-لاعب @الشخص`",
+                delete_after=7
+            )
+
+            return
+
+        reset_player(
+            member.id
+        )
+
+        await ctx.send(
+            f"🧹 تم تصفير إحصائيات "
+            f"{member.mention} بالكامل.",
+            delete_after=5
+        )
+
+    # =====================================================
+    # -اضافة-نقاط
+    # =====================================================
+
+    @commands.command(
+        name="اضافة-نقاط"
+    )
+    async def add_points_command(
+        self,
+        ctx,
+        member: discord.Member = None,
+        points: int = None
+    ):
+
+        if ctx.channel.id != GAME_CHANNEL_ID:
+            return
+
+        if not isinstance(
+            ctx.author,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            ctx.author
+        ):
+            return
+
+        if member is None or points is None:
+
+            await ctx.send(
+                "❌ الاستخدام الصحيح:\n"
+                "`-اضافة-نقاط @الشخص 500`",
+                delete_after=7
+            )
+
+            return
+
+        if points <= 0:
+
+            await ctx.send(
+                "❌ يجب أن تكون النقاط أكبر من صفر.",
+                delete_after=5
+            )
+
+            return
+
+        add_stats(
+            member.id,
+            points=points
+        )
+
+        await ctx.send(
+            f"⭐ تمت إضافة **{points:,}** نقطة "
+            f"إلى {member.mention}.",
+            delete_after=5
+        )
+
+    # =====================================================
+    # -تصفير-نقاط
+    # =====================================================
+
+    @commands.command(
+        name="تصفير-نقاط"
+    )
+    async def reset_points_command(
+        self,
+        ctx
+    ):
+
+        if ctx.channel.id != GAME_CHANNEL_ID:
+            return
+
+        if not isinstance(
+            ctx.author,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            ctx.author
+        ):
+            return
+
+        GAME_STATS.update_many(
+            {},
+            {
+                "$set": {
+                    "points": 0
+                }
+            }
+        )
+
+        await ctx.send(
+            "🧹 تم تصفير **نقاط جميع اللاعبين**.",
+            delete_after=5
+        )
+
+    # =====================================================
+    # -توب-العاب
+    # =====================================================
+
+    @commands.command(
+        name="توب-العاب"
+    )
+    async def top_games(
+        self,
+        ctx
+    ):
+
+        if ctx.channel.id != GAME_CHANNEL_ID:
+            return
+
+        if not isinstance(
+            ctx.author,
+            discord.Member
+        ):
+            return
+
+        if not is_control_member(
+            ctx.author
+        ):
+            return
 
         top = list(
-            GAME_STATS.find(
-                {}
-            ).sort(
+            GAME_STATS.find({})
+            .sort(
                 "points",
                 -1
-            ).limit(10)
+            )
+            .limit(10)
         )
 
         if not top:
 
-            await interaction.response.send_message(
-                "🏆 لا توجد بيانات ألعاب حتى الآن.",
-                ephemeral=True
+            await ctx.send(
+                "🏆 لا توجد إحصائيات حتى الآن.",
+                delete_after=5
             )
 
             return
@@ -1411,39 +1978,36 @@ class GamesCog(commands.Cog):
             start=1
         ):
 
-            user_id = data["user_id"]
+            user_id = data[
+                "user_id"
+            ]
 
-            try:
+            member = ctx.guild.get_member(
+                user_id
+            )
 
-                member = interaction.guild.get_member(
-                    user_id
-                )
+            if member:
 
-                name = (
-                    member.mention
-                    if member
-                    else f"<@{user_id}>"
-                )
+                name = member.mention
 
-            except Exception:
+            else:
 
                 name = f"<@{user_id}>"
 
             lines.append(
                 f"**{index}.** {name}\n"
-                f"└ 🏆 {format_number(data.get('points', 0))} نقطة "
-                f"| 🎮 {data.get('games', 0)} لعبة "
-                f"| 👑 {data.get('wins', 0)} فوز"
+                f"└ ⭐ {data.get('points', 0):,} "
+                f"نقطة | 🏆 {data.get('wins', 0)} "
+                f"فوز | 🎮 {data.get('games', 0)} لعبة"
             )
 
         embed = discord.Embed(
-            title="🏆 ترتيب ألعاب السيرفر",
+            title="🏆 توب ألعاب السيرفر",
             description="\n\n".join(lines)
         )
 
-        await interaction.response.edit_message(
-            embed=embed,
-            view=GamesMenuView(self)
+        await ctx.send(
+            embed=embed
         )
 
 
