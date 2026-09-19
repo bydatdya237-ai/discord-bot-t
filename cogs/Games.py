@@ -1,11 +1,11 @@
 import asyncio
+import os
 import random
-import time
-from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Optional
 
 import discord
 from discord.ext import commands
-from discord import ui
 from pymongo import MongoClient
 
 
@@ -15,330 +15,1941 @@ from pymongo import MongoClient
 
 GAME_CHANNEL_ID = 1550797517237518417
 
-# رتبة التحكم بالألعاب والإدارة
+# رتبة التحكم بالألعاب فقط
 CONTROL_ROLE_ID = 1544078469657530578
 
 # رتبة اللاعبين
 PLAYER_ROLE_ID = 1544078847253811331
 
+# MongoDB
+MONGO_URI = os.environ.get("MONGO_URI")
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["discord_bot_db"]
+
+# مجموعة خاصة بالألعاب
+stats_collection = db["game_stats"]
+
+
 MIN_PLAYERS = 2
 MAX_PLAYERS = 15
 
-MONGO_URL = None
+ROUND_TIME = 35
 
-
-# =========================================================
-# قاعدة البيانات
-# =========================================================
-
-# نأخذ Mongo من البيئة بطريقة آمنة
-import os
-
-MONGO_URL = os.environ.get("MONGO_URI")
-
-mongo_client = MongoClient(MONGO_URL)
-mongo_db = mongo_client["discord_bot_db"]
-
-stats_collection = mongo_db["game_stats"]
-game_history_collection = mongo_db["game_history"]
-
-
-# =========================================================
-# الألوان
-# =========================================================
-
-EMBED_COLOR = 0x8B5CF6
-SUCCESS_COLOR = 0x22C55E
-DANGER_COLOR = 0xEF4444
-GOLD_COLOR = 0xF59E0B
-INFO_COLOR = 0x3B82F6
-DARK_COLOR = 0x111827
-
-
-# =========================================================
-# أسماء الألعاب
-# =========================================================
-
-GAMES = {
-    "dice": "🎲 أعلى نرد",
-    "speed": "⚡ أسرع إجابة",
-    "bomb": "💣 القنبلة",
-    "guess": "🔢 خمن الرقم",
-    "escape": "🔐 الهروب من الغرفة",
-
-    "liar": "🕵️ مين الكذاب؟",
-    "king": "👑 ملك السيرفر",
-    "territory": "🏴 السيطرة على المناطق",
-    "cards": "🃏 ورق الحظ",
-    "memory": "🧠 الذاكرة",
-    "character": "🎭 خمن الشخصية",
-    "auction": "💰 المزاد",
-    "investigation": "🔎 التحقيق",
-    "ship": "🚢 السفينة الغارقة",
-    "battle": "⚔️ معركة اللاعبين",
-    "secret": "🎯 الهدف السري",
-    "words": "🧩 ترتيب الكلمات",
-}
+BOT_NAMES = [
+    "Shadow",
+    "Ghost",
+    "Viper",
+    "Raven",
+    "Titan",
+    "Phantom",
+    "Wolf",
+    "Nova",
+    "Hunter",
+    "Venom",
+    "Blaze",
+    "Storm",
+    "Frost",
+    "Reaper",
+    "Specter",
+]
 
 
 # =========================================================
 # أدوات عامة
 # =========================================================
 
-def is_game_channel(message_or_interaction):
-    channel = getattr(message_or_interaction, "channel", None)
-    return channel and channel.id == GAME_CHANNEL_ID
+def is_game_channel():
+    async def predicate(ctx):
+        return ctx.channel.id == GAME_CHANNEL_ID
+
+    return commands.check(predicate)
 
 
-def has_control_role(member):
+def has_control_role(member: discord.Member):
     return any(role.id == CONTROL_ROLE_ID for role in member.roles)
 
 
-def has_player_role(member):
-    return any(role.id == PLAYER_ROLE_ID for role in member.roles)
-
-
-def get_stats(user_id):
-    data = stats_collection.find_one({"user_id": int(user_id)})
-
+def get_points(user_id: int):
+    data = stats_collection.find_one({"user_id": user_id})
     if not data:
-        data = {
-            "user_id": int(user_id),
-            "points": 0,
-            "wins": 0,
-            "games": 0,
-            "actions": 0,
-        }
-        stats_collection.insert_one(data)
-
-    return data
-
-
-def add_points(user_id, amount):
-    stats_collection.update_one(
-        {"user_id": int(user_id)},
-        {
-            "$inc": {
-                "points": int(amount),
-            }
-        },
-        upsert=True,
-    )
-
-
-def add_game(user_id, won=False):
-    update = {
-        "$inc": {
-            "games": 1,
-        }
-    }
-
-    if won:
-        update["$inc"]["wins"] = 1
-
-    stats_collection.update_one(
-        {"user_id": int(user_id)},
-        update,
-        upsert=True,
-    )
-
-
-def add_action(user_id):
-    stats_collection.update_one(
-        {"user_id": int(user_id)},
-        {
-            "$inc": {
-                "actions": 1
-            }
-        },
-        upsert=True,
-    )
-
-
-def remove_points(user_id, amount):
-    data = get_stats(user_id)
-
-    current = int(data.get("points", 0))
-
-    if current < amount:
-        return False
-
-    result = stats_collection.update_one(
-        {
-            "user_id": int(user_id),
-            "points": {"$gte": int(amount)}
-        },
-        {
-            "$inc": {
-                "points": -int(amount)
-            }
-        }
-    )
-
-    return result.modified_count > 0
-
-
-def get_points(user_id):
-    data = get_stats(user_id)
+        return 0
     return int(data.get("points", 0))
 
 
-def leaderboard(limit=10):
-    return list(
-        stats_collection.find(
-            {},
-            {
-                "user_id": 1,
-                "points": 1,
-                "wins": 1,
-                "games": 1,
-            },
-        )
-        .sort("points", -1)
-        .limit(limit)
+def add_points(user_id: int, amount: int):
+    stats_collection.update_one(
+        {"user_id": user_id},
+        {"$inc": {"points": amount}},
+        upsert=True
+    )
+
+
+def reset_player(user_id: int):
+    stats_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"points": 0}},
+        upsert=True
+    )
+
+
+def reset_all_points():
+    stats_collection.update_many(
+        {},
+        {"$set": {"points": 0}}
     )
 
 
 # =========================================================
-# مدير اللعبة
+# اللاعب
+# =========================================================
+
+@dataclass
+class Player:
+    id: int
+    name: str
+    member: Optional[discord.Member] = None
+    is_bot: bool = False
+
+    alive: bool = True
+    hp: int = 100
+    shield: int = 0
+    score: int = 0
+
+    territory: int = 0
+    action: Optional[str] = None
+    target: Optional[int] = None
+
+    extra: dict = field(default_factory=dict)
+
+    @property
+    def mention(self):
+        if self.member:
+            return self.member.mention
+        return f"🤖 **{self.name}**"
+
+
+# =========================================================
+# مدير الألعاب
 # =========================================================
 
 class GameManager:
     active_game = None
-    active_game_name = None
-    active_game_obj = None
 
     @classmethod
     def running(cls):
         return cls.active_game is not None
 
-    @classmethod
-    def start(cls, game_obj, game_key):
-        cls.active_game = game_key
-        cls.active_game_name = GAMES.get(game_key, game_key)
-        cls.active_game_obj = game_obj
-
-    @classmethod
-    def stop(cls):
-        cls.active_game = None
-        cls.active_game_name = None
-        cls.active_game_obj = None
-
 
 # =========================================================
-# Base Game
+# اللعبة الأساسية
 # =========================================================
 
 class BaseGame:
-    def __init__(self, cog, channel):
+
+    def __init__(self, cog, channel, players):
         self.cog = cog
         self.channel = channel
-        self.players = {}
-        self.started = False
+        self.players = players
+
+        self.round = 0
+        self.max_rounds = 6
+
+        self.message = None
         self.finished = False
-        self.protected = set()
-        self.eliminated = set()
 
-    async def add_player(self, member):
-        if self.started:
-            return False, "اللعبة بدأت بالفعل."
+        self.actions = {}
+        self.targets = {}
 
-        if member.id in self.players:
-            return False, "أنت داخل اللعبة بالفعل."
-
-        if len(self.players) >= MAX_PLAYERS:
-            return False, "اللعبة وصلت للحد الأقصى من اللاعبين."
-
-        self.players[member.id] = member
-        return True, "تم دخولك."
-
-    def active_players(self):
+    def alive_players(self):
         return [
-            member
-            for uid, member in self.players.items()
-            if uid not in self.eliminated
+            p for p in self.players.values()
+            if p.alive
         ]
 
-    async def finish_player_stats(self, winners=None):
-        winners = winners or set()
+    def real_players(self):
+        return [
+            p for p in self.players.values()
+            if not p.is_bot
+        ]
 
-        for uid in self.players:
-            add_game(uid, uid in winners)
+    def get_player(self, user_id):
+        return self.players.get(user_id)
 
-            # نقطة مشاركة لكل لاعب
-            add_points(uid, 1)
+    def random_target(self, player, alive_only=True):
+        choices = [
+            p for p in self.players.values()
+            if p.id != player.id
+            and (p.alive if alive_only else True)
+        ]
 
-        for uid in winners:
-            add_points(uid, 2)
+        return random.choice(choices) if choices else None
 
-    async def eliminate(self, user_id):
-        if user_id in self.players:
-            self.eliminated.add(user_id)
+    async def send(self, content=None, embed=None, view=None):
+        if self.message:
+            try:
+                await self.message.edit(
+                    content=content,
+                    embed=embed,
+                    view=view
+                )
+                return
+            except Exception:
+                pass
+
+        self.message = await self.channel.send(
+            content=content,
+            embed=embed,
+            view=view
+        )
 
     async def finish(self):
         self.finished = True
-        GameManager.stop()
 
-    async def start_game(self):
-        raise NotImplementedError
+        if GameManager.active_game is self:
+            GameManager.active_game = None
+
+    async def award(self, player, amount):
+        if player.is_bot:
+            return
+
+        add_points(player.id, amount)
+
+    async def eliminate(self, player):
+        player.alive = False
+        player.action = None
+        player.target = None
+
+    def alive_text(self):
+        lines = []
+
+        for p in self.players.values():
+            if p.alive:
+                status = f"❤️ {p.hp}" if p.hp else "🟢"
+                lines.append(f"{p.mention} — {status}")
+
+        return "\n".join(lines) or "لا يوجد لاعبين."
+
+    async def timeout_sleep(self, seconds):
+        await asyncio.sleep(seconds)
 
 
 # =========================================================
-# واجهة اللوبي
+# أزرار اللعبة
 # =========================================================
 
-class LobbyView(ui.View):
+class ActionView(discord.ui.View):
+
+    def __init__(self, game, actions):
+        super().__init__(timeout=ROUND_TIME)
+        self.game = game
+        self.action_names = actions
+
+        for action_key, label, emoji in actions:
+            button = discord.ui.Button(
+                label=label,
+                emoji=emoji,
+                style=discord.ButtonStyle.primary
+            )
+
+            async def callback(interaction, key=action_key):
+                await self.choose(interaction, key)
+
+            button.callback = callback
+            self.add_item(button)
+
+    async def choose(self, interaction, action):
+
+        if interaction.channel.id != GAME_CHANNEL_ID:
+            return
+
+        player = self.game.get_player(interaction.user.id)
+
+        if not player:
+            await interaction.response.send_message(
+                "❌ أنت لست داخل اللعبة.",
+                ephemeral=True
+            )
+            return
+
+        if not player.alive:
+            await interaction.response.send_message(
+                "💀 أنت مستبعد من هذه الجولة.",
+                ephemeral=True
+            )
+            return
+
+        if player.action is not None:
+            await interaction.response.send_message(
+                "⚠️ اخترت حركتك بالفعل.",
+                ephemeral=True
+            )
+            return
+
+        player.action = action
+
+        # بعض الحركات تحتاج هدفًا
+        if action in {"attack", "ally", "steal", "target"}:
+
+            choices = [
+                p for p in self.game.alive_players()
+                if p.id != player.id
+            ]
+
+            if not choices:
+                player.target = None
+            else:
+                view = TargetView(
+                    self.game,
+                    player,
+                    action,
+                    choices
+                )
+
+                await interaction.response.send_message(
+                    "🎯 اختر الهدف:",
+                    view=view,
+                    ephemeral=True
+                )
+                return
+
+        await interaction.response.send_message(
+            f"✅ تم اختيار **{action}**.",
+            ephemeral=True
+        )
+
+        await self.game.check_actions()
+
+
+# =========================================================
+# اختيار الهدف
+# =========================================================
+
+class TargetView(discord.ui.View):
+
+    def __init__(self, game, player, action, targets):
+        super().__init__(timeout=20)
+
+        self.game = game
+        self.player = player
+        self.action = action
+
+        options = []
+
+        for target in targets[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=target.name[:100],
+                    value=str(target.id),
+                    emoji="🤖" if target.is_bot else "👤"
+                )
+            )
+
+        select = discord.ui.Select(
+            placeholder="اختر اللاعب...",
+            options=options
+        )
+
+        async def callback(interaction):
+
+            if interaction.user.id != self.player.id:
+                await interaction.response.send_message(
+                    "❌ هذا الاختيار ليس لك.",
+                    ephemeral=True
+                )
+                return
+
+            target_id = int(select.values[0])
+
+            if target_id not in self.game.players:
+                await interaction.response.send_message(
+                    "❌ الهدف غير موجود.",
+                    ephemeral=True
+                )
+                return
+
+            self.player.target = target_id
+
+            await interaction.response.edit_message(
+                content=f"🎯 تم اختيار **{self.game.players[target_id].name}**.",
+                view=None
+            )
+
+            await self.game.check_actions()
+
+        select.callback = callback
+        self.add_item(select)
+
+
+# =========================================================
+# اللعبة الأولى: معركة اللاعبين
+# =========================================================
+
+class BattleGame(BaseGame):
+
+    name = "⚔️ معركة اللاعبين"
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 8
+
+    async def start(self):
+
+        for p in self.players.values():
+            p.hp = 100
+            p.shield = 0
+            p.alive = True
+
+        await self.next_round()
+
+    async def next_round(self):
+
+        if self.finished:
+            return
+
+        alive = self.alive_players()
+
+        if len(alive) <= 1:
+            await self.end_game()
+            return
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+        self.actions = {}
+
+        for p in alive:
+            p.action = None
+            p.target = None
+
+        # الذكاء الاصطناعي يختار
+        for p in alive:
+            if p.is_bot:
+                self.bot_choose(p)
+
+        embed = discord.Embed(
+            title=f"⚔️ معركة اللاعبين — الجولة {self.round}",
+            description=(
+                "اختار حركتك!\n\n"
+                "🗡️ هجوم — يسبب ضررًا\n"
+                "🛡️ دفاع — يقلل الضرر\n"
+                "💨 مراوغة — فرصة لتجنب الهجوم\n"
+                "🤝 تحالف — يعطي حماية مؤقتة"
+            )
+        )
+
+        status = []
+
+        for p in alive:
+            hearts = max(0, p.hp)
+            status.append(
+                f"{p.mention} — ❤️ {hearts}/100"
+            )
+
+        embed.add_field(
+            name="👥 اللاعبين",
+            value="\n".join(status),
+            inline=False
+        )
+
+        view = ActionView(
+            self,
+            [
+                ("attack", "هجوم", "🗡️"),
+                ("defend", "دفاع", "🛡️"),
+                ("dodge", "مراوغة", "💨"),
+                ("ally", "تحالف", "🤝"),
+            ]
+        )
+
+        await self.send(embed=embed, view=view)
+
+        await self.check_actions()
+
+    def bot_choose(self, bot):
+
+        enemies = [
+            p for p in self.alive_players()
+            if p.id != bot.id
+        ]
+
+        if not enemies:
+            bot.action = "defend"
+            return
+
+        if bot.hp <= 30:
+            choices = ["defend", "dodge", "ally"]
+        else:
+            choices = [
+                "attack",
+                "attack",
+                "defend",
+                "dodge",
+                "ally"
+            ]
+
+        bot.action = random.choice(choices)
+
+        if bot.action in {"attack", "ally"}:
+            target = random.choice(enemies)
+            bot.target = target.id
+
+    async def check_actions(self):
+
+        if self.finished:
+            return
+
+        alive = self.alive_players()
+
+        if all(p.action is not None for p in alive):
+            await asyncio.sleep(1)
+            await self.resolve_round()
+
+    async def resolve_round(self):
+
+        results = []
+
+        # التحالف
+        for p in self.alive_players():
+            if p.action == "ally":
+                p.shield += 20
+
+                if p.target and p.target in self.players:
+                    target = self.players[p.target]
+
+                    if target.alive:
+                        target.shield += 10
+
+                        results.append(
+                            f"🤝 {p.name} تحالف مع {target.name}"
+                        )
+
+        # الهجمات
+        for p in self.alive_players():
+
+            if p.action != "attack":
+                continue
+
+            target = self.players.get(p.target)
+
+            if not target or not target.alive:
+                continue
+
+            damage = random.randint(18, 30)
+
+            if target.action == "defend":
+                damage //= 2
+
+            elif target.action == "dodge":
+                if random.random() < 0.55:
+                    damage = 0
+
+            if target.shield > 0:
+                blocked = min(target.shield, damage)
+                target.shield -= blocked
+                damage -= blocked
+
+            if damage > 0:
+                target.hp -= damage
+
+                results.append(
+                    f"🗡️ {p.name} هاجم {target.name} "
+                    f"وألحق **{damage} ضرر**"
+                )
+
+                if target.hp <= 0:
+                    target.hp = 0
+                    await self.eliminate(target)
+
+                    results.append(
+                        f"💀 {target.name} خرج من المعركة!"
+                    )
+                    await self.award(p, 2)
+
+            else:
+                results.append(
+                    f"🛡️ {target.name} صد هجوم {p.name}"
+                )
+
+        # نقاط البقاء
+        for p in self.alive_players():
+            await self.award(p, 1)
+
+        embed = discord.Embed(
+            title=f"⚔️ نتائج الجولة {self.round}",
+            description="\n".join(results) if results else "لا توجد أحداث."
+        )
+
+        embed.add_field(
+            name="الحالة",
+            value=self.alive_text(),
+            inline=False
+        )
+
+        await self.send(embed=embed, view=None)
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        alive = self.alive_players()
+
+        if alive:
+            winner = max(
+                alive,
+                key=lambda p: p.hp
+            )
+
+            await self.award(winner, 10)
+
+            text = (
+                f"🏆 **{winner.name} فاز بالمعركة!**\n"
+                f"⭐ حصل على +10 نقاط"
+            )
+        else:
+            text = "💀 انتهت المعركة بدون فائز."
+
+        embed = discord.Embed(
+            title="🏁 انتهت معركة اللاعبين",
+            description=text
+        )
+
+        await self.send(embed=embed, view=None)
+
+        await self.finish()
+
+
+# =========================================================
+# اللعبة الثانية: السيطرة على المناطق
+# =========================================================
+
+class TerritoryGame(BaseGame):
+
+    name = "🏴 السيطرة على المناطق"
+
+    TERRITORIES = [
+        "🏰 القلعة",
+        "🌲 الغابة",
+        "⛰️ الجبل",
+        "🏜️ الصحراء",
+        "⚓ الميناء",
+    ]
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 7
+        self.owners = {}
+
+    async def start(self):
+
+        for territory in range(len(self.TERRITORIES)):
+            self.owners[territory] = random.choice(
+                list(self.players.keys())
+            )
+
+        await self.next_round()
+
+    def bot_choose(self, bot):
+
+        actions = [
+            "attack",
+            "defend",
+            "occupy"
+        ]
+
+        bot.action = random.choice(actions)
+
+        bot.target = random.randrange(
+            len(self.TERRITORIES)
+        )
+
+    async def next_round(self):
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+
+        for p in self.alive_players():
+            p.action = None
+            p.target = None
+
+            if p.is_bot:
+                self.bot_choose(p)
+
+        owners = []
+
+        for index, territory in enumerate(self.TERRITORIES):
+            owner_id = self.owners.get(index)
+
+            owner = self.players.get(owner_id)
+
+            if owner:
+                owners.append(
+                    f"{territory} → {owner.name}"
+                )
+
+        embed = discord.Embed(
+            title=f"🏴 السيطرة على المناطق — الجولة {self.round}",
+            description=(
+                "اختر حركتك.\n\n"
+                "⚔️ هجوم — حاول أخذ منطقة\n"
+                "🛡️ دفاع — تحصين منطقتك\n"
+                "🏴 احتلال — محاولة السيطرة على منطقة"
+            )
+        )
+
+        embed.add_field(
+            name="🗺️ الخريطة",
+            value="\n".join(owners),
+            inline=False
+        )
+
+        view = ActionView(
+            self,
+            [
+                ("attack", "هجوم", "⚔️"),
+                ("defend", "تحصين", "🛡️"),
+                ("target", "احتلال", "🏴"),
+            ]
+        )
+
+        await self.send(embed=embed, view=view)
+        await self.check_actions()
+
+    async def check_actions(self):
+
+        alive = self.alive_players()
+
+        if all(p.action is not None for p in alive):
+            await asyncio.sleep(1)
+            await self.resolve()
+
+    async def resolve(self):
+
+        results = []
+
+        for p in self.alive_players():
+
+            if p.action == "defend":
+                p.shield += 15
+
+                results.append(
+                    f"🛡️ {p.name} حصّن نفسه"
+                )
+
+            elif p.action in {"attack", "target"}:
+
+                territory = p.target
+
+                if territory is None:
+                    territory = random.randrange(
+                        len(self.TERRITORIES)
+                    )
+
+                old_owner_id = self.owners.get(territory)
+                old_owner = self.players.get(old_owner_id)
+
+                if old_owner and old_owner.id == p.id:
+                    results.append(
+                        f"🏴 {p.name} يسيطر بالفعل على "
+                        f"{self.TERRITORIES[territory]}"
+                    )
+                    continue
+
+                chance = random.random()
+
+                if chance > 0.35:
+
+                    self.owners[territory] = p.id
+
+                    results.append(
+                        f"🔥 {p.name} استولى على "
+                        f"{self.TERRITORIES[territory]}!"
+                    )
+
+                    p.territory += 1
+                    await self.award(p, 2)
+
+                else:
+
+                    results.append(
+                        f"❌ {p.name} فشل في السيطرة على "
+                        f"{self.TERRITORIES[territory]}"
+                    )
+
+        await self.send(
+            embed=discord.Embed(
+                title=f"⚔️ نتائج الجولة {self.round}",
+                description="\n".join(results)
+            ),
+            view=None
+        )
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        counts = {}
+
+        for owner in self.owners.values():
+            counts[owner] = counts.get(owner, 0) + 1
+
+        if not counts:
+            await self.finish()
+            return
+
+        winner_id = max(
+            counts,
+            key=counts.get
+        )
+
+        winner = self.players[winner_id]
+
+        await self.award(winner, 10)
+
+        await self.send(
+            embed=discord.Embed(
+                title="🏆 انتهت السيطرة على المناطق",
+                description=(
+                    f"👑 الفائز: **{winner.name}**\n"
+                    f"🏴 المناطق: **{counts[winner_id]}**\n"
+                    f"⭐ +10 نقاط"
+                )
+            ),
+            view=None
+        )
+
+        await self.finish()
+
+
+# =========================================================
+# اللعبة الثالثة: الهدف السري
+# =========================================================
+
+class SecretTargetGame(BaseGame):
+
+    name = "🎯 الهدف السري"
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 7
+        self.secret_targets = {}
+
+    async def start(self):
+
+        player_list = list(self.players.values())
+
+        for p in player_list:
+
+            choices = [
+                x for x in player_list
+                if x.id != p.id
+            ]
+
+            if choices:
+                self.secret_targets[p.id] = random.choice(
+                    choices
+                ).id
+
+        await self.next_round()
+
+    def bot_choose(self, bot):
+
+        target_id = self.secret_targets.get(bot.id)
+
+        if target_id:
+            bot.action = random.choice(
+                ["target", "defend", "target"]
+            )
+            bot.target = target_id
+        else:
+            bot.action = "defend"
+
+    async def next_round(self):
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+
+        for p in self.alive_players():
+            p.action = None
+            p.target = None
+
+            if p.is_bot:
+                self.bot_choose(p)
+
+        embed = discord.Embed(
+            title=f"🎯 الهدف السري — الجولة {self.round}",
+            description=(
+                "لكل لاعب هدف سري.\n"
+                "حاول الوصول له قبل انتهاء الجولات!"
+            )
+        )
+
+        view = ActionView(
+            self,
+            [
+                ("target", "ملاحقة الهدف", "🎯"),
+                ("defend", "حماية", "🛡️"),
+                ("dodge", "اختفاء", "💨"),
+            ]
+        )
+
+        await self.send(embed=embed, view=view)
+        await self.check_actions()
+
+    async def check_actions(self):
+
+        alive = self.alive_players()
+
+        if all(p.action is not None for p in alive):
+            await asyncio.sleep(1)
+            await self.resolve()
+
+    async def resolve(self):
+
+        results = []
+
+        for p in self.alive_players():
+
+            target_id = self.secret_targets.get(p.id)
+
+            if p.action == "target":
+
+                target = self.players.get(p.target)
+
+                if target and target.id == target_id:
+
+                    await self.award(p, 5)
+
+                    results.append(
+                        f"🎯 **{p.name} نجح في الوصول إلى هدفه السري!**"
+                    )
+
+                    # هدف جديد
+                    choices = [
+                        x for x in self.alive_players()
+                        if x.id != p.id
+                    ]
+
+                    if choices:
+                        self.secret_targets[p.id] = random.choice(
+                            choices
+                        ).id
+
+                else:
+
+                    results.append(
+                        f"❌ {p.name} لم يصل لهدفه."
+                    )
+
+            elif p.action == "defend":
+
+                p.shield += 20
+
+                results.append(
+                    f"🛡️ {p.name} اختار الحماية."
+                )
+
+            else:
+
+                results.append(
+                    f"💨 {p.name} اختفى."
+                )
+
+        await self.send(
+            embed=discord.Embed(
+                title=f"🎯 نتائج الجولة {self.round}",
+                description="\n".join(results)
+            ),
+            view=None
+        )
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        alive = self.alive_players()
+
+        if alive:
+
+            for p in alive:
+                await self.award(p, 3)
+
+            winner = max(
+                alive,
+                key=lambda p: get_points(p.id)
+                if not p.is_bot else 0
+            )
+
+            text = (
+                f"🏆 انتهى الهدف السري!\n"
+                f"⭐ الناجون حصلوا على مكافأة المشاركة."
+            )
+
+        else:
+            text = "🏁 انتهت اللعبة."
+
+        await self.send(
+            embed=discord.Embed(
+                title="🏁 نهاية الهدف السري",
+                description=text
+            ),
+            view=None
+        )
+
+        await self.finish()
+
+
+# =========================================================
+# اللعبة الرابعة: ملك السيرفر
+# =========================================================
+
+class KingGame(BaseGame):
+
+    name = "👑 ملك السيرفر"
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 6
+        self.king_id = None
+        self.votes = {}
+
+    async def start(self):
+
+        self.king_id = random.choice(
+            list(self.players.keys())
+        )
+
+        await self.next_round()
+
+    def bot_choose(self, bot):
+
+        if bot.id == self.king_id:
+            bot.action = random.choice(
+                ["defend", "ally"]
+            )
+        else:
+            bot.action = random.choice(
+                ["attack", "target", "ally"]
+            )
+
+            king = self.players.get(self.king_id)
+
+            if king:
+                bot.target = king.id
+
+    async def next_round(self):
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+
+        for p in self.alive_players():
+
+            p.action = None
+            p.target = None
+
+            if p.is_bot:
+                self.bot_choose(p)
+
+        king = self.players.get(self.king_id)
+
+        embed = discord.Embed(
+            title=f"👑 ملك السيرفر — الجولة {self.round}",
+            description=(
+                "👑 هناك ملك حالي.\n"
+                "حافظ على العرش أو حاول إسقاط الملك!"
+            )
+        )
+
+        if king:
+            embed.add_field(
+                name="👑 الملك الحالي",
+                value=king.mention,
+                inline=False
+            )
+
+        view = ActionView(
+            self,
+            [
+                ("attack", "مهاجمة الملك", "⚔️"),
+                ("defend", "حماية", "🛡️"),
+                ("ally", "تحالف", "🤝"),
+            ]
+        )
+
+        await self.send(embed=embed, view=view)
+        await self.check_actions()
+
+    async def check_actions(self):
+
+        alive = self.alive_players()
+
+        if all(p.action is not None for p in alive):
+            await asyncio.sleep(1)
+            await self.resolve()
+
+    async def resolve(self):
+
+        king = self.players.get(self.king_id)
+
+        attackers = [
+            p for p in self.alive_players()
+            if p.action == "attack"
+            and p.target == self.king_id
+        ]
+
+        if king and attackers:
+
+            chance = 0.25 + (
+                0.15 * min(len(attackers), 3)
+            )
+
+            if random.random() < chance:
+
+                old_king = king
+                new_king = random.choice(attackers)
+
+                self.king_id = new_king.id
+
+                await self.award(new_king, 4)
+
+                result = (
+                    f"👑 **{new_king.name} استولى على العرش!**"
+                )
+
+            else:
+
+                result = (
+                    f"🛡️ {king.name} نجح في الدفاع عن العرش!"
+                )
+
+        else:
+
+            result = "👑 الملك ما زال على العرش."
+
+        await self.send(
+            embed=discord.Embed(
+                title=f"👑 نتائج الجولة {self.round}",
+                description=result
+            ),
+            view=None
+        )
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        king = self.players.get(self.king_id)
+
+        if king:
+            await self.award(king, 12)
+
+            text = (
+                f"👑 **{king.name} أنهى اللعبة وهو الملك!**\n"
+                f"⭐ +12 نقاط"
+            )
+        else:
+            text = "🏁 انتهت اللعبة."
+
+        await self.send(
+            embed=discord.Embed(
+                title="🏆 نهاية ملك السيرفر",
+                description=text
+            ),
+            view=None
+        )
+
+        await self.finish()
+
+
+# =========================================================
+# اللعبة الخامسة: السفينة الغارقة
+# =========================================================
+
+class ShipGame(BaseGame):
+
+    name = "🚢 السفينة الغارقة"
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 7
+        self.ship_hp = 100
+
+    async def start(self):
+        await self.next_round()
+
+    def bot_choose(self, bot):
+
+        if self.ship_hp <= 30:
+            bot.action = random.choice(
+                ["defend", "ally"]
+            )
+        else:
+            bot.action = random.choice(
+                ["attack", "defend", "dodge"]
+            )
+
+    async def next_round(self):
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+
+        for p in self.alive_players():
+
+            p.action = None
+            p.target = None
+
+            if p.is_bot:
+                self.bot_choose(p)
+
+        embed = discord.Embed(
+            title=f"🚢 السفينة الغارقة — الجولة {self.round}",
+            description=(
+                f"❤️ سلامة السفينة: **{self.ship_hp}/100**\n\n"
+                "قرر ماذا ستفعل لإنقاذ السفينة."
+            )
+        )
+
+        view = ActionView(
+            self,
+            [
+                ("defend", "إصلاح", "🔧"),
+                ("ally", "مساعدة لاعب", "🤝"),
+                ("dodge", "استكشاف", "🔭"),
+                ("attack", "مخاطرة", "⚔️"),
+            ]
+        )
+
+        await self.send(embed=embed, view=view)
+        await self.check_actions()
+
+    async def check_actions(self):
+
+        if all(
+            p.action is not None
+            for p in self.alive_players()
+        ):
+            await asyncio.sleep(1)
+            await self.resolve()
+
+    async def resolve(self):
+
+        results = []
+
+        repairs = sum(
+            1
+            for p in self.alive_players()
+            if p.action == "defend"
+        )
+
+        damage = random.randint(8, 25)
+
+        self.ship_hp += repairs * 12
+        self.ship_hp -= damage
+
+        self.ship_hp = max(
+            0,
+            min(100, self.ship_hp)
+        )
+
+        results.append(
+            f"🌊 العاصفة سببت **{damage} ضرر** للسفينة."
+        )
+
+        if repairs:
+            results.append(
+                f"🔧 تم إصلاح السفينة بمقدار **{repairs * 12}**."
+            )
+
+        for p in self.alive_players():
+
+            if p.action == "dodge":
+                await self.award(p, 1)
+
+            elif p.action == "ally":
+                await self.award(p, 2)
+
+        if self.ship_hp <= 0:
+
+            await self.send(
+                embed=discord.Embed(
+                    title="💥 غرقت السفينة!",
+                    description="\n".join(results)
+                ),
+                view=None
+            )
+
+            await self.finish()
+            return
+
+        await self.send(
+            embed=discord.Embed(
+                title=f"🌊 نتيجة الجولة {self.round}",
+                description="\n".join(results)
+            ),
+            view=None
+        )
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        for p in self.alive_players():
+            await self.award(p, 5)
+
+        await self.send(
+            embed=discord.Embed(
+                title="🚢 نجت السفينة!",
+                description=(
+                    "🎉 انتهت الرحلة بنجاح!\n"
+                    "⭐ جميع اللاعبين الناجين حصلوا على مكافأة."
+                )
+            ),
+            view=None
+        )
+
+        await self.finish()
+
+
+# =========================================================
+# اللعبة السادسة: المزاد
+# =========================================================
+
+class AuctionGame(BaseGame):
+
+    name = "💰 المزاد"
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 5
+        self.bids = {}
+        self.item = None
+
+    async def start(self):
+        await self.next_round()
+
+    def bot_choose(self, bot):
+
+        bot.action = "bid"
+
+        bot.extra["bid"] = random.randint(1, 10)
+
+    async def next_round(self):
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+        self.bids = {}
+
+        self.item = random.choice([
+            "💎 جوهرة نادرة",
+            "👑 تاج أسطوري",
+            "⚡ بطاقة قوة",
+            "🛡️ درع ذهبي",
+            "🎁 صندوق غامض",
+        ])
+
+        for p in self.alive_players():
+
+            p.action = None
+            p.target = None
+
+            if p.is_bot:
+                self.bot_choose(p)
+
+        embed = discord.Embed(
+            title=f"💰 المزاد — الجولة {self.round}",
+            description=(
+                f"السلعة الحالية:\n"
+                f"# {self.item}\n\n"
+                "اختر مقدار المزايدة."
+            )
+        )
+
+        view = AuctionView(self)
+
+        await self.send(embed=embed, view=view)
+
+    async def submit_bid(self, interaction, amount):
+
+        player = self.players.get(
+            interaction.user.id
+        )
+
+        if not player:
+            await interaction.response.send_message(
+                "❌ لست داخل اللعبة.",
+                ephemeral=True
+            )
+            return
+
+        if player.id in self.bids:
+            await interaction.response.send_message(
+                "⚠️ أنت زايدت بالفعل.",
+                ephemeral=True
+            )
+            return
+
+        self.bids[player.id] = amount
+
+        await interaction.response.send_message(
+            f"💰 مزايدتك: **{amount}**",
+            ephemeral=True
+        )
+
+        await self.check_bids()
+
+    async def check_bids(self):
+
+        alive = self.alive_players()
+
+        # البوتات
+        for p in alive:
+
+            if p.is_bot and p.id not in self.bids:
+                self.bids[p.id] = p.extra.get(
+                    "bid",
+                    random.randint(1, 10)
+                )
+
+        if len(self.bids) >= len(alive):
+
+            await asyncio.sleep(1)
+            await self.resolve()
+
+    async def resolve(self):
+
+        if not self.bids:
+            await self.next_round()
+            return
+
+        winner_id = max(
+            self.bids,
+            key=self.bids.get
+        )
+
+        winner = self.players[winner_id]
+        amount = self.bids[winner_id]
+
+        await self.award(winner, 3)
+
+        await self.send(
+            embed=discord.Embed(
+                title="💰 انتهى المزاد",
+                description=(
+                    f"🏆 الفائز: **{winner.name}**\n"
+                    f"💰 المزايدة: **{amount}**"
+                )
+            ),
+            view=None
+        )
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        winner = max(
+            self.alive_players(),
+            key=lambda p: get_points(p.id)
+            if not p.is_bot else 0
+        )
+
+        if winner:
+            await self.award(winner, 10)
+
+        await self.send(
+            embed=discord.Embed(
+                title="🏆 انتهى المزاد الكبير",
+                description=(
+                    f"👑 أفضل لاعب: **{winner.name if winner else 'لا أحد'}**"
+                )
+            ),
+            view=None
+        )
+
+        await self.finish()
+
+
+class AuctionView(discord.ui.View):
+
     def __init__(self, game):
-        super().__init__(timeout=300)
+        super().__init__(timeout=30)
         self.game = game
 
-    @ui.button(
-        label="🎮 انضمام",
+        for amount in [1, 3, 5, 10]:
+
+            button = discord.ui.Button(
+                label=f"+{amount}",
+                style=discord.ButtonStyle.success
+            )
+
+            async def callback(
+                interaction,
+                value=amount
+            ):
+                await self.game.submit_bid(
+                    interaction,
+                    value
+                )
+
+            button.callback = callback
+            self.add_item(button)
+
+
+# =========================================================
+# اللعبة السابعة: الخائن
+# =========================================================
+
+class TraitorGame(BaseGame):
+
+    name = "🕵️ الخائن"
+
+    def __init__(self, cog, channel, players):
+        super().__init__(cog, channel, players)
+        self.max_rounds = 6
+        self.traitor_id = None
+        self.votes = {}
+
+    async def start(self):
+
+        self.traitor_id = random.choice(
+            list(self.players.keys())
+        )
+
+        await self.next_round()
+
+    def bot_choose(self, bot):
+
+        others = [
+            p for p in self.alive_players()
+            if p.id != bot.id
+        ]
+
+        if not others:
+            bot.action = "defend"
+            return
+
+        bot.action = "target"
+
+        # الخائن يحاول توجيه الشك لشخص آخر
+        target = random.choice(others)
+        bot.target = target.id
+
+    async def next_round(self):
+
+        if self.round >= self.max_rounds:
+            await self.end_game()
+            return
+
+        self.round += 1
+        self.votes = {}
+
+        for p in self.alive_players():
+
+            p.action = None
+            p.target = None
+
+            if p.is_bot:
+                self.bot_choose(p)
+
+        embed = discord.Embed(
+            title=f"🕵️ الخائن — الجولة {self.round}",
+            description=(
+                "هناك خائن بينكم.\n"
+                "حاول اكتشافه قبل نهاية اللعبة!"
+            )
+        )
+
+        view = ActionView(
+            self,
+            [
+                ("target", "اتهام لاعب", "👉"),
+                ("defend", "حماية نفسك", "🛡️"),
+            ]
+        )
+
+        await self.send(embed=embed, view=view)
+        await self.check_actions()
+
+    async def check_actions(self):
+
+        alive = self.alive_players()
+
+        if all(
+            p.action is not None
+            for p in alive
+        ):
+            await asyncio.sleep(1)
+            await self.resolve()
+
+    async def resolve(self):
+
+        votes = {}
+
+        for p in self.alive_players():
+
+            if p.action == "target" and p.target:
+
+                votes[p.target] = (
+                    votes.get(p.target, 0) + 1
+                )
+
+        if votes:
+
+            target_id = max(
+                votes,
+                key=votes.get
+            )
+
+            target = self.players[target_id]
+
+            if target.id == self.traitor_id:
+
+                for p in self.alive_players():
+                    await self.award(p, 3)
+
+                await self.send(
+                    embed=discord.Embed(
+                        title="🎉 تم كشف الخائن!",
+                        description=(
+                            f"🕵️ الخائن كان **{target.name}**!"
+                        )
+                    ),
+                    view=None
+                )
+
+                await self.finish()
+                return
+
+            else:
+
+                await self.eliminate(target)
+
+                result = (
+                    f"❌ تم اتهام **{target.name}** خطأً!"
+                )
+
+                if target.id == self.traitor_id:
+                    result = (
+                        f"🎉 تم كشف الخائن: **{target.name}**!"
+                    )
+
+        else:
+
+            result = "🤷 لم يتم الاتفاق على أحد."
+
+        await self.send(
+            embed=discord.Embed(
+                title=f"🕵️ نتائج الجولة {self.round}",
+                description=result
+            ),
+            view=None
+        )
+
+        await asyncio.sleep(3)
+        await self.next_round()
+
+    async def end_game(self):
+
+        traitor = self.players.get(
+            self.traitor_id
+        )
+
+        if traitor and traitor.alive:
+
+            await self.award(traitor, 15)
+
+            text = (
+                f"🕵️ **الخائن فاز!**\n"
+                f"الخائن كان: **{traitor.name}**\n"
+                f"⭐ +15 نقاط"
+            )
+
+        else:
+
+            text = "🎉 اللاعبون نجحوا في كشف الخائن!"
+
+        await self.send(
+            embed=discord.Embed(
+                title="🏁 نهاية لعبة الخائن",
+                description=text
+            ),
+            view=None
+        )
+
+        await self.finish()
+
+
+# =========================================================
+# تخريب اللعبة
+# =========================================================
+
+class SabotageView(discord.ui.View):
+
+    def __init__(self, game, owner):
+        super().__init__(timeout=30)
+
+        self.game = game
+        self.owner = owner
+
+        buttons = [
+            ("☢️", "نووي", 10, "nuke"),
+            ("💥", "انفجار", 5, "bomb"),
+            ("🎯", "هدف", 3, "target"),
+            ("🛡️", "درع", 4, "shield"),
+        ]
+
+        for emoji, label, cost, action in buttons:
+
+            button = discord.ui.Button(
+                label=f"{label} ({cost})",
+                emoji=emoji,
+                style=discord.ButtonStyle.danger
+            )
+
+            async def callback(
+                interaction,
+                action=action,
+                cost=cost
+            ):
+
+                if interaction.user.id != self.owner.id:
+                    await interaction.response.send_message(
+                        "❌ هذه القائمة ليست لك.",
+                        ephemeral=True
+                    )
+                    return
+
+                await self.execute(
+                    interaction,
+                    action,
+                    cost
+                )
+
+            button.callback = callback
+            self.add_item(button)
+
+    async def execute(self, interaction, action, cost):
+
+        points = get_points(self.owner.id)
+
+        if points < cost:
+            await interaction.response.send_message(
+                f"❌ تحتاج **{cost} نقطة**.\n"
+                f"رصيدك: **{points}**",
+                ephemeral=True
+            )
+            return
+
+        players = self.game.alive_players()
+
+        if not players:
+            return
+
+        reset_amount = -cost
+
+        stats_collection.update_one(
+            {"user_id": self.owner.id},
+            {"$inc": {"points": reset_amount}},
+            upsert=True
+        )
+
+        if action == "nuke":
+
+            for p in players:
+                if p.id != self.owner.id:
+                    p.hp = max(1, p.hp - 35)
+
+            text = (
+                "☢️ **تم تفعيل الحدث النووي داخل اللعبة!**\n"
+                "تم تخفيض صحة جميع الخصوم."
+            )
+
+        elif action == "bomb":
+
+            targets = [
+                p for p in players
+                if p.id != self.owner.id
+            ]
+
+            if targets:
+                target = random.choice(targets)
+                target.hp = max(
+                    1,
+                    target.hp - 30
+                )
+
+                text = (
+                    f"💥 تم استهداف **{target.name}** "
+                    "داخل اللعبة!"
+                )
+            else:
+                text = "❌ لا يوجد هدف."
+
+        elif action == "target":
+
+            targets = [
+                p for p in players
+                if p.id != self.owner.id
+            ]
+
+            if targets:
+                target = random.choice(targets)
+
+                target.hp = max(
+                    1,
+                    target.hp - 20
+                )
+
+                text = (
+                    f"🎯 تم تنفيذ حركة الهدف على "
+                    f"**{target.name}**!"
+                )
+            else:
+                text = "❌ لا يوجد هدف."
+
+        else:
+
+            self.owner_player = self.game.players.get(
+                self.owner.id
+            )
+
+            if self.owner_player:
+                self.owner_player.shield += 40
+
+            text = (
+                "🛡️ حصلت على **40 درع** داخل اللعبة!"
+            )
+
+        await interaction.response.send_message(
+            text,
+            ephemeral=False
+        )
+
+
+# =========================================================
+# لوبي الألعاب
+# =========================================================
+
+class LobbyView(discord.ui.View):
+
+    def __init__(self, cog, channel, game_type):
+        super().__init__(timeout=300)
+
+        self.cog = cog
+        self.channel = channel
+        self.game_type = game_type
+
+        self.players = {}
+
+    async def refresh(self, interaction=None):
+
+        lines = []
+
+        if not self.players:
+            lines.append("لا يوجد لاعبين حتى الآن.")
+
+        else:
+            for p in self.players.values():
+
+                icon = "🤖" if p.is_bot else "👤"
+
+                lines.append(
+                    f"{icon} {p.name}"
+                )
+
+        embed = discord.Embed(
+            title=f"🎮 تجهيز لعبة {self.game_type}",
+            description="\n".join(lines)
+        )
+
+        embed.add_field(
+            name="👥 العدد",
+            value=f"{len(self.players)}/{MAX_PLAYERS}"
+        )
+
+        embed.set_footer(
+            text="انضم أو أضف لاعبين وهميين ثم ابدأ اللعبة."
+        )
+
+        if interaction:
+            await interaction.response.edit_message(
+                embed=embed,
+                view=self
+            )
+
+        else:
+            return embed
+
+    @discord.ui.button(
+        label="انضمام",
+        emoji="🎮",
         style=discord.ButtonStyle.success
     )
     async def join(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
-        if not is_game_channel(interaction):
+
+        if interaction.user.id in self.players:
+            await interaction.response.send_message(
+                "⚠️ أنت داخل اللعبة بالفعل.",
+                ephemeral=True
+            )
+            return
+
+        if len(self.players) >= MAX_PLAYERS:
+            await interaction.response.send_message(
+                "❌ اللعبة ممتلئة.",
+                ephemeral=True
+            )
             return
 
         member = interaction.user
 
-        if not has_player_role(member) and not has_control_role(member):
-            await interaction.response.send_message(
-                "❌ تحتاج رتبة اللاعبين للدخول.",
-                ephemeral=True
-            )
-            return
-
-        success, msg = await self.game.add_player(member)
-
-        if not success:
-            await interaction.response.send_message(
-                f"❌ {msg}",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            f"🎮 دخلت اللعبة!\n"
-            f"👥 اللاعبين الآن: **{len(self.game.players)}**",
-            ephemeral=True
+        player = Player(
+            id=member.id,
+            name=member.display_name,
+            member=member,
+            is_bot=False
         )
 
-        await self.game.update_lobby()
+        self.players[player.id] = player
 
-    @ui.button(
-        label="🚀 ابدأ اللعبة",
+        await self.refresh(interaction)
+
+    @discord.ui.button(
+        label="إضافة لاعب وهمي",
+        emoji="🤖",
         style=discord.ButtonStyle.primary
     )
-    async def start(
+    async def add_bot(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
+
         if not has_control_role(interaction.user):
             await interaction.response.send_message(
                 "❌ هذا الزر للإدارة فقط.",
@@ -346,1202 +1957,182 @@ class LobbyView(ui.View):
             )
             return
 
-        if self.game.started:
+        if len(self.players) >= MAX_PLAYERS:
             await interaction.response.send_message(
-                "❌ اللعبة بدأت بالفعل.",
+                "❌ اللعبة ممتلئة.",
                 ephemeral=True
             )
             return
 
-        if len(self.game.players) < MIN_PLAYERS:
+        used_names = {
+            p.name
+            for p in self.players.values()
+            if p.is_bot
+        }
+
+        available = [
+            name
+            for name in BOT_NAMES
+            if name not in used_names
+        ]
+
+        if not available:
+            name = f"Bot-{len(used_names) + 1}"
+        else:
+            name = random.choice(available)
+
+        fake_id = -(
+            len(
+                [
+                    p for p in self.players.values()
+                    if p.is_bot
+                ]
+            ) + 1
+        )
+
+        bot_player = Player(
+            id=fake_id,
+            name=name,
+            is_bot=True
+        )
+
+        self.players[fake_id] = bot_player
+
+        await self.refresh(interaction)
+
+    @discord.ui.button(
+        label="بدء اللعبة",
+        emoji="🚀",
+        style=discord.ButtonStyle.success
+    )
+    async def start(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if not has_control_role(interaction.user):
+            await interaction.response.send_message(
+                "❌ الإدارة فقط تستطيع بدء اللعبة.",
+                ephemeral=True
+            )
+            return
+
+        if len(self.players) < MIN_PLAYERS:
             await interaction.response.send_message(
                 f"❌ تحتاج على الأقل **{MIN_PLAYERS} لاعبين**.",
                 ephemeral=True
             )
             return
 
-        self.game.started = True
+        if GameManager.running():
+            await interaction.response.send_message(
+                "❌ توجد لعبة تعمل بالفعل.",
+                ephemeral=True
+            )
+            return
 
-        for child in self.children:
-            child.disabled = True
+        await interaction.response.defer()
 
-        await interaction.response.edit_message(
-            view=self
+        self.stop()
+
+        game_class = self.cog.GAME_CLASSES.get(
+            self.game_type
         )
 
-        await self.game.start_game()
+        if not game_class:
+            await interaction.followup.send(
+                "❌ حدث خطأ: اللعبة غير موجودة."
+            )
+            return
 
-    @ui.button(
-        label="🛑 إلغاء",
+        game = game_class(
+            self.cog,
+            self.channel,
+            self.players
+        )
+
+        GameManager.active_game = game
+
+        await game.start()
+
+    @discord.ui.button(
+        label="إلغاء",
+        emoji="🛑",
         style=discord.ButtonStyle.danger
     )
     async def cancel(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
+
         if not has_control_role(interaction.user):
             await interaction.response.send_message(
-                "❌ هذا الزر للإدارة فقط.",
+                "❌ الإدارة فقط.",
                 ephemeral=True
             )
             return
 
-        GameManager.stop()
+        self.stop()
 
         await interaction.response.edit_message(
-            content="🛑 **تم إلغاء اللعبة.**",
+            content="🛑 تم إلغاء اللوبي.",
             embed=None,
             view=None
         )
 
 
 # =========================================================
-# ألعاب
-# =========================================================
-
-class DiceGame(BaseGame):
-
-    async def start_game(self):
-        embed = discord.Embed(
-            title="🎲🔥 أعلى نرد",
-            description=(
-                "كل لاعب سيرمي النرد مرة واحدة.\n\n"
-                "🎲 أعلى رقم يفوز!\n"
-                "⭐ المشاركة = +1 نقطة\n"
-                "🏆 الفائز = +2 نقاط إضافية"
-            ),
-            color=GOLD_COLOR
-        )
-
-        msg = await self.channel.send(embed=embed)
-
-        await asyncio.sleep(2)
-
-        results = {}
-
-        for uid in self.players:
-            results[uid] = random.randint(1, 100)
-
-        highest = max(results.values())
-        winners = {
-            uid for uid, value in results.items()
-            if value == highest
-        }
-
-        lines = []
-
-        for uid, value in results.items():
-            lines.append(
-                f"{self.players[uid].mention} → 🎲 **{value}**"
-            )
-
-        embed = discord.Embed(
-            title="🎲💥 النتائج!",
-            description="\n".join(lines),
-            color=GOLD_COLOR
-        )
-
-        embed.add_field(
-            name="🏆 الفائز",
-            value=", ".join(
-                self.players[uid].mention for uid in winners
-            )
-        )
-
-        await msg.edit(embed=embed)
-
-        await self.finish_player_stats(winners)
-
-        await asyncio.sleep(4)
-        await self.finish()
-
-
-class SpeedGame(BaseGame):
-
-    async def start_game(self):
-        answers = [
-            ("ما هو لون السماء؟", "ازرق"),
-            ("كم عدد أيام الأسبوع؟", "7"),
-            ("ما هو 5 + 5؟", "10"),
-            ("ما هو عكس كلمة فوق؟", "تحت"),
-            ("كم عدد أشهر السنة؟", "12"),
-        ]
-
-        question, answer = random.choice(answers)
-
-        view = SpeedView(self, answer)
-
-        embed = discord.Embed(
-            title="⚡🔥 أسرع إجابة",
-            description=(
-                f"## ❓ {question}\n\n"
-                "🏃 أسرع شخص يضغط على الزر ويجاوب بشكل صحيح يفوز!\n\n"
-                "⭐ المشاركة = +1\n"
-                "🏆 الفوز = +2 إضافية"
-            ),
-            color=INFO_COLOR
-        )
-
-        await self.channel.send(
-            embed=embed,
-            view=view
-        )
-
-        await asyncio.sleep(20)
-
-        if not self.finished:
-            await self.channel.send(
-                f"⏰ **انتهى الوقت!**\n"
-                f"الإجابة كانت: **{answer}**"
-            )
-
-            await self.finish_player_stats()
-            await self.finish()
-
-
-class SpeedView(ui.View):
-
-    def __init__(self, game, answer):
-        super().__init__(timeout=20)
-        self.game = game
-        self.answer = answer.lower().strip()
-        self.done = False
-
-    @ui.button(
-        label="⚡ جاوب!",
-        style=discord.ButtonStyle.success
-    )
-    async def answer_button(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
-        if self.done:
-            return
-
-        if interaction.user.id not in self.game.players:
-            await interaction.response.send_message(
-                "❌ أنت لست داخل اللعبة.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(
-            AnswerModal(self)
-        )
-
-
-class AnswerModal(ui.Modal, title="⚡ إجابتك"):
-
-    answer = ui.TextInput(
-        label="اكتب الإجابة",
-        placeholder="اكتب إجابتك هنا..."
-    )
-
-    def __init__(self, view):
-        super().__init__()
-        self.game_view = view
-
-    async def on_submit(self, interaction):
-        if self.game_view.done:
-            return
-
-        if self.answer.value.lower().strip() != self.game_view.answer:
-            await interaction.response.send_message(
-                "❌ إجابة خاطئة!",
-                ephemeral=True
-            )
-            return
-
-        self.game_view.done = True
-        self.game_view.stop()
-
-        uid = interaction.user.id
-
-        add_points(uid, 3)
-        add_game(uid, True)
-
-        for player_id in self.game_view.game.players:
-            if player_id != uid:
-                add_game(player_id, False)
-                add_points(player_id, 1)
-
-        await interaction.response.send_message(
-            f"⚡🔥 **أسرع واحد!**\n"
-            f"{interaction.user.mention} حصل على **3 نقاط**!",
-        )
-
-        await self.game_view.game.finish()
-
-
-class BombGame(BaseGame):
-
-    async def start_game(self):
-        current = list(self.players.keys())
-
-        embed = discord.Embed(
-            title="💣🔥 القنبلة",
-            description=(
-                "القنبلة تنتقل بين اللاعبين.\n"
-                "كل جولة يتم اختيار لاعب عشوائيًا.\n\n"
-                "💥 آخر لاعب تبقى يفوز!"
-            ),
-            color=DANGER_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        while len(current) > 1:
-
-            await asyncio.sleep(2)
-
-            victim = random.choice(current)
-            current.remove(victim)
-            self.eliminated.add(victim)
-
-            await self.channel.send(
-                f"💣💥 **انفجرت القنبلة!**\n"
-                f"❌ تم استبعاد {self.players[victim].mention}"
-            )
-
-        winner = current[0]
-
-        add_points(winner, 3)
-
-        await self.finish_player_stats({winner})
-
-        await self.channel.send(
-            f"🏆🔥 الفائز في القنبلة هو "
-            f"{self.players[winner].mention}!\n"
-            f"💰 حصل على **3 نقاط إضافية**."
-        )
-
-        await asyncio.sleep(3)
-        await self.finish()
-
-
-class GuessGame(BaseGame):
-
-    async def start_game(self):
-        self.number = random.randint(1, 100)
-
-        embed = discord.Embed(
-            title="🔢🧠 خمن الرقم",
-            description=(
-                "أنا اخترت رقمًا بين **1 و100**.\n\n"
-                "أرسل تخمينك في الشات!\n"
-                "كل لاعب لديه فرصة."
-            ),
-            color=EMBED_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        def check(message):
-            return (
-                message.channel.id == self.channel.id
-                and message.author.id in self.players
-                and message.content.isdigit()
-            )
-
-        try:
-            while not self.finished:
-                message = await self.cog.bot.wait_for(
-                    "message",
-                    timeout=30,
-                    check=check
-                )
-
-                guess = int(message.content)
-
-                if guess == self.number:
-                    add_points(message.author.id, 4)
-                    add_game(message.author.id, True)
-
-                    for uid in self.players:
-                        if uid != message.author.id:
-                            add_game(uid, False)
-                            add_points(uid, 1)
-
-                    await self.channel.send(
-                        f"🎯🔥 **أصبت الرقم!**\n"
-                        f"{message.author.mention} حصل على **4 نقاط**!"
-                    )
-
-                    await self.finish()
-                    return
-
-                if guess < self.number:
-                    await self.channel.send(
-                        f"⬆️ {message.author.mention} الرقم أكبر!"
-                    )
-                else:
-                    await self.channel.send(
-                        f"⬇️ {message.author.mention} الرقم أصغر!"
-                    )
-
-        except asyncio.TimeoutError:
-            await self.channel.send(
-                f"⏰ انتهى الوقت!\n"
-                f"الرقم كان **{self.number}**."
-            )
-
-            await self.finish_player_stats()
-            await self.finish()
-
-
-class EscapeGame(BaseGame):
-
-    async def start_game(self):
-        rooms = [
-            "🚪 غرفة حمراء",
-            "🚪 غرفة زرقاء",
-            "🚪 غرفة سوداء",
-        ]
-
-        correct = random.choice(rooms)
-
-        view = EscapeView(self, correct)
-
-        embed = discord.Embed(
-            title="🔐🔥 الهروب من الغرفة",
-            description=(
-                "أمامك 3 غرف.\n"
-                "غرفة واحدة فقط هي طريق النجاة!\n\n"
-                "اختار بسرعة."
-            ),
-            color=DARK_COLOR
-        )
-
-        await self.channel.send(
-            embed=embed,
-            view=view
-        )
-
-
-class EscapeView(ui.View):
-
-    def __init__(self, game, correct):
-        super().__init__(timeout=20)
-        self.game = game
-        self.correct = correct
-
-    async def choose(self, interaction, choice):
-        if interaction.user.id not in self.game.players:
-            await interaction.response.send_message(
-                "❌ أنت لست داخل اللعبة.",
-                ephemeral=True
-            )
-            return
-
-        if choice == self.correct:
-            add_points(interaction.user.id, 3)
-
-            await interaction.response.send_message(
-                "🚪✨ **نجحت بالهروب! +3 نقاط**"
-            )
-        else:
-            add_points(interaction.user.id, 1)
-
-            await interaction.response.send_message(
-                "💥 وقعت في الفخ! +1 نقطة"
-            )
-
-        await self.game.finish_player_stats()
-        await self.game.finish()
-
-    @ui.button(label="🚪 الأحمر", style=discord.ButtonStyle.danger)
-    async def red(self, interaction, button):
-        await self.choose(interaction, "🚪 غرفة حمراء")
-
-    @ui.button(label="🚪 الأزرق", style=discord.ButtonStyle.primary)
-    async def blue(self, interaction, button):
-        await self.choose(interaction, "🚪 غرفة زرقاء")
-
-    @ui.button(label="🚪 الأسود", style=discord.ButtonStyle.secondary)
-    async def black(self, interaction, button):
-        await self.choose(interaction, "🚪 غرفة سوداء")
-
-
-# =========================================================
-# مين الكذاب
-# =========================================================
-
-class LiarGame(BaseGame):
-
-    async def start_game(self):
-        players = list(self.players.values())
-        liar = random.choice(players)
-
-        self.liar_id = liar.id
-
-        embed = discord.Embed(
-            title="🕵️🔥 مين الكذاب؟",
-            description=(
-                "كل لاعب سيحصل على معلومة.\n"
-                "شخص واحد فقط حصل على معلومة مختلفة.\n\n"
-                "💬 ناقشوا في الشات وحاولوا اكتشاف الكذاب!"
-            ),
-            color=EMBED_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        for member in players:
-            if member.id == self.liar_id:
-                text = "🤫 أنت الكذاب! حاول تمثل أنك طبيعي."
-            else:
-                text = "🟢 أنت بريء. حاول اكتشاف الكذاب."
-
-            try:
-                await member.send(
-                    f"🕵️ **مين الكذاب؟**\n{text}"
-                )
-            except:
-                pass
-
-        await asyncio.sleep(15)
-
-        await self.channel.send(
-            "🗳️ **انتهى وقت النقاش!**\n"
-            "الكذاب كان: "
-            f"{liar.mention}"
-        )
-
-        add_points(liar.id, 2)
-
-        for uid in self.players:
-            add_game(uid, uid == liar.id)
-            add_points(uid, 1)
-
-        await asyncio.sleep(3)
-        await self.finish()
-
-
-# =========================================================
-# ملك السيرفر
-# =========================================================
-
-class KingGame(BaseGame):
-
-    async def start_game(self):
-        players = list(self.players.values())
-        king = random.choice(players)
-
-        embed = discord.Embed(
-            title="👑🔥 ملك السيرفر",
-            description=(
-                f"تم اختيار الملك سرًا!\n\n"
-                "👑 الملك يحصل على قوة إضافية.\n"
-                "حاولوا اكتشافه قبل انتهاء الوقت!"
-            ),
-            color=GOLD_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        try:
-            await king.send(
-                "👑 **أنت الملك!**\n"
-                "لا تكشف نفسك."
-            )
-        except:
-            pass
-
-        await asyncio.sleep(15)
-
-        add_points(king.id, 3)
-
-        await self.channel.send(
-            f"👑🔥 **انكشف الملك:** {king.mention}\n"
-            f"حصل على **3 نقاط إضافية**."
-        )
-
-        await self.finish_player_stats({king.id})
-        await self.finish()
-
-
-# =========================================================
-# السيطرة على المناطق
-# =========================================================
-
-class TerritoryGame(BaseGame):
-
-    async def start_game(self):
-        territories = [
-            "🏜️ الصحراء",
-            "🏙️ المدينة",
-            "🏝️ الجزيرة",
-            "🏔️ الجبل",
-        ]
-
-        owners = {}
-
-        for territory in territories:
-            owner = random.choice(list(self.players.values()))
-            owners[territory] = owner
-
-        lines = []
-
-        for territory, owner in owners.items():
-            add_points(owner.id, 2)
-            lines.append(
-                f"{territory} → {owner.mention}"
-            )
-
-        embed = discord.Embed(
-            title="🏴🔥 السيطرة على المناطق",
-            description="\n".join(lines),
-            color=INFO_COLOR
-        )
-
-        embed.set_footer(
-            text="كل منطقة تسيطر عليها = +2 نقاط"
-        )
-
-        await self.channel.send(embed=embed)
-
-        winners = {
-            owner.id for owner in owners.values()
-        }
-
-        await self.finish_player_stats(winners)
-        await asyncio.sleep(3)
-        await self.finish()
-
-
-# =========================================================
-# ورق الحظ
-# =========================================================
-
-class CardsGame(BaseGame):
-
-    async def start_game(self):
-        cards = [
-            ("🃏 الذهب", 4),
-            ("💀 الخسارة", 0),
-            ("🍀 الحظ", 3),
-            ("🔥 القوة", 2),
-            ("💎 الماس", 5),
-        ]
-
-        lines = []
-
-        for member in self.players.values():
-            card, points = random.choice(cards)
-
-            add_points(member.id, points + 1)
-
-            lines.append(
-                f"{member.mention} → {card} **+{points + 1}**"
-            )
-
-        embed = discord.Embed(
-            title="🃏🔥 ورق الحظ",
-            description="\n".join(lines),
-            color=GOLD_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        await self.finish_player_stats()
-        await asyncio.sleep(4)
-        await self.finish()
-
-
-# =========================================================
-# الذاكرة
-# =========================================================
-
-class MemoryGame(BaseGame):
-
-    async def start_game(self):
-        sequence = [
-            random.randint(1, 9)
-            for _ in range(5)
-        ]
-
-        embed = discord.Embed(
-            title="🧠🔥 الذاكرة",
-            description=(
-                "احفظ الأرقام بسرعة!\n\n"
-                f"## {' '.join(map(str, sequence))}\n\n"
-                "سيختفي الرقم الآن..."
-            ),
-            color=EMBED_COLOR
-        )
-
-        msg = await self.channel.send(embed=embed)
-
-        await asyncio.sleep(4)
-
-        await msg.edit(
-            embed=discord.Embed(
-                title="🧠❓ ما هو التسلسل؟",
-                description="أول لاعب يكتب التسلسل الصحيح يفوز!",
-                color=INFO_COLOR
-            )
-        )
-
-        correct = "".join(map(str, sequence))
-
-        def check(message):
-            return (
-                message.channel.id == self.channel.id
-                and message.author.id in self.players
-            )
-
-        try:
-            while True:
-                message = await self.cog.bot.wait_for(
-                    "message",
-                    timeout=20,
-                    check=check
-                )
-
-                if message.content.replace(" ", "") == correct:
-                    add_points(message.author.id, 4)
-
-                    await self.channel.send(
-                        f"🧠🔥 **ذاكرة خارقة!**\n"
-                        f"{message.author.mention} +4 نقاط!"
-                    )
-
-                    await self.finish_player_stats(
-                        {message.author.id}
-                    )
-
-                    await self.finish()
-                    return
-
-        except asyncio.TimeoutError:
-            await self.channel.send(
-                f"⏰ انتهى الوقت!\n"
-                f"التسلسل كان: **{' '.join(map(str, sequence))}**"
-            )
-
-            await self.finish_player_stats()
-            await self.finish()
-
-
-# =========================================================
-# خمن الشخصية
-# =========================================================
-
-class CharacterGame(BaseGame):
-
-    async def start_game(self):
-        characters = [
-            ("🕷️", "شخصية ترتدي بدلة عنكبوت"),
-            ("🦇", "شخصية ليلية مشهورة"),
-            ("🧙", "شخصية تستخدم السحر"),
-            ("🦸", "بطل خارق مشهور"),
-            ("🤖", "شخصية آلية"),
-        ]
-
-        emoji, clue = random.choice(characters)
-
-        embed = discord.Embed(
-            title="🎭🔥 خمن الشخصية",
-            description=(
-                f"## 🔎 التلميح:\n{clue}\n\n"
-                "اكتب اسم الشخصية في الشات!"
-            ),
-            color=EMBED_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        # لعبة اختبارية تعتمد على أول إجابة صحيحة
-        def check(message):
-            return (
-                message.channel.id == self.channel.id
-                and message.author.id in self.players
-            )
-
-        try:
-            message = await self.cog.bot.wait_for(
-                "message",
-                timeout=20,
-                check=check
-            )
-
-            add_points(message.author.id, 2)
-
-            await self.channel.send(
-                f"🎭🔥 {message.author.mention} "
-                f"أجاب أولًا وحصل على **2 نقاط**!"
-            )
-
-            await self.finish_player_stats(
-                {message.author.id}
-            )
-
-        except asyncio.TimeoutError:
-            await self.channel.send(
-                f"⏰ انتهى الوقت!\n"
-                f"الشخصية كانت مرتبطة بالرمز **{emoji}**."
-            )
-
-            await self.finish_player_stats()
-
-        await self.finish()
-
-
-# =========================================================
-# المزاد
-# =========================================================
-
-class AuctionGame(BaseGame):
-
-    async def start_game(self):
-        item = random.choice([
-            "💎 ألماسة نادرة",
-            "👑 تاج أسطوري",
-            "🏆 كأس البطولة",
-            "🪙 عملة ذهبية",
-        ])
-
-        embed = discord.Embed(
-            title="💰🔥 المزاد",
-            description=(
-                f"السلعة: **{item}**\n\n"
-                "كل لاعب يرسل رقمًا يمثل عرضه.\n"
-                "أعلى عرض يفوز!"
-            ),
-            color=GOLD_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        bids = {}
-
-        def check(message):
-            return (
-                message.channel.id == self.channel.id
-                and message.author.id in self.players
-                and message.content.isdigit()
-            )
-
-        end = time.time() + 20
-
-        while time.time() < end:
-            try:
-                message = await self.cog.bot.wait_for(
-                    "message",
-                    timeout=max(0.1, end - time.time()),
-                    check=check
-                )
-
-                bid = int(message.content)
-
-                if bid > 0:
-                    bids[message.author.id] = bid
-
-            except asyncio.TimeoutError:
-                break
-
-        if bids:
-            winner = max(bids, key=bids.get)
-
-            add_points(winner, 4)
-
-            await self.channel.send(
-                f"💰👑 أعلى مزايدة:\n"
-                f"{self.players[winner].mention}\n"
-                f"💵 العرض: **{bids[winner]}**\n"
-                f"⭐ +4 نقاط"
-            )
-
-            await self.finish_player_stats({winner})
-        else:
-            await self.channel.send(
-                "💰 لم يقدم أحد مزايدة!"
-            )
-            await self.finish_player_stats()
-
-        await self.finish()
-
-
-# =========================================================
-# التحقيق
-# =========================================================
-
-class InvestigationGame(BaseGame):
-
-    async def start_game(self):
-        suspect = random.choice(
-            list(self.players.values())
-        )
-
-        try:
-            await suspect.send(
-                "🔎 **أنت المشتبه به!**\n"
-                "حاول الدفاع عن نفسك."
-            )
-        except:
-            pass
-
-        embed = discord.Embed(
-            title="🔎🔥 التحقيق",
-            description=(
-                "هناك مشتبه به بينكم!\n\n"
-                "ناقشوا وحاولوا معرفة من هو.\n"
-                "بعد انتهاء الوقت سيتم كشفه."
-            ),
-            color=DANGER_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        await asyncio.sleep(15)
-
-        await self.channel.send(
-            f"🚨 **تم كشف المشتبه به:** "
-            f"{suspect.mention}"
-        )
-
-        add_points(suspect.id, 3)
-
-        await self.finish_player_stats({suspect.id})
-        await self.finish()
-
-
-# =========================================================
-# السفينة الغارقة
-# =========================================================
-
-class ShipGame(BaseGame):
-
-    async def start_game(self):
-        spots = [
-            "🛟 قارب النجاة",
-            "🚪 الباب",
-            "🪵 الطوف",
-        ]
-
-        correct = random.choice(spots)
-
-        view = ShipView(self, correct)
-
-        embed = discord.Embed(
-            title="🚢🌊 السفينة الغارقة",
-            description=(
-                "السفينة تغرق!\n\n"
-                "اختار مكان النجاة قبل انتهاء الوقت!"
-            ),
-            color=INFO_COLOR
-        )
-
-        await self.channel.send(
-            embed=embed,
-            view=view
-        )
-
-
-class ShipView(ui.View):
-
-    def __init__(self, game, correct):
-        super().__init__(timeout=20)
-        self.game = game
-        self.correct = correct
-
-    async def select_spot(self, interaction, choice):
-        if interaction.user.id not in self.game.players:
-            await interaction.response.send_message(
-                "❌ أنت لست لاعبًا.",
-                ephemeral=True
-            )
-            return
-
-        if choice == self.correct:
-            add_points(interaction.user.id, 3)
-
-            await interaction.response.send_message(
-                "🛟🌊 **نجوت! +3 نقاط**"
-            )
-
-            await self.game.finish_player_stats(
-                {interaction.user.id}
-            )
-        else:
-            add_points(interaction.user.id, 1)
-
-            await interaction.response.send_message(
-                "🌊❌ لم تنجُ... +1 نقطة"
-            )
-
-            await self.game.finish_player_stats()
-
-        await self.game.finish()
-
-    @ui.button(
-        label="🛟 القارب",
-        style=discord.ButtonStyle.success
-    )
-    async def boat(self, interaction, button):
-        await self.select_spot(
-            interaction,
-            "🛟 قارب النجاة"
-        )
-
-    @ui.button(
-        label="🚪 الباب",
-        style=discord.ButtonStyle.primary
-    )
-    async def door(self, interaction, button):
-        await self.select_spot(
-            interaction,
-            "🚪 الباب"
-        )
-
-    @ui.button(
-        label="🪵 الطوف",
-        style=discord.ButtonStyle.secondary
-    )
-    async def raft(self, interaction, button):
-        await self.select_spot(
-            interaction,
-            "🪵 الطوف"
-        )
-
-
-# =========================================================
-# معركة اللاعبين
-# =========================================================
-
-class BattleGame(BaseGame):
-
-    async def start_game(self):
-        players = list(self.players.values())
-        random.shuffle(players)
-
-        lines = []
-
-        while len(players) > 1:
-            a = players.pop(0)
-            b = players.pop(0)
-
-            winner = random.choice([a, b])
-
-            lines.append(
-                f"⚔️ {a.mention} VS {b.mention}\n"
-                f"🏆 الفائز: {winner.mention}"
-            )
-
-            add_points(winner.id, 2)
-
-        if players:
-            champion = players[0]
-        else:
-            champion = None
-
-        if champion:
-            add_points(champion.id, 3)
-
-            lines.append(
-                f"\n👑 **البطل النهائي:** "
-                f"{champion.mention}"
-            )
-
-            winners = {champion.id}
-        else:
-            winners = set()
-
-        embed = discord.Embed(
-            title="⚔️🔥 معركة اللاعبين",
-            description="\n\n".join(lines),
-            color=DANGER_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        await self.finish_player_stats(winners)
-        await asyncio.sleep(4)
-        await self.finish()
-
-
-# =========================================================
-# الهدف السري
-# =========================================================
-
-class SecretTargetGame(BaseGame):
-
-    async def start_game(self):
-        players = list(self.players.values())
-
-        if len(players) < 2:
-            await self.finish()
-            return
-
-        targets = players.copy()
-        random.shuffle(targets)
-
-        assignments = {}
-
-        for index, player in enumerate(players):
-            target = targets[index]
-
-            if target.id == player.id:
-                target = targets[(index + 1) % len(targets)]
-
-            assignments[player.id] = target.id
-
-            try:
-                await player.send(
-                    f"🎯 **هدفك السري:** "
-                    f"{target.display_name}\n\n"
-                    "لا تخبر أحدًا!"
-                )
-            except:
-                pass
-
-        await self.channel.send(
-            embed=discord.Embed(
-                title="🎯🕵️ الهدف السري",
-                description=(
-                    "تم إرسال هدف سري لكل لاعب بالخاص.\n\n"
-                    "أمامكم وقت قصير لتنفيذ المهمة."
-                ),
-                color=EMBED_COLOR
-            )
-        )
-
-        await asyncio.sleep(15)
-
-        for uid in self.players:
-            add_points(uid, 1)
-
-        await self.channel.send(
-            "🎯 انتهت الجولة!\n"
-            "كل لاعب حصل على **نقطة مشاركة**."
-        )
-
-        await self.finish_player_stats()
-        await self.finish()
-
-
-# =========================================================
-# ترتيب الكلمات
-# =========================================================
-
-class WordsGame(BaseGame):
-
-    async def start_game(self):
-        sentences = [
-            ["ديسكورد", "نحب", "نلعب"],
-            ["اليوم", "اللعبة", "حماسية"],
-            ["النقاط", "تجمع", "باللعب"],
-            ["الفائز", "يحصل", "على", "نقاط"],
-        ]
-
-        words = random.choice(sentences)
-        shuffled = words.copy()
-        random.shuffle(shuffled)
-
-        embed = discord.Embed(
-            title="🧩🔥 ترتيب الكلمات",
-            description=(
-                "رتب الكلمات لتكوين الجملة الصحيحة:\n\n"
-                f"## {' | '.join(shuffled)}\n\n"
-                "⚡ أول إجابة صحيحة = 4 نقاط!"
-            ),
-            color=INFO_COLOR
-        )
-
-        await self.channel.send(embed=embed)
-
-        correct = " ".join(words)
-
-        def check(message):
-            return (
-                message.channel.id == self.channel.id
-                and message.author.id in self.players
-            )
-
-        try:
-            while True:
-                message = await self.cog.bot.wait_for(
-                    "message",
-                    timeout=20,
-                    check=check
-                )
-
-                if message.content.strip() == correct:
-                    add_points(message.author.id, 4)
-
-                    await self.channel.send(
-                        f"🧩🔥 **إجابة صحيحة!**\n"
-                        f"{message.author.mention} +4 نقاط!"
-                    )
-
-                    await self.finish_player_stats(
-                        {message.author.id}
-                    )
-
-                    await self.finish()
-                    return
-
-        except asyncio.TimeoutError:
-            await self.channel.send(
-                f"⏰ انتهى الوقت!\n"
-                f"الترتيب الصحيح: **{correct}**"
-            )
-
-            await self.finish_player_stats()
-            await self.finish()
-
-
-# =========================================================
-# السيطرة على اللعبة
-# =========================================================
-
-GAME_CLASSES = {
-    "dice": DiceGame,
-    "speed": SpeedGame,
-    "bomb": BombGame,
-    "guess": GuessGame,
-    "escape": EscapeGame,
-    "liar": LiarGame,
-    "king": KingGame,
-    "territory": TerritoryGame,
-    "cards": CardsGame,
-    "memory": MemoryGame,
-    "character": CharacterGame,
-    "auction": AuctionGame,
-    "investigation": InvestigationGame,
-    "ship": ShipGame,
-    "battle": BattleGame,
-    "secret": SecretTargetGame,
-    "words": WordsGame,
-}
-
-
-# =========================================================
 # قائمة الألعاب
 # =========================================================
 
-class GamesSelect(ui.Select):
+class GameSelect(discord.ui.Select):
 
     def __init__(self, cog):
 
         self.cog = cog
 
-        options = []
-
-        for key, name in GAMES.items():
-            options.append(
-                discord.SelectOption(
-                    label=name[:100],
-                    value=key
-                )
-            )
+        options = [
+            discord.SelectOption(
+                label="معركة اللاعبين",
+                value="⚔️ معركة اللاعبين",
+                emoji="⚔️"
+            ),
+            discord.SelectOption(
+                label="السيطرة على المناطق",
+                value="🏴 السيطرة على المناطق",
+                emoji="🏴"
+            ),
+            discord.SelectOption(
+                label="الهدف السري",
+                value="🎯 الهدف السري",
+                emoji="🎯"
+            ),
+            discord.SelectOption(
+                label="ملك السيرفر",
+                value="👑 ملك السيرفر",
+                emoji="👑"
+            ),
+            discord.SelectOption(
+                label="السفينة الغارقة",
+                value="🚢 السفينة الغارقة",
+                emoji="🚢"
+            ),
+            discord.SelectOption(
+                label="المزاد",
+                value="💰 المزاد",
+                emoji="💰"
+            ),
+            discord.SelectOption(
+                label="الخائن",
+                value="🕵️ الخائن",
+                emoji="🕵️"
+            ),
+        ]
 
         super().__init__(
-            placeholder="🎮 اختر اللعبة التي تريد تشغيلها...",
-            min_values=1,
-            max_values=1,
+            placeholder="🎮 اختر اللعبة...",
             options=options
         )
 
@@ -1556,705 +2147,367 @@ class GamesSelect(ui.Select):
 
         if GameManager.running():
             await interaction.response.send_message(
-                "🎮 يوجد لعبة جارية بالفعل!",
+                "❌ توجد لعبة تعمل بالفعل.",
                 ephemeral=True
             )
             return
 
-        key = self.values[0]
+        game_type = self.values[0]
 
-        game_class = GAME_CLASSES[key]
-
-        game = game_class(
+        view = LobbyView(
             self.cog,
-            interaction.channel
+            interaction.channel,
+            game_type
         )
-
-        GameManager.start(game, key)
 
         await interaction.response.edit_message(
-            content=(
-                f"🎮🔥 **تم اختيار اللعبة:** "
-                f"{GAMES[key]}"
-            ),
-            embed=None,
-            view=None
+            embed=await view.refresh(),
+            view=view
         )
 
-        await asyncio.sleep(1)
 
-        embed = discord.Embed(
-            title=f"🎮🔥 بدأت لعبة {GAMES[key]}!",
-            description=(
-                "## 👥 افتحوا اللوبي وادخلوا اللعبة!\n\n"
-                f"👤 الحد الأدنى: **{MIN_PLAYERS}**\n"
-                f"👥 الحد الأقصى: **{MAX_PLAYERS}**\n\n"
-                "⭐ كل مشاركة تعطيك نقاط.\n"
-                "🏆 الفوز يعطي نقاط إضافية."
-            ),
-            color=EMBED_COLOR
-        )
-
-        await interaction.channel.send(
-            embed=embed,
-            view=LobbyView(game)
-        )
-
-        game.lobby_message = None
-
-
-class GamesMenuView(ui.View):
+class GameSelectView(discord.ui.View):
 
     def __init__(self, cog):
-        super().__init__(timeout=180)
-        self.add_item(GamesSelect(cog))
-
-
-# =========================================================
-# التخريب
-# =========================================================
-
-SABOTAGE_ITEMS = {
-    "nuke": {
-        "name": "☢️ النووي",
-        "price": 10,
-        "description": "يستبعد جميع اللاعبين من الجولة.",
-    },
-    "bomb": {
-        "name": "💥 التفجير",
-        "price": 5,
-        "description": "يستبعد لاعبًا واحدًا.",
-    },
-    "target": {
-        "name": "🎯 الاستهداف",
-        "price": 3,
-        "description": "يستهدف لاعبًا ويخرجه من الجولة.",
-    },
-    "shield": {
-        "name": "🛡️ الحماية",
-        "price": 4,
-        "description": "تحمي نفسك من تخريب واحد.",
-    },
-}
-
-
-class SabotageView(ui.View):
-
-    def __init__(self, cog):
-        super().__init__(timeout=60)
-        self.cog = cog
-
-    @ui.button(
-        label="☢️ النووي — 10",
-        style=discord.ButtonStyle.danger
-    )
-    async def nuke(self, interaction, button):
-
-        await self.cog.use_sabotage(
-            interaction,
-            "nuke"
-        )
-
-    @ui.button(
-        label="💥 تفجير — 5",
-        style=discord.ButtonStyle.danger
-    )
-    async def bomb(self, interaction, button):
-
-        await self.cog.use_sabotage(
-            interaction,
-            "bomb"
-        )
-
-    @ui.button(
-        label="🎯 استهداف — 3",
-        style=discord.ButtonStyle.primary
-    )
-    async def target(self, interaction, button):
-
-        await self.cog.use_sabotage(
-            interaction,
-            "target"
-        )
-
-    @ui.button(
-        label="🛡️ حماية — 4",
-        style=discord.ButtonStyle.success
-    )
-    async def shield(self, interaction, button):
-
-        await self.cog.use_sabotage(
-            interaction,
-            "shield"
-        )
+        super().__init__(timeout=120)
+        self.add_item(GameSelect(cog))
 
 
 # =========================================================
 # Cog
 # =========================================================
 
-class Games(commands.Cog):
+class GamesCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
 
+        self.GAME_CLASSES = {
+            "⚔️ معركة اللاعبين": BattleGame,
+            "🏴 السيطرة على المناطق": TerritoryGame,
+            "🎯 الهدف السري": SecretTargetGame,
+            "👑 ملك السيرفر": KingGame,
+            "🚢 السفينة الغارقة": ShipGame,
+            "💰 المزاد": AuctionGame,
+            "🕵️ الخائن": TraitorGame,
+        }
+
     # -----------------------------------------------------
-    # -العاب-العب
+    # الألعاب
     # -----------------------------------------------------
 
     @commands.command(name="العاب-العب")
-    async def play_games(self, ctx):
-
-        if ctx.channel.id != GAME_CHANNEL_ID:
-            return
+    @is_game_channel()
+    async def games_play(self, ctx):
 
         if not has_control_role(ctx.author):
             return
 
         if GameManager.running():
-
-            embed = discord.Embed(
-                title="🎮⛔ لعبة جارية",
-                description=(
-                    f"يوجد الآن لعبة شغالة:\n\n"
-                    f"## {GameManager.active_game_name}\n\n"
-                    "⏳ انتظر حتى تنتهي اللعبة."
-                ),
-                color=DANGER_COLOR
+            await ctx.send(
+                "❌ توجد لعبة تعمل حاليًا.\n"
+                "انتظر انتهائها قبل بدء لعبة جديدة."
             )
-
-            await ctx.send(embed=embed)
             return
 
         embed = discord.Embed(
-            title="🎮🔥 مركز الألعاب",
+            title="🎮 مركز الألعاب التفاعلية",
             description=(
-                "## اختر اللعبة التي تريد تشغيلها 👇\n\n"
-                "🎯 كل لعبة لها طريقة لعب مختلفة.\n"
-                "⭐ المشاركة = نقاط.\n"
-                "🏆 الفوز = نقاط إضافية.\n\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "### 🛠️ أوامر الإدارة\n"
-                "`-نقاط-نقط @شخص` → إعطاء نقطة\n"
-                "`-تصفير-لاعب @شخص` → تصفير لاعب\n"
-                "`-تصفير-نقاط` → تصفير جميع النقاط\n"
-                "`-توب-العاب` → عرض توب الألعاب\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "### 💰 أوامر اللاعبين\n"
-                "`-محفظتي` → عرض نقاطك\n"
-                "`-اعلى-نقاط` → أعلى اللاعبين\n"
-                "`-تخريب` → متجر التخريب أثناء اللعبة"
-            ),
-            color=EMBED_COLOR
+                "اختر اللعبة من القائمة بالأسفل.\n\n"
+                "🎮 **انضمام:** للاعبين الحقيقيين\n"
+                "🤖 **إضافة لاعب وهمي:** للإدارة\n"
+                "🚀 **بدء اللعبة:** يبدأ الجولة\n"
+                "🛑 **إلغاء:** يلغي اللوبي"
+            )
         )
 
-        embed.set_footer(
-            text="🔥 اختر لعبة وخلّ الحماس يبدأ!"
+        embed.add_field(
+            name="🎮 الألعاب",
+            value="\n".join(
+                f"• {name}"
+                for name in self.GAME_CLASSES.keys()
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="🛠️ أوامر الإدارة",
+            value=(
+                "`-تصفير-لاعب @شخص`\n"
+                "`-نقاط-نقط @شخص`\n"
+                "`-تصفير-نقاط`\n"
+                "`-توب-العاب`"
+            ),
+            inline=False
         )
 
         await ctx.send(
             embed=embed,
-            view=GamesMenuView(self)
+            view=GameSelectView(self)
         )
 
     # -----------------------------------------------------
-    # -محفظتي
+    # تخريب
+    # -----------------------------------------------------
+
+    @commands.command(name="تخريب")
+    @is_game_channel()
+    async def sabotage(self, ctx):
+
+        game = GameManager.active_game
+
+        if not game:
+            return
+
+        player = game.get_player(ctx.author.id)
+
+        if not player:
+            return
+
+        embed = discord.Embed(
+            title="💣 متجر التخريب",
+            description=(
+                "استخدم نقاطك لشراء أحداث داخل اللعبة.\n\n"
+                "☢️ نووي — **10 نقاط**\n"
+                "💥 انفجار — **5 نقاط**\n"
+                "🎯 هدف — **3 نقاط**\n"
+                "🛡️ درع — **4 نقاط**"
+            )
+        )
+
+        embed.set_footer(
+            text=f"رصيدك: {get_points(ctx.author.id)} نقطة"
+        )
+
+        await ctx.send(
+            embed=embed,
+            view=SabotageView(
+                game,
+                ctx.author
+            )
+        )
+
+    # -----------------------------------------------------
+    # محفظتي
     # -----------------------------------------------------
 
     @commands.command(name="محفظتي")
+    @is_game_channel()
     async def wallet(self, ctx):
 
-        if ctx.channel.id != GAME_CHANNEL_ID:
-            return
-
-        data = get_stats(ctx.author.id)
-
-        points = data.get("points", 0)
-        wins = data.get("wins", 0)
-        games = data.get("games", 0)
+        points = get_points(ctx.author.id)
 
         embed = discord.Embed(
-            title="💰 محفظتك",
+            title="💰 محفظتي",
             description=(
                 f"👤 اللاعب: {ctx.author.mention}\n\n"
-                f"⭐ النقاط: **{points}**\n"
-                f"🏆 الانتصارات: **{wins}**\n"
-                f"🎮 الألعاب: **{games}**"
-            ),
-            color=GOLD_COLOR
+                f"⭐ نقاط الألعاب: **{points}**"
+            )
         )
 
         await ctx.send(embed=embed)
 
     # -----------------------------------------------------
-    # -اعلى-نقاط
+    # أعلى نقاط
     # -----------------------------------------------------
 
     @commands.command(name="اعلى-نقاط")
+    @is_game_channel()
     async def top_points(self, ctx):
 
-        if ctx.channel.id != GAME_CHANNEL_ID:
-            return
+        data = list(
+            stats_collection.find(
+                {"points": {"$gt": 0}}
+            ).sort(
+                "points",
+                -1
+            ).limit(10)
+        )
 
-        rows = leaderboard(10)
-
-        if not rows:
+        if not data:
             await ctx.send(
-                "📊 لا توجد نقاط حتى الآن."
+                "📭 لا توجد نقاط مسجلة حتى الآن."
             )
             return
 
         lines = []
 
-        medals = [
-            "🥇",
-            "🥈",
-            "🥉",
-        ]
+        for index, item in enumerate(data, 1):
 
-        for index, row in enumerate(rows, start=1):
+            user_id = item["user_id"]
+            points = item.get("points", 0)
 
-            user = self.bot.get_user(
-                int(row["user_id"])
+            member = ctx.guild.get_member(
+                user_id
             )
 
             name = (
-                user.mention
-                if user
-                else f"<@{row['user_id']}>"
-            )
-
-            prefix = (
-                medals[index - 1]
-                if index <= 3
-                else f"**{index}.**"
+                member.display_name
+                if member
+                else f"عضو {user_id}"
             )
 
             lines.append(
-                f"{prefix} {name} — ⭐ **{row.get('points', 0)}**"
+                f"**{index}.** {name} — ⭐ {points}"
             )
 
         embed = discord.Embed(
-            title="🏆🔥 أعلى نقاط",
-            description="\n".join(lines),
-            color=GOLD_COLOR
-        )
-
-        embed.set_footer(
-            text="استمر باللعب لتدخل التوب!"
+            title="🏆 أعلى نقاط الألعاب",
+            description="\n".join(lines)
         )
 
         await ctx.send(embed=embed)
 
     # -----------------------------------------------------
-    # -نقاط-نقط
+    # تصفير لاعب
+    # -----------------------------------------------------
+
+    @commands.command(name="تصفير-لاعب")
+    @is_game_channel()
+    async def reset_player_command(
+        self,
+        ctx,
+        member: discord.Member = None
+    ):
+
+        if not has_control_role(ctx.author):
+            return
+
+        if member is None:
+            await ctx.send(
+                "❌ الاستخدام:\n"
+                "`-تصفير-لاعب @الشخص`"
+            )
+            return
+
+        reset_player(member.id)
+
+        await ctx.send(
+            f"🧹 تم تصفير نقاط **{member.display_name}**."
+        )
+
+    # -----------------------------------------------------
+    # إضافة نقطة
     # -----------------------------------------------------
 
     @commands.command(name="نقاط-نقط")
+    @is_game_channel()
     async def add_one_point(
         self,
         ctx,
-        member: discord.Member
+        member: discord.Member = None
     ):
 
-        if ctx.channel.id != GAME_CHANNEL_ID:
+        if not has_control_role(ctx.author):
             return
 
-        if not has_control_role(ctx.author):
+        if member is None:
+            await ctx.send(
+                "❌ الاستخدام:\n"
+                "`-نقاط-نقط @الشخص`"
+            )
             return
 
         add_points(member.id, 1)
 
         await ctx.send(
-            f"⭐ تم إضافة **نقطة واحدة** إلى "
-            f"{member.mention}."
+            f"⭐ تمت إضافة **1 نقطة** إلى "
+            f"**{member.display_name}**."
         )
 
     # -----------------------------------------------------
-    # -تصفير-لاعب
-    # -----------------------------------------------------
-
-    @commands.command(name="تصفير-لاعب")
-    async def reset_player(
-        self,
-        ctx,
-        member: discord.Member
-    ):
-
-        if ctx.channel.id != GAME_CHANNEL_ID:
-            return
-
-        if not has_control_role(ctx.author):
-            return
-
-        stats_collection.update_one(
-            {"user_id": member.id},
-            {
-                "$set": {
-                    "points": 0,
-                    "wins": 0,
-                    "games": 0,
-                    "actions": 0,
-                }
-            },
-            upsert=True
-        )
-
-        await ctx.send(
-            f"🧹 تم تصفير إحصائيات {member.mention}."
-        )
-
-    # -----------------------------------------------------
-    # -تصفير-نقاط
+    # تصفير جميع النقاط
     # -----------------------------------------------------
 
     @commands.command(name="تصفير-نقاط")
-    async def reset_points(self, ctx):
-
-        if ctx.channel.id != GAME_CHANNEL_ID:
-            return
+    @is_game_channel()
+    async def reset_all(
+        self,
+        ctx
+    ):
 
         if not has_control_role(ctx.author):
             return
 
-        stats_collection.update_many(
-            {},
-            {
-                "$set": {
-                    "points": 0
-                }
-            }
-        )
+        reset_all_points()
 
         await ctx.send(
-            "🧹🔥 **تم تصفير نقاط جميع اللاعبين.**"
+            "🧹 تم تصفير **جميع نقاط الألعاب**."
         )
 
     # -----------------------------------------------------
-    # -توب-العاب
+    # توب الألعاب
     # -----------------------------------------------------
 
     @commands.command(name="توب-العاب")
-    async def game_top(self, ctx):
+    @is_game_channel()
+    async def games_top(
+        self,
+        ctx
+    ):
 
-        if ctx.channel.id != GAME_CHANNEL_ID:
+        data = list(
+            stats_collection.find(
+                {"points": {"$gt": 0}}
+            ).sort(
+                "points",
+                -1
+            ).limit(10)
+        )
+
+        if not data:
+            await ctx.send(
+                "🏆 لا توجد نتائج حتى الآن."
+            )
             return
-
-        if not has_control_role(ctx.author):
-            return
-
-        rows = leaderboard(15)
 
         lines = []
 
-        for index, row in enumerate(rows, 1):
+        for index, item in enumerate(data, 1):
 
-            user = self.bot.get_user(
-                int(row["user_id"])
+            member = ctx.guild.get_member(
+                item["user_id"]
             )
 
-            name = (
-                user.mention
-                if user
-                else f"<@{row['user_id']}>"
-            )
+            if not member:
+                continue
 
             lines.append(
-                f"**{index}.** {name}\n"
-                f"⭐ {row.get('points', 0)} | "
-                f"🏆 {row.get('wins', 0)} فوز | "
-                f"🎮 {row.get('games', 0)} لعبة"
+                f"**{index}.** "
+                f"{member.display_name} "
+                f"— ⭐ {item.get('points', 0)}"
             )
 
         embed = discord.Embed(
-            title="🏆🎮 توب الألعاب",
-            description="\n\n".join(lines) or "لا يوجد لاعبين.",
-            color=GOLD_COLOR
+            title="🏆 توب الألعاب",
+            description="\n".join(lines)
         )
 
         await ctx.send(embed=embed)
 
     # -----------------------------------------------------
-    # -تخريب
+    # معالجة أخطاء القناة
     # -----------------------------------------------------
 
-    @commands.command(name="تخريب")
-    async def sabotage(self, ctx):
-
-        if ctx.channel.id != GAME_CHANNEL_ID:
-            return
-
-        if not GameManager.running():
-
-            embed = discord.Embed(
-                title="🛠️ تخريب",
-                description=(
-                    "❌ ما تقدر تستخدم التخريب الآن.\n\n"
-                    "لازم تكون فيه **فعالية أو لعبة شغالة**."
-                ),
-                color=DANGER_COLOR
-            )
-
-            await ctx.send(embed=embed)
-            return
-
-        embed = discord.Embed(
-            title="💀🔥 متجر التخريب",
-            description=(
-                "استخدم النقاط لتخريب اللعبة!\n\n"
-                "☢️ **النووي — 10 نقاط**\n"
-                "يفجر الجولة ويستبعد جميع اللاعبين.\n\n"
-                "💥 **التفجير — 5 نقاط**\n"
-                "يستبعد لاعبًا.\n\n"
-                "🎯 **الاستهداف — 3 نقاط**\n"
-                "يستهدف لاعبًا ويخرجه.\n\n"
-                "🛡️ **الحماية — 4 نقاط**\n"
-                "تحمي نفسك من تخريب واحد."
-            ),
-            color=DANGER_COLOR
-        )
-
-        embed.set_footer(
-            text="⚠️ التخريب يعمل فقط أثناء اللعبة"
-        )
-
-        await ctx.send(
-            embed=embed,
-            view=SabotageView(self)
-        )
-
-    # -----------------------------------------------------
-    # تنفيذ التخريب
-    # -----------------------------------------------------
-
-    async def use_sabotage(
+    @commands.Cog.listener()
+    async def on_command_error(
         self,
-        interaction,
-        action
+        ctx,
+        error
     ):
 
-        if interaction.channel.id != GAME_CHANNEL_ID:
-            await interaction.response.send_message(
-                "❌ هذا الأمر غير متاح هنا.",
-                ephemeral=True
-            )
+        if isinstance(
+            error,
+            commands.CheckFailure
+        ):
             return
-
-        game = GameManager.active_game_obj
-
-        if game is None:
-            await interaction.response.send_message(
-                "❌ لا توجد لعبة شغالة.",
-                ephemeral=True
-            )
-            return
-
-        user_id = interaction.user.id
-
-        # الحماية
-        if action == "shield":
-
-            price = SABOTAGE_ITEMS["shield"]["price"]
-
-            if not remove_points(user_id, price):
-                await interaction.response.send_message(
-                    "❌ ما عندك نقاط كافية.",
-                    ephemeral=True
-                )
-                return
-
-            game.protected.add(user_id)
-            add_action(user_id)
-
-            await interaction.response.send_message(
-                "🛡️🔥 **تم تفعيل الحماية!**\n"
-                "أنت محمي من تخريب واحد."
-            )
-
-            return
-
-        # النووي
-        if action == "nuke":
-
-            price = SABOTAGE_ITEMS["nuke"]["price"]
-
-            if not remove_points(user_id, price):
-                await interaction.response.send_message(
-                    f"❌ تحتاج **{price} نقاط**.",
-                    ephemeral=True
-                )
-                return
-
-            add_action(user_id)
-
-            for uid in list(game.players.keys()):
-                if uid != user_id:
-                    game.eliminated.add(uid)
-
-            await interaction.response.send_message(
-                "☢️💥 **تم تفجير النووي!**\n"
-                "🔥 تم استبعاد جميع اللاعبين من الجولة!"
-            )
-
-            await interaction.channel.send(
-                f"☢️ **كارثة نووية!**\n"
-                f"المستخدم: {interaction.user.mention}\n"
-                f"💸 تم خصم **{price} نقاط**."
-            )
-
-            await asyncio.sleep(2)
-
-            if not game.finished:
-                await game.finish()
-
-            return
-
-        # التخريب الذي يحتاج اختيار لاعب
-        if action in ("bomb", "target"):
-
-            price = SABOTAGE_ITEMS[action]["price"]
-
-            if not remove_points(user_id, price):
-                await interaction.response.send_message(
-                    f"❌ تحتاج **{price} نقاط**.",
-                    ephemeral=True
-                )
-                return
-
-            add_action(user_id)
-
-            members = [
-                m for uid, m in game.players.items()
-                if uid != user_id
-                and uid not in game.eliminated
-            ]
-
-            if not members:
-
-                await interaction.response.send_message(
-                    "❌ لا يوجد لاعب آخر يمكن استهدافه.",
-                    ephemeral=True
-                )
-
-                add_points(user_id, price)
-                return
-
-            view = TargetView(
-                self,
-                interaction.user,
-                members,
-                action
-            )
-
-            await interaction.response.send_message(
-                "🎯 اختر اللاعب الذي تريد استهدافه:",
-                view=view,
-                ephemeral=True
-            )
 
 
 # =========================================================
-# اختيار هدف التخريب
-# =========================================================
-
-class TargetView(ui.View):
-
-    def __init__(
-        self,
-        cog,
-        attacker,
-        members,
-        action
-    ):
-        super().__init__(timeout=30)
-
-        self.cog = cog
-        self.attacker = attacker
-        self.action = action
-
-        options = [
-            discord.SelectOption(
-                label=member.display_name[:100],
-                value=str(member.id)
-            )
-            for member in members
-        ]
-
-        self.select = ui.Select(
-            placeholder="🎯 اختر الضحية...",
-            options=options
-        )
-
-        self.select.callback = self.callback
-        self.add_item(self.select)
-
-    async def callback(self, interaction):
-
-        if interaction.user.id != self.attacker.id:
-            await interaction.response.send_message(
-                "❌ هذه القائمة ليست لك.",
-                ephemeral=True
-            )
-            return
-
-        game = GameManager.active_game_obj
-
-        if game is None:
-            await interaction.response.send_message(
-                "❌ اللعبة انتهت.",
-                ephemeral=True
-            )
-            return
-
-        target_id = int(self.select.values[0])
-
-        if target_id in game.protected:
-
-            game.protected.remove(target_id)
-
-            await interaction.response.edit_message(
-                content=(
-                    "🛡️ **تم صد التخريب!**\n"
-                    "اللاعب كان محميًا."
-                ),
-                view=None
-            )
-
-            return
-
-        target = game.players.get(target_id)
-
-        if not target:
-            await interaction.response.edit_message(
-                content="❌ اللاعب غير موجود.",
-                view=None
-            )
-            return
-
-        game.eliminated.add(target_id)
-
-        if self.action == "bomb":
-            text = (
-                f"💥🔥 **تم التفجير!**\n"
-                f"{target.mention} تم استبعاده!"
-            )
-        else:
-            text = (
-                f"🎯💀 **تم الاستهداف!**\n"
-                f"{target.mention} خرج من الجولة!"
-            )
-
-        await interaction.response.edit_message(
-            content="✅ تم تنفيذ التخريب!",
-            view=None
-        )
-
-        await interaction.channel.send(text)
-
-
-# =========================================================
-# Setup
+# تحميل الـ Cog
 # =========================================================
 
 async def setup(bot):
-    await bot.add_cog(Games(bot))
+    await bot.add_cog(
+        GamesCog(bot)
+    )
