@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands
 from discord import ui
+from discord.ext.commands.view import StringView
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
@@ -567,6 +568,51 @@ class EconomyCog(commands.Cog):
 
 
     # =====================================================
+    # تشغيل أوامر الاقتصاد بدون Prefix
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+
+        if message.author.bot:
+            return
+
+        if not message.guild:
+            return
+
+        content = message.content.strip()
+
+        if not content:
+            return
+
+        parts = content.split(maxsplit=1)
+
+        command_name = parts[0]
+
+        command = self.bot.get_command(command_name)
+
+        if command is None:
+            return
+
+        if command.cog is not self:
+            return
+
+        ctx = await self.bot.get_context(message)
+
+        ctx.prefix = ""
+        ctx.command = command
+
+        ctx.view = StringView(content)
+        ctx.view.index = len(command_name)
+
+        try:
+            await command.invoke(ctx)
+
+        except commands.CommandError:
+            pass
+
+
+    # =====================================================
     # الصلاحيات
     # =====================================================
 
@@ -852,7 +898,7 @@ class EconomyCog(commands.Cog):
                 "تم تعطيل **أوامر العملة فقط**.\n\n"
 
                 "يمكن إعادة تشغيلها باستخدام:\n"
-                "`-تفعيل`"
+                "`تفعيل`"
 
             ),
 
@@ -919,42 +965,42 @@ class EconomyCog(commands.Cog):
 
             description=(
 
-                "💰 **-رصيد**\n"
+                "💰 **رصيد**\n"
                 "عرض رصيدك الحالي.\n\n"
 
-                "🏆 **-توب [رقم الصفحة]**\n"
+                "🏆 **توب [رقم الصفحة]**\n"
                 "عرض أعلى الأعضاء.\n"
-                "مثال: `-توب 1`\n\n"
+                "مثال: `توب 1`\n\n"
 
-                "🎁 **-مكافاة**\n"
+                "🎁 **مكافاة**\n"
                 "الحصول على مكافأة عشوائية "
                 "من 3000 إلى 4000 Ai "
                 "مرة كل 10 ساعات.\n\n"
 
-                "🎲 **-حظ**\n"
+                "🎲 **حظ**\n"
                 "الحصول على مبلغ عشوائي "
                 "من 3000 إلى 5000 Ai "
                 "مرة كل 10 ساعات.\n\n"
 
-                "💸 **-تحويل @العضو المبلغ**\n"
+                "💸 **تحويل @العضو المبلغ**\n"
                 "تحويل Ai من رصيدك إلى عضو آخر.\n"
                 "يمكنك استخدام مبلغ مثل `25k`.\n"
                 "أو `ربع` / `نص` / `نصف` / `كامل`.\n\n"
 
-                "🎁 **-اعطي @العضو المبلغ**\n"
+                "🎁 **اعطي @العضو المبلغ**\n"
                 "إعطاء Ai لعضو — للإدارة فقط.\n\n"
 
-                "💸 **-سحب @العضو المبلغ**\n"
+                "💸 **سحب @العضو المبلغ**\n"
                 "سحب Ai من عضو — للإدارة فقط.\n"
                 "ويمكن استخدام `كل` لسحب كامل رصيده.\n\n"
 
-                "💰 **-توزيع**\n"
+                "💰 **توزيع**\n"
                 "فتح قائمة التوزيع — للإدارة فقط.\n\n"
 
-                "🎖️ **-شعار @العضو**\n"
+                "🎖️ **شعار @العضو**\n"
                 "إرسال شعار ومكافأة — للإدارة فقط.\n\n"
 
-                "🧹 **-تصفير كل**\n"
+                "🧹 **تصفير كل**\n"
                 "تصفير أرصدة جميع اللاعبين — للإدارة فقط."
 
             ),
@@ -1036,9 +1082,9 @@ class EconomyCog(commands.Cog):
                 await ctx.send(
 
                     "❌ **طريقة الاستعمال:**\n"
-                    "`-توب [رقم الصفحة]`\n\n"
+                    "`توب [رقم الصفحة]`\n\n"
                     "مثال:\n"
-                    "`-توب 1`"
+                    "`توب 1`"
 
                 )
 
@@ -1051,9 +1097,9 @@ class EconomyCog(commands.Cog):
             await ctx.send(
 
                 "❌ **طريقة الاستعمال:**\n"
-                "`-توب [رقم الصفحة]`\n\n"
+                "`توب [رقم الصفحة]`\n\n"
                 "مثال:\n"
-                "`-توب 1`"
+                "`توب 1`"
 
             )
 
@@ -1546,7 +1592,7 @@ class EconomyCog(commands.Cog):
                 f"🍀 حصلت على:\n"
                 f"**{format_coins(amount)} Ai**\n\n"
 
-                f"⏳ يمكنك استخدام `-حظ` مرة أخرى "
+                f"⏳ يمكنك استخدام `حظ` مرة أخرى "
                 f"بعد **10 ساعات**."
 
             ),
@@ -1593,13 +1639,13 @@ class EconomyCog(commands.Cog):
             await ctx.send(
 
                 "❌ **طريقة الاستعمال:**\n"
-                "`-تحويل @العضو المبلغ`\n\n"
+                "`تحويل @العضو المبلغ`\n\n"
 
                 "أمثلة:\n"
-                "`-تحويل @ضياء 25k`\n"
-                "`-تحويل @ضياء ربع`\n"
-                "`-تحويل @ضياء نص`\n"
-                "`-تحويل @ضياء كامل`"
+                "`تحويل @ضياء 25k`\n"
+                "`تحويل @ضياء ربع`\n"
+                "`تحويل @ضياء نص`\n"
+                "`تحويل @ضياء كامل`"
 
             )
 
@@ -1638,20 +1684,12 @@ class EconomyCog(commands.Cog):
                 )
             )
 
-            # =============================================
-            # تحويل كامل
-            # =============================================
-
             if amount_text in (
                 "كامل",
                 "كل"
             ):
 
                 amount = sender_balance
-
-            # =============================================
-            # تحويل نصف
-            # =============================================
 
             elif amount_text in (
                 "نص",
@@ -1660,17 +1698,9 @@ class EconomyCog(commands.Cog):
 
                 amount = sender_balance // 2
 
-            # =============================================
-            # تحويل ربع
-            # =============================================
-
             elif amount_text == "ربع":
 
                 amount = sender_balance // 4
-
-            # =============================================
-            # تحويل ثلاثة أرباع
-            # =============================================
 
             elif amount_text in (
                 "ثلاث ارباع",
@@ -1682,10 +1712,6 @@ class EconomyCog(commands.Cog):
                 amount = (
                     sender_balance * 3
                 ) // 4
-
-            # =============================================
-            # مبلغ عادي
-            # =============================================
 
             else:
 
@@ -1724,17 +1750,13 @@ class EconomyCog(commands.Cog):
                 return
 
             await self.update_balance(
-
                 ctx.author.id,
                 -amount
-
             )
 
             await self.update_balance(
-
                 member.id,
                 amount
-
             )
 
         embed = discord.Embed(
@@ -1786,10 +1808,10 @@ class EconomyCog(commands.Cog):
             await ctx.send(
 
                 "❌ **طريقة الاستعمال:**\n"
-                "`-اعطي @العضو المبلغ`\n\n"
+                "`اعطي @العضو المبلغ`\n\n"
 
                 "مثال:\n"
-                "`-اعطي @ضياء 25k`"
+                "`اعطي @ضياء 25k`"
 
             )
 
@@ -1809,20 +1831,18 @@ class EconomyCog(commands.Cog):
             await ctx.send(
 
                 "❌ **طريقة الاستعمال:**\n"
-                "`-اعطي @العضو المبلغ`\n\n"
+                "`اعطي @العضو المبلغ`\n\n"
 
                 "مثال:\n"
-                "`-اعطي @ضياء 25k`"
+                "`اعطي @ضياء 25k`"
 
             )
 
             return
 
         await self.update_balance(
-
             member.id,
             amount
-
         )
 
         await ctx.send(
@@ -1876,13 +1896,13 @@ class EconomyCog(commands.Cog):
                 await ctx.send(
 
                     "❌ **طريقة الاستعمال:**\n"
-                    "`-سحب @العضو المبلغ`\n"
+                    "`سحب @العضو المبلغ`\n"
                     "أو\n"
-                    "`-سحب @العضو كل`\n\n"
+                    "`سحب @العضو كل`\n\n"
 
                     "مثال:\n"
-                    "`-سحب @ضياء 25k`\n"
-                    "`-سحب @ضياء كل`"
+                    "`سحب @ضياء 25k`\n"
+                    "`سحب @ضياء كل`"
 
                 )
 
@@ -1913,10 +1933,8 @@ class EconomyCog(commands.Cog):
                     return
 
                 await self.update_balance(
-
                     member.id,
                     -current_bal
-
                 )
 
                 await ctx.send(
@@ -1940,13 +1958,13 @@ class EconomyCog(commands.Cog):
                 await ctx.send(
 
                     "❌ **طريقة الاستعمال:**\n"
-                    "`-سحب @العضو المبلغ`\n"
+                    "`سحب @العضو المبلغ`\n"
                     "أو\n"
-                    "`-سحب @العضو كل`\n\n"
+                    "`سحب @العضو كل`\n\n"
 
                     "مثال:\n"
-                    "`-سحب @ضياء 25k`\n"
-                    "`-سحب @ضياء كل`"
+                    "`سحب @ضياء 25k`\n"
+                    "`سحب @ضياء كل`"
 
                 )
 
@@ -1975,10 +1993,8 @@ class EconomyCog(commands.Cog):
             )
 
             await self.update_balance(
-
                 member.id,
                 -final_amount
-
             )
 
             await ctx.send(
@@ -2012,7 +2028,7 @@ class EconomyCog(commands.Cog):
             await ctx.send(
 
                 "❌ **طريقة الاستعمال:**\n"
-                "`-تصفير كل`\n\n"
+                "`تصفير كل`\n\n"
 
                 "هذا الأمر يقوم بتصفير "
                 "أرصدة جميع اللاعبين."
@@ -2112,10 +2128,10 @@ class EconomyCog(commands.Cog):
             await ctx.send(
 
                 "❌ **طريقة الاستعمال:**\n"
-                "`-شعار @العضو`\n\n"
+                "`شعار @العضو`\n\n"
 
                 "مثال:\n"
-                "`-شعار @ضياء`"
+                "`شعار @ضياء`"
 
             )
 
