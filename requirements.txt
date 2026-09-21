@@ -1,7 +1,8 @@
-Discord.py
+discord.py
 pymongo
 dnspython
 flask
 groq
 motor
 folium
+Pillow
