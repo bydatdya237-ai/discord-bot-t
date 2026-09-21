@@ -1,7 +1,6 @@
 import os
 import discord
 from discord.ext import commands
-from discord.ext.commands.view import StringView
 from flask import Flask
 from threading import Thread
 from pymongo import MongoClient
@@ -11,17 +10,17 @@ from pymongo import MongoClient
 # إعدادات Keep Alive
 # ========================================================
 
-app = Flask('')
+app = Flask("")
 
 
-@app.route('/')
+@app.route("/")
 def home():
     return "I am alive!"
 
 
 def run():
     app.run(
-        host='0.0.0.0',
+        host="0.0.0.0",
         port=8080
     )
 
@@ -59,205 +58,23 @@ intents.message_content = True
 
 
 # ========================================================
-# Bot مخصص
-#
-# لا نستخدم command_prefix="" بالطريقة التقليدية.
-#
-# البوت يبحث عن اسم الأمر مباشرة من الرسالة.
+# Bot
 # ========================================================
 
-class NoPrefixBot(commands.Bot):
-
-    async def get_context(
-        self,
-        message,
-        *,
-        cls=commands.Context
-    ):
-
-        content = message.content.strip()
-
-        # ==================================================
-        # إنشاء Context
-        # ==================================================
-
-        ctx = cls(
-            message=message,
-            bot=self
-        )
-
-        ctx.prefix = ""
-        ctx.command = None
-
-        # ==================================================
-        # رسالة فارغة
-        # ==================================================
-
-        if not content:
-            return ctx
-
-        # ==================================================
-        # منع Prefix
-        # ==================================================
-
-        if content[0] in ("-", ".", "/"):
-
-            print(
-                "=================================================="
-            )
-
-            print(
-                "🚫 [COMMAND BLOCKED]"
-            )
-
-            print(
-                f"👤 المستخدم: "
-                f"{message.author} "
-                f"(ID: {message.author.id})"
-            )
-
-            print(
-                f"💬 المحتوى: {message.content!r}"
-            )
-
-            print(
-                f"🔤 Prefix المكتشف: {content[0]!r}"
-            )
-
-            print(
-                "📌 السبب: Prefix غير مسموح"
-            )
-
-            print(
-                "=================================================="
-            )
-
-            return ctx
-
-        # ==================================================
-        # إنشاء View للرسالة
-        # ==================================================
-
-        view = StringView(message.content)
-
-        ctx.view = view
-
-        # ==================================================
-        # قراءة أول كلمة فقط
-        #
-        # مثال:
-        #
-        # رصيد
-        # توب 1
-        # اعطي @شخص 5000
-        #
-        # أول كلمة هي اسم الأمر.
-        # ==================================================
-
-        command_name = view.get_word()
-
-        if not command_name:
-
-            return ctx
-
-        # ==================================================
-        # البحث عن الأمر
-        # ==================================================
-
-        command = self.get_command(command_name)
-
-        # ==================================================
-        # الأمر غير موجود
-        # ==================================================
-
-        if command is None:
-
-            print(
-                "=================================================="
-            )
-
-            print(
-                "⚠️ [COMMAND NOT FOUND]"
-            )
-
-            print(
-                f"👤 المستخدم: "
-                f"{message.author} "
-                f"(ID: {message.author.id})"
-            )
-
-            print(
-                f"💬 المحتوى: {message.content!r}"
-            )
-
-            print(
-                f"🔎 الأمر المطلوب: {command_name!r}"
-            )
-
-            print(
-                "📌 السبب: لا يوجد أمر مسجل بهذا الاسم"
-            )
-
-            print(
-                "=================================================="
-            )
-
-            return ctx
-
-        # ==================================================
-        # الأمر موجود
-        # ==================================================
-
-        ctx.command = command
-
-        ctx.prefix = ""
-
-        print(
-            "=================================================="
-        )
-
-        print(
-            "✅ [COMMAND DETECTED]"
-        )
-
-        print(
-            f"👤 المستخدم: "
-            f"{message.author} "
-            f"(ID: {message.author.id})"
-        )
-
-        print(
-            f"💬 المحتوى: {message.content!r}"
-        )
-
-        print(
-            f"⚡ الأمر: {command.name!r}"
-        )
-
-        print(
-            "📌 Prefix: بدون Prefix"
-        )
-
-        print(
-            "=================================================="
-        )
-
-        return ctx
-
-
-# ========================================================
-# البوت
-#
-# مهم:
-# command_prefix هنا مجرد قيمة شكلية لأننا عملنا
-# get_context مخصص فوق.
-# ========================================================
-
-bot = NoPrefixBot(
+bot = commands.Bot(
     command_prefix="",
     intents=intents,
     help_command=None
 )
+
+
+# ========================================================
+# اختبار تشغيل الملف
+# ========================================================
+
+print("🔥🔥🔥 MAIN FILE RUNNING 🔥🔥🔥")
+print(f"📁 الملف الحالي: {__file__}")
+print(f"⌨️ Command Prefix: {bot.command_prefix!r}")
 
 
 # ========================================================
@@ -284,7 +101,7 @@ async def on_message(message):
     content = message.content.strip()
 
     # ====================================================
-    # تجاهل الرسائل الفارغة
+    # رسالة فارغة
     # ====================================================
 
     if not content:
@@ -293,7 +110,11 @@ async def on_message(message):
     # ====================================================
     # منع Prefix
     #
-    # هذا الفحص يتم قبل process_commands.
+    # -رصيد
+    # .رصيد
+    # /رصيد
+    #
+    # كلها يتم تجاهلها نهائياً.
     # ====================================================
 
     if content[0] in ("-", ".", "/"):
@@ -301,29 +122,19 @@ async def on_message(message):
         print(
             "=================================================="
         )
-
-        print(
-            "🚫 [MESSAGE BLOCKED]"
-        )
-
+        print("🚫 [BLOCKED PREFIX]")
         print(
             f"👤 المستخدم: "
             f"{message.author} "
             f"(ID: {message.author.id})"
         )
-
         print(
-            f"💬 المحتوى: {message.content!r}"
+            f"💬 الرسالة: {message.content!r}"
         )
-
         print(
-            f"🔤 Prefix: {content[0]!r}"
+            f"🔤 Prefix الممنوع: {content[0]!r}"
         )
-
-        print(
-            "📌 السبب: الرسالة تبدأ بـ Prefix ممنوع"
-        )
-
+        print("📌 لم يتم تشغيل أي أمر")
         print(
             "=================================================="
         )
@@ -331,50 +142,59 @@ async def on_message(message):
         return
 
     # ====================================================
-    # تشغيل نظام الأوامر
+    # تسجيل الرسالة
+    # ====================================================
+
+    print(
+        "=================================================="
+    )
+    print("📨 [MESSAGE RECEIVED]")
+    print(
+        f"👤 المستخدم: "
+        f"{message.author} "
+        f"(ID: {message.author.id})"
+    )
+    print(
+        f"💬 الرسالة: {message.content!r}"
+    )
+    print("📌 محاولة معالجة الأمر بدون Prefix")
+    print(
+        "=================================================="
+    )
+
+    # ====================================================
+    # تشغيل الأوامر
     # ====================================================
 
     await bot.process_commands(message)
 
 
 # ========================================================
-# مراقبة أخطاء الأوامر
+# أخطاء الأوامر
 # ========================================================
 
 @bot.event
 async def on_command_error(ctx, error):
 
     # ====================================================
-    # الأمر غير موجود
+    # أمر غير موجود
     # ====================================================
 
-    if isinstance(
-        error,
-        commands.CommandNotFound
-    ):
+    if isinstance(error, commands.CommandNotFound):
 
         print(
             "=================================================="
         )
-
-        print(
-            "⚠️ [COMMAND NOT FOUND ERROR]"
-        )
-
+        print("⚠️ [COMMAND NOT FOUND]")
         print(
             f"👤 المستخدم: "
             f"{ctx.author} "
             f"(ID: {ctx.author.id})"
         )
-
         print(
-            f"💬 المحتوى: {ctx.message.content!r}"
+            f"💬 الرسالة: {ctx.message.content!r}"
         )
-
-        print(
-            "📌 السبب: الأمر غير موجود"
-        )
-
+        print("📌 لا يوجد أمر بهذا الاسم")
         print(
             "=================================================="
         )
@@ -382,41 +202,30 @@ async def on_command_error(ctx, error):
         return
 
     # ====================================================
-    # فشل Check
+    # فشل صلاحيات / Check
     # ====================================================
 
-    if isinstance(
-        error,
-        commands.CheckFailure
-    ):
+    if isinstance(error, commands.CheckFailure):
 
         print(
             "=================================================="
         )
-
-        print(
-            "🚫 [COMMAND CHECK FAILED]"
-        )
-
+        print("🚫 [COMMAND CHECK FAILED]")
         print(
             f"👤 المستخدم: "
             f"{ctx.author} "
             f"(ID: {ctx.author.id})"
         )
-
         print(
-            f"💬 المحتوى: {ctx.message.content!r}"
+            f"💬 الرسالة: {ctx.message.content!r}"
         )
 
-        print(
-            f"📌 الأمر: "
-            f"{ctx.command.name if ctx.command else 'غير معروف'}"
-        )
+        if ctx.command:
+            print(
+                f"📌 الأمر: {ctx.command.name}"
+            )
 
-        print(
-            "📌 السبب: أحد شروط الأمر رفض التنفيذ"
-        )
-
+        print("📌 أحد شروط الأمر رفض التنفيذ")
         print(
             "=================================================="
         )
@@ -424,7 +233,7 @@ async def on_command_error(ctx, error):
         return
 
     # ====================================================
-    # متغير مطلوب
+    # متغير ناقص
     # ====================================================
 
     if isinstance(
@@ -435,25 +244,20 @@ async def on_command_error(ctx, error):
         print(
             "=================================================="
         )
-
-        print(
-            "⚠️ [MISSING ARGUMENT]"
-        )
-
+        print("⚠️ [MISSING ARGUMENT]")
         print(
             f"👤 المستخدم: "
             f"{ctx.author} "
             f"(ID: {ctx.author.id})"
         )
-
         print(
-            f"💬 المحتوى: {ctx.message.content!r}"
+            f"💬 الرسالة: {ctx.message.content!r}"
         )
 
-        print(
-            f"📌 الأمر: "
-            f"{ctx.command.name if ctx.command else 'غير معروف'}"
-        )
+        if ctx.command:
+            print(
+                f"📌 الأمر: {ctx.command.name}"
+            )
 
         print(
             f"📌 المتغير المطلوب: "
@@ -473,25 +277,20 @@ async def on_command_error(ctx, error):
     print(
         "=================================================="
     )
-
-    print(
-        "❌ [COMMAND ERROR]"
-    )
-
+    print("❌ [COMMAND ERROR]")
     print(
         f"👤 المستخدم: "
         f"{ctx.author} "
         f"(ID: {ctx.author.id})"
     )
-
     print(
-        f"💬 المحتوى: {ctx.message.content!r}"
+        f"💬 الرسالة: {ctx.message.content!r}"
     )
 
-    print(
-        f"📌 الأمر: "
-        f"{ctx.command.name if ctx.command else 'غير معروف'}"
-    )
+    if ctx.command:
+        print(
+            f"📌 الأمر: {ctx.command.name}"
+        )
 
     print(
         f"❌ الخطأ: "
@@ -569,7 +368,7 @@ async def setup_hook():
 async def on_ready():
 
     print(
-        "========================================"
+        "=================================================="
     )
 
     print(
@@ -581,44 +380,25 @@ async def on_ready():
     )
 
     print(
+        f"⌨️ Command Prefix: {bot.command_prefix!r}"
+    )
+
+    print(
         "🚫 Prefixes الممنوعة: - . /"
     )
 
     print(
-        "✅ نظام الأوامر: بدون Prefix"
+        "✅ الأوامر تعمل بدون Prefix"
     )
 
     print(
-        "========================================"
+        f"📦 عدد الأوامر المسجلة: "
+        f"{len(bot.commands)}"
     )
 
-    try:
-
-        synced = await bot.tree.sync()
-
-        command_names = [
-            command.name
-            for command in synced
-        ]
-
-        print(
-            f"✅ تمت مزامنة "
-            f"{len(synced)} أمر Slash"
-        )
-
-        if command_names:
-
-            print(
-                f"📋 أوامر Slash: "
-                f"{command_names}"
-            )
-
-    except Exception as e:
-
-        print(
-            f"❌ خطأ في مزامنة أوامر Slash: "
-            f"{type(e).__name__}: {e}"
-        )
+    print(
+        "=================================================="
+    )
 
 
 # ========================================================
@@ -642,7 +422,7 @@ if not TOKEN:
 
 
 print(
-    "🔥🔥🔥 MAIN FILE RUNNING - NO PREFIX VERSION 🔥🔥🔥"
+    "🚀 جاري تشغيل البوت..."
 )
 
 bot.run(TOKEN)
