@@ -61,6 +61,10 @@ class MinesView(discord.ui.View):
 
             self.add_item(button)
 
+    # =====================================================
+    # لون الرقم
+    # =====================================================
+
     @staticmethod
     def get_number_style(number):
 
@@ -72,6 +76,10 @@ class MinesView(discord.ui.View):
 
         return discord.ButtonStyle.danger
 
+    # =====================================================
+    # حذف اللعبة من الالعاب النشطة
+    # =====================================================
+
     def remove_active_game(self):
 
         self.cog.active_games.pop(
@@ -80,17 +88,194 @@ class MinesView(discord.ui.View):
         )
 
     # =====================================================
-    # انتهاء الوقت
+    # حساب عدد الالغام حول خانة
     # =====================================================
 
-    async def on_timeout(self):
+    def get_nearby_mines(self, index):
 
-        if self.game_over:
-            return
+        row, column = divmod(
+            index,
+            5
+        )
 
-        self.game_over = True
+        nearby_mines = 0
 
-        self.remove_active_game()
+        for current_row in range(
+            max(0, row - 1),
+            min(5, row + 2)
+        ):
+
+            for current_column in range(
+                max(0, column - 1),
+                min(5, column + 2)
+            ):
+
+                nearby_index = (
+                    current_row * 5
+                    + current_column
+                )
+
+                if nearby_index in self.mines:
+
+                    nearby_mines += 1
+
+        return nearby_mines
+
+    # =====================================================
+    # الحصول على الخانات المحيطة
+    # =====================================================
+
+    def get_neighbors(self, index):
+
+        row, column = divmod(
+            index,
+            5
+        )
+
+        neighbors = []
+
+        for current_row in range(
+            max(0, row - 1),
+            min(5, row + 2)
+        ):
+
+            for current_column in range(
+                max(0, column - 1),
+                min(5, column + 2)
+            ):
+
+                nearby_index = (
+                    current_row * 5
+                    + current_column
+                )
+
+                if nearby_index != index:
+
+                    neighbors.append(
+                        nearby_index
+                    )
+
+        return neighbors
+
+    # =====================================================
+    # الكشف التلقائي
+    # =====================================================
+
+    def reveal_safe_area(self, start_index):
+
+        to_check = [start_index]
+        revealed_now = set()
+
+        while to_check:
+
+            current_index = to_check.pop()
+
+            if current_index in revealed_now:
+                continue
+
+            if current_index in self.mines:
+                continue
+
+            if current_index in self.revealed:
+                continue
+
+            revealed_now.add(
+                current_index
+            )
+
+            nearby_mines = self.get_nearby_mines(
+                current_index
+            )
+
+            # افتح الخانة
+            self.revealed.add(
+                current_index
+            )
+
+            # اذا كانت 0 افتح الخانات الآمنة حولها
+            if nearby_mines == 0:
+
+                for neighbor in self.get_neighbors(
+                    current_index
+                ):
+
+                    if neighbor in self.mines:
+                        continue
+
+                    if neighbor in self.revealed:
+                        continue
+
+                    to_check.append(
+                        neighbor
+                    )
+
+        return revealed_now
+
+    # =====================================================
+    # تحديث شكل الازرار
+    # =====================================================
+
+    def update_buttons(self):
+
+        for child in self.children:
+
+            if child.custom_id is None:
+                continue
+
+            try:
+
+                index = int(
+                    child.custom_id.split("_")[1]
+                )
+
+            except (ValueError, IndexError):
+
+                continue
+
+            # خانة تم كشفها
+            if index in self.revealed:
+
+                child.disabled = True
+
+                nearby_mines = self.get_nearby_mines(
+                    index
+                )
+
+                if nearby_mines == 0:
+
+                    child.style = (
+                        discord.ButtonStyle.success
+                    )
+
+                    child.label = "0"
+
+                else:
+
+                    child.style = (
+                        self.get_number_style(
+                            nearby_mines
+                        )
+                    )
+
+                    child.label = str(
+                        nearby_mines
+                    )
+
+            else:
+
+                child.disabled = False
+
+                child.style = (
+                    discord.ButtonStyle.secondary
+                )
+
+                child.label = "؟"
+
+    # =====================================================
+    # اظهار الالغام
+    # =====================================================
+
+    def reveal_all_mines(self):
 
         for child in self.children:
 
@@ -106,6 +291,7 @@ class MinesView(discord.ui.View):
                 )
 
             except (ValueError, IndexError):
+
                 continue
 
             if index in self.mines:
@@ -115,6 +301,21 @@ class MinesView(discord.ui.View):
                 )
 
                 child.label = "💣"
+
+    # =====================================================
+    # انتهاء الوقت
+    # =====================================================
+
+    async def on_timeout(self):
+
+        if self.game_over:
+            return
+
+        self.game_over = True
+
+        self.remove_active_game()
+
+        self.reveal_all_mines()
 
         if self.message is None:
             return
@@ -137,6 +338,7 @@ class MinesView(discord.ui.View):
             )
 
         except discord.HTTPException:
+
             pass
 
     # =====================================================
@@ -145,7 +347,7 @@ class MinesView(discord.ui.View):
 
     async def button_callback(self, interaction):
 
-        # منع اللاعبين الآخرين من اللعب
+        # التأكد من صاحب اللعبة
         if interaction.user.id != self.user_id:
 
             await interaction.response.send_message(
@@ -180,18 +382,24 @@ class MinesView(discord.ui.View):
         try:
 
             # =================================================
-            # معرفة الخانة
+            # قراءة رقم الخانة
             # =================================================
 
             try:
 
-                custom_id = interaction.data["custom_id"]
+                custom_id = interaction.data[
+                    "custom_id"
+                ]
 
                 index = int(
                     custom_id.split("_")[1]
                 )
 
-            except (ValueError, KeyError, IndexError):
+            except (
+                ValueError,
+                KeyError,
+                IndexError
+            ):
 
                 await interaction.response.send_message(
                     "❌ حدث خطأ أثناء فتح الخانة.",
@@ -220,32 +428,8 @@ class MinesView(discord.ui.View):
 
                 self.remove_active_game()
 
-                # اظهار جميع الالغام
-                for child in self.children:
+                self.reveal_all_mines()
 
-                    child.disabled = True
-
-                    if child.custom_id is None:
-                        continue
-
-                    try:
-
-                        child_index = int(
-                            child.custom_id.split("_")[1]
-                        )
-
-                    except (ValueError, IndexError):
-                        continue
-
-                    if child_index in self.mines:
-
-                        child.style = (
-                            discord.ButtonStyle.danger
-                        )
-
-                        child.label = "💣"
-
-                # خصم الذهب
                 current_gold = self.cog.get_balance(
                     self.user_id
                 )
@@ -280,110 +464,51 @@ class MinesView(discord.ui.View):
             # خانة آمنة
             # =================================================
 
-            self.revealed.add(index)
-
-            row, column = divmod(
-                index,
-                5
+            nearby_mines = self.get_nearby_mines(
+                index
             )
 
-            nearby_mines = 0
+            # اذا كانت 0 نفتح المنطقة تلقائيا
+            if nearby_mines == 0:
 
-            # حساب الالغام المحيطة
-            for current_row in range(
-                max(0, row - 1),
-                min(5, row + 2)
-            ):
+                self.reveal_safe_area(
+                    index
+                )
 
-                for current_column in range(
-                    max(0, column - 1),
-                    min(5, column + 2)
-                ):
+            else:
 
-                    nearby_index = (
-                        current_row * 5
-                        + current_column
-                    )
+                # اذا كانت 1 او اكثر نفتح الخانة فقط
+                self.revealed.add(
+                    index
+                )
 
-                    if nearby_index in self.mines:
-
-                        nearby_mines += 1
-
-            # تغيير شكل الخانة
-            for child in self.children:
-
-                if child.custom_id == f"mine_{index}":
-
-                    child.disabled = True
-
-                    # لا توجد الغام حولها
-                    if nearby_mines == 0:
-
-                        child.style = (
-                            discord.ButtonStyle.success
-                        )
-
-                        child.label = "0"
-
-                    else:
-
-                        child.style = (
-                            self.get_number_style(
-                                nearby_mines
-                            )
-                        )
-
-                        child.label = str(
-                            nearby_mines
-                        )
-
-                    break
+            # تحديث الواجهة
+            self.update_buttons()
 
             # =================================================
-            # الفوز
+            # التحقق من الفوز
             # =================================================
 
-            if len(self.revealed) >= (
+            safe_cells = (
                 self.total_cells
                 - self.total_mines
-            ):
+            )
+
+            if len(self.revealed) >= safe_cells:
 
                 self.game_over = True
 
                 self.remove_active_game()
 
-                # تعطيل جميع الازرار واظهار الالغام
-                for child in self.children:
+                self.reveal_all_mines()
 
-                    child.disabled = True
-
-                    if child.custom_id is None:
-                        continue
-
-                    try:
-
-                        child_index = int(
-                            child.custom_id.split("_")[1]
-                        )
-
-                    except (ValueError, IndexError):
-                        continue
-
-                    if child_index in self.mines:
-
-                        child.style = (
-                            discord.ButtonStyle.danger
-                        )
-
-                        child.label = "💣"
-
-                # اضافة الجائزة
                 current_gold = self.cog.get_balance(
                     self.user_id
                 )
 
                 new_gold = (
-                    current_gold + WIN_GOLD
+                    current_gold
+                    + WIN_GOLD
                 )
 
                 self.cog.user_balances[
@@ -407,7 +532,10 @@ class MinesView(discord.ui.View):
 
                 return
 
+            # =================================================
             # تحديث اللعبة
+            # =================================================
+
             await interaction.response.edit_message(
                 view=self
             )
@@ -427,13 +555,10 @@ class MinesGame(commands.Cog):
 
         self.bot = bot
 
-        # الارصدة
         self.user_balances = {}
 
-        # الالعاب الحالية
         self.active_games = {}
 
-        # اخر وقت لعب
         self.last_game_time = {}
 
     # =====================================================
@@ -464,7 +589,7 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # امر لعبة الالغام
+    # امر الغام
     # =====================================================
 
     @commands.command(name="الغام")
@@ -475,7 +600,7 @@ class MinesGame(commands.Cog):
 
         user_id = ctx.author.id
 
-        # منع اكثر من لعبة للشخص
+        # منع اكثر من لعبة
         if user_id in self.active_games:
 
             await ctx.send(
@@ -525,7 +650,7 @@ class MinesGame(commands.Cog):
             user_id
         ] = current_time
 
-        # انشاء الرصيد اذا لم يكن موجودا
+        # انشاء الرصيد
         self.get_balance(
             user_id
         )
@@ -553,6 +678,10 @@ class MinesGame(commands.Cog):
                 "🔢 **الأرقام**\n"
                 "الرقم الموجود في الخانة يخبرك بعدد "
                 "الألغام الموجودة حولها.\n\n"
+
+                "✨ **الكشف التلقائي**\n"
+                "إذا فتحت خانة رقمها 0، سيتم فتح المنطقة "
+                "الآمنة المتصلة بها تلقائياً.\n\n"
 
                 "💰 **المكافآت**\n"
                 f"🏆 الفوز: +{WIN_GOLD:,} ذهب\n"
@@ -693,7 +822,7 @@ class MinesGame(commands.Cog):
 
             return
 
-        # منع المبالغ السالبة او صفر
+        # منع المبلغ صفر او السالب
         if gold_amount <= 0:
 
             await ctx.send(
