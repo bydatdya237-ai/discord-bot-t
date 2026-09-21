@@ -9,7 +9,6 @@ from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands
 from discord import ui
-from discord.ext.commands.view import StringView
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
@@ -565,51 +564,6 @@ class EconomyCog(commands.Cog):
             self.settings = None
             self.reward_cooldowns = None
             self.luck_cooldowns = None
-
-
-    # =====================================================
-    # تشغيل أوامر الاقتصاد بدون Prefix
-    # =====================================================
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-
-        if message.author.bot:
-            return
-
-        if not message.guild:
-            return
-
-        content = message.content.strip()
-
-        if not content:
-            return
-
-        parts = content.split(maxsplit=1)
-
-        command_name = parts[0]
-
-        command = self.bot.get_command(command_name)
-
-        if command is None:
-            return
-
-        if command.cog is not self:
-            return
-
-        ctx = await self.bot.get_context(message)
-
-        ctx.prefix = ""
-        ctx.command = command
-
-        ctx.view = StringView(content)
-        ctx.view.index = len(command_name)
-
-        try:
-            await command.invoke(ctx)
-
-        except commands.CommandError:
-            pass
 
 
     # =====================================================
