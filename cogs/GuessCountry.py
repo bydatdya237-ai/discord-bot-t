@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import discord
+import io
 import math
 import random
 import re
@@ -14,7 +15,7 @@ from discord.ext import commands
 
 GAME_CHANNEL_ID = 1550797517237518417
 
-# رتبة الشخص الذي يستطيع تشغيل اللعبة
+# الرتبة التي تستطيع تشغيل اللعبة
 ADMIN_ROLE_ID = 1544078469657530578
 
 PREFIX = "-"
@@ -22,10 +23,10 @@ PREFIX = "-"
 GAME_ROUNDS = 10
 ROUND_TIME = 15
 
-# نقاط القرب
+# نقاط أول 5 لاعبين حسب القرب
 POINTS_TABLE = [10, 8, 6, 4, 2]
 
-# API ويكيبيديا
+# Wikipedia API
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 
 USER_AGENT = (
@@ -35,15 +36,7 @@ USER_AGENT = (
 
 
 # =========================================================
-# أماكن اللعبة
-# =========================================================
-# كل مكان يحتوي على:
-# country = الدولة
-# city = المدينة
-# lat/lon = الموقع الحقيقي
-#
-# الصور لا يتم تخزينها هنا.
-# البوت يبحث عنها تلقائياً من Wikipedia.
+# الأماكن
 # =========================================================
 
 LOCATIONS = [
@@ -160,7 +153,7 @@ LOCATIONS = [
         "lon": 2.1686,
     },
 
-    # بريطانيا
+    # المملكة المتحدة
     {
         "country": "المملكة المتحدة",
         "city": "لندن",
@@ -481,8 +474,6 @@ LOCATIONS = [
 # =========================================================
 # إحداثيات تقريبية للدول
 # =========================================================
-# نستخدم مركزاً تقريبياً للدولة عندما يكتب اللاعب اسمها.
-# =========================================================
 
 COUNTRY_COORDS = {
     "الأردن": (31.24, 36.51),
@@ -529,20 +520,18 @@ COUNTRY_COORDS = {
 
 
 # =========================================================
-# أسماء بديلة للدول
+# أسماء الدول والاختصارات
 # =========================================================
 
 COUNTRY_ALIASES = {
-
     "الاردن": "الأردن",
     "أردن": "الأردن",
 
     "السعوديه": "السعودية",
-    "السعودية": "السعودية",
 
     "الامارات": "الإمارات",
-    "الإمارات العربيه المتحده": "الإمارات",
     "الامارات العربية المتحدة": "الإمارات",
+    "الإمارات العربية المتحدة": "الإمارات",
     "دبي": "الإمارات",
 
     "مصر": "مصر",
@@ -552,10 +541,8 @@ COUNTRY_ALIASES = {
     "فرنسا": "فرنسا",
 
     "ايطاليا": "إيطاليا",
-    "إيطاليا": "إيطاليا",
 
     "اسبانيا": "إسبانيا",
-    "إسبانيا": "إسبانيا",
 
     "بريطانيا": "المملكة المتحدة",
     "بريطانيا العظمى": "المملكة المتحدة",
@@ -566,30 +553,19 @@ COUNTRY_ALIASES = {
     "united kingdom": "المملكة المتحدة",
 
     "المانيا": "ألمانيا",
-    "ألمانيا": "ألمانيا",
 
     "هولندا": "هولندا",
-
     "بلجيكا": "بلجيكا",
-
     "سويسرا": "سويسرا",
-
     "النمسا": "النمسا",
-
     "اليونان": "اليونان",
-
     "البرتغال": "البرتغال",
-
     "النرويج": "النرويج",
-
     "السويد": "السويد",
-
     "الدنمارك": "الدنمارك",
-
     "فنلندا": "فنلندا",
 
     "ايرلندا": "أيرلندا",
-    "أيرلندا": "أيرلندا",
 
     "امريكا": "الولايات المتحدة",
     "أمريكا": "الولايات المتحدة",
@@ -598,20 +574,17 @@ COUNTRY_ALIASES = {
     "الولايات المتحدة الأمريكية": "الولايات المتحدة",
     "usa": "الولايات المتحدة",
     "us": "الولايات المتحدة",
+    "america": "الولايات المتحدة",
 
     "كندا": "كندا",
-
     "المكسيك": "المكسيك",
-
     "البرازيل": "البرازيل",
 
     "الارجنتين": "الأرجنتين",
-    "الأرجنتين": "الأرجنتين",
 
     "تشيلي": "تشيلي",
 
     "استراليا": "أستراليا",
-    "أستراليا": "أستراليا",
 
     "نيوزيلندا": "نيوزيلندا",
 
@@ -631,15 +604,11 @@ COUNTRY_ALIASES = {
     "تايلاند": "تايلاند",
 
     "اندونيسيا": "إندونيسيا",
-    "إندونيسيا": "إندونيسيا",
 
     "جنوب افريقيا": "جنوب أفريقيا",
-    "جنوب أفريقيا": "جنوب أفريقيا",
 
     "المغرب": "المغرب",
-
     "تونس": "تونس",
-
     "لبنان": "لبنان",
 }
 
@@ -667,9 +636,8 @@ FAKE_NAMES = [
 # =========================================================
 
 def normalize_text(text: str) -> str:
-    """تنظيف النص العربي."""
 
-    text = text.lower().strip()
+    text = str(text).lower().strip()
 
     replacements = {
         "أ": "ا",
@@ -685,25 +653,36 @@ def normalize_text(text: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    text = re.sub(r"[\u064B-\u065F\u0670]", "", text)
+    text = re.sub(
+        r"[\u064B-\u065F\u0670]",
+        "",
+        text,
+    )
 
-    text = re.sub(r"[^\w\s\u0600-\u06FF-]", "", text)
+    text = re.sub(
+        r"[^\w\s\u0600-\u06FF-]",
+        "",
+        text,
+    )
 
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
 
     return text
 
 
 def get_country_from_guess(text: str):
+
     normalized = normalize_text(text)
 
-    # بحث مباشر
     for alias, country in COUNTRY_ALIASES.items():
 
         if normalize_text(alias) == normalized:
             return country
 
-    # بحث بالاسم الرسمي
     for country in COUNTRY_COORDS:
 
         if normalize_text(country) == normalized:
@@ -712,16 +691,25 @@ def get_country_from_guess(text: str):
     return None
 
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """المسافة بالكيلومتر."""
+def haversine_distance(
+    lat1,
+    lon1,
+    lat2,
+    lon2,
+):
 
     radius = 6371.0
 
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
 
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
+    delta_phi = math.radians(
+        lat2 - lat1
+    )
+
+    delta_lambda = math.radians(
+        lon2 - lon1
+    )
 
     a = (
         math.sin(delta_phi / 2) ** 2
@@ -730,12 +718,16 @@ def haversine_distance(lat1, lon1, lat2, lon2):
         * math.sin(delta_lambda / 2) ** 2
     )
 
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    c = 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a),
+    )
 
     return radius * c
 
 
 def format_distance(distance):
+
     if distance < 1:
         return f"{distance * 1000:.0f} متر"
 
@@ -751,7 +743,12 @@ def format_distance(distance):
 
 class GuessCountryView(discord.ui.View):
 
-    def __init__(self, cog, game):
+    def __init__(
+        self,
+        cog,
+        game,
+    ):
+
         super().__init__(timeout=None)
 
         self.cog = cog
@@ -769,33 +766,48 @@ class GuessCountryView(discord.ui.View):
     ):
 
         if not self.game["running"]:
+
             await interaction.response.send_message(
                 "❌ اللعبة انتهت.",
                 ephemeral=True,
             )
+
             return
 
-        # فقط صاحب اللعبة أو صاحب رتبة الإدارة
+        # صاحب اللعبة أو الإدارة
         if interaction.user.id != self.game["owner_id"]:
 
-            role = interaction.guild.get_role(ADMIN_ROLE_ID)
+            role = interaction.guild.get_role(
+                ADMIN_ROLE_ID
+            )
 
-            if role is None or role not in interaction.user.roles:
+            if (
+                role is None
+                or role not in interaction.user.roles
+            ):
+
                 await interaction.response.send_message(
                     "❌ فقط صاحب اللعبة يستطيع إضافة لاعب وهمي.",
                     ephemeral=True,
                 )
+
                 return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(
+            ephemeral=True
+        )
 
-        fake_name = self.cog.add_fake_player(self.game)
+        fake_name = self.cog.add_fake_player(
+            self.game
+        )
 
         if fake_name is None:
+
             await interaction.followup.send(
-                "❌ وصلت اللعبة للحد الأقصى من اللاعبين الوهميين.",
+                "❌ لا يوجد لاعب وهمي متاح.",
                 ephemeral=True,
             )
+
             return
 
         await interaction.followup.send(
@@ -803,10 +815,14 @@ class GuessCountryView(discord.ui.View):
             ephemeral=True,
         )
 
-        # رسالة بسيطة في الشات
-        await self.game["channel"].send(
-            f"🤖 انضم اللاعب الوهمي **{fake_name}** إلى اللعبة!"
-        )
+        try:
+
+            await self.game["channel"].send(
+                f"🤖 انضم اللاعب الوهمي **{fake_name}** إلى اللعبة!"
+            )
+
+        except Exception:
+            pass
 
 
 # =========================================================
@@ -825,30 +841,42 @@ class GuessCountryCog(commands.Cog):
         self.session = None
 
     # =====================================================
-    # Session
+    # إنشاء جلسة HTTP
     # =====================================================
 
     async def get_session(self):
 
-        if self.session is None or self.session.closed:
+        if (
+            self.session is None
+            or self.session.closed
+        ):
 
             timeout = aiohttp.ClientTimeout(
-                total=15,
-                connect=5,
+                total=20,
+                connect=8,
             )
 
             self.session = aiohttp.ClientSession(
                 timeout=timeout,
                 headers={
-                    "User-Agent": USER_AGENT
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
                 },
             )
 
         return self.session
 
+    # =====================================================
+    # إغلاق الجلسة
+    # =====================================================
+
     async def cog_unload(self):
 
-        if self.session and not self.session.closed:
+        if (
+            self.session
+            and not self.session.closed
+        ):
+
             await self.session.close()
 
     # =====================================================
@@ -857,20 +885,25 @@ class GuessCountryCog(commands.Cog):
 
     def valid_channel(self, ctx):
 
-        return ctx.channel.id == GAME_CHANNEL_ID
+        return (
+            ctx.channel.id
+            == GAME_CHANNEL_ID
+        )
 
     # =====================================================
     # جلب صورة من Wikipedia
     # =====================================================
 
-    async def get_wikipedia_image(self, location):
+    async def get_wikipedia_image(
+        self,
+        location,
+    ):
 
         session = await self.get_session()
 
         lat = location["lat"]
         lon = location["lon"]
 
-        # نجرب أكثر من نطاق حتى لا تفشل الجولة
         radiuses = [
             5000,
             10000,
@@ -886,13 +919,19 @@ class GuessCountryCog(commands.Cog):
 
                 "generator": "geosearch",
 
-                "ggscoord": f"{lat}|{lon}",
+                "ggscoord": (
+                    f"{lat}|{lon}"
+                ),
+
                 "ggsradius": radius,
+
                 "ggslimit": 30,
 
                 "ggsnamespace": 0,
 
-                "prop": "coordinates|pageimages",
+                "prop": (
+                    "coordinates|pageimages"
+                ),
 
                 "piprop": "thumbnail",
 
@@ -911,61 +950,101 @@ class GuessCountryCog(commands.Cog):
                     if response.status != 200:
                         continue
 
-                    data = await response.json()
+                    data = await response.json(
+                        content_type=None
+                    )
 
-            except Exception:
+            except Exception as e:
+
+                print(
+                    "Wikipedia API error:",
+                    type(e).__name__,
+                    e,
+                )
+
                 continue
 
-            pages = data.get("query", {}).get("pages", [])
+            query = data.get(
+                "query",
+                {},
+            )
+
+            pages = query.get(
+                "pages",
+                [],
+            )
 
             if not pages:
                 continue
 
-            # خلط النتائج حتى لا نأخذ دائماً أول نتيجة
             random.shuffle(pages)
 
             for page in pages:
 
-                thumbnail = page.get("thumbnail")
+                thumbnail = page.get(
+                    "thumbnail"
+                )
 
                 if not thumbnail:
                     continue
 
-                image_url = thumbnail.get("source")
+                image_url = thumbnail.get(
+                    "source"
+                )
 
                 if not image_url:
                     continue
 
-                # منع الصور الصغيرة جداً
-                width = thumbnail.get("width", 0)
-                height = thumbnail.get("height", 0)
+                width = thumbnail.get(
+                    "width",
+                    0,
+                )
 
-                if width < 300 or height < 200:
+                height = thumbnail.get(
+                    "height",
+                    0,
+                )
+
+                if (
+                    width < 300
+                    or height < 200
+                ):
                     continue
 
-                # نحاول تنزيل الصورة فعلياً
+                # تحميل الصورة فعلياً
                 try:
 
                     async with session.get(
                         image_url
                     ) as image_response:
 
-                        if image_response.status != 200:
+                        if (
+                            image_response.status
+                            != 200
+                        ):
                             continue
 
-                        content_type = image_response.headers.get(
-                            "Content-Type",
-                            "",
+                        content_type = (
+                            image_response.headers.get(
+                                "Content-Type",
+                                "",
+                            )
                         )
 
-                        if not content_type.startswith("image/"):
+                        if not content_type.startswith(
+                            "image/"
+                        ):
                             continue
 
-                        image_bytes = await image_response.read()
+                        image_bytes = (
+                            await image_response.read()
+                        )
 
                         if len(image_bytes) < 10_000:
                             continue
 
+                        # Discord يسمح بحجم أكبر،
+                        # لكن نخلي الصورة آمنة
                         if len(image_bytes) > 8_000_000:
                             continue
 
@@ -978,40 +1057,63 @@ class GuessCountryCog(commands.Cog):
                             "source": image_url,
                         }
 
-                except Exception:
+                except Exception as e:
+
+                    print(
+                        "Image download error:",
+                        type(e).__name__,
+                        e,
+                    )
+
                     continue
 
         return None
 
     # =====================================================
-    # اختيار صورة موثوقة
+    # اختيار مكان لديه صورة
     # =====================================================
 
-    async def get_round_image(self, locations):
+    async def get_round_image(
+        self,
+        locations,
+    ):
 
-        # نخلط الأماكن
         shuffled = list(locations)
 
-        random.shuffle(shuffled)
+        random.shuffle(
+            shuffled
+        )
 
-        # نحاول عدة أماكن
         for location in shuffled:
 
-            image = await self.get_wikipedia_image(location)
+            image = await self.get_wikipedia_image(
+                location
+            )
 
             if image:
 
-                return location, image
+                return (
+                    location,
+                    image,
+                )
 
-        return None, None
+        return (
+            None,
+            None,
+        )
 
     # =====================================================
     # إضافة لاعب وهمي
     # =====================================================
 
-    def add_fake_player(self, game):
+    def add_fake_player(
+        self,
+        game,
+    ):
 
-        used_names = set(game["players"].keys())
+        used_names = set(
+            game["fake_names"]
+        )
 
         available = [
             name
@@ -1022,10 +1124,17 @@ class GuessCountryCog(commands.Cog):
         if not available:
             return None
 
-        name = random.choice(available)
+        name = random.choice(
+            available
+        )
+
+        game["fake_names"].add(
+            name
+        )
 
         game["players"][name] = {
             "name": name,
+            "user_id": None,
             "fake": True,
             "score": 0,
             "guess": None,
@@ -1034,13 +1143,50 @@ class GuessCountryCog(commands.Cog):
             "round_score": 0,
         }
 
+        # إذا تمت الإضافة أثناء الجولة
+        # نعطيه تخميناً فورياً
+        if (
+            game["round_active"]
+            and game["current_location"]
+        ):
+
+            fake_country = random.choice(
+                list(
+                    COUNTRY_COORDS.keys()
+                )
+            )
+
+            game["players"][name][
+                "guess_country"
+            ] = fake_country
+
+            fake_lat, fake_lon = (
+                COUNTRY_COORDS[
+                    fake_country
+                ]
+            )
+
+            distance = haversine_distance(
+                game["current_location"]["lat"],
+                game["current_location"]["lon"],
+                fake_lat,
+                fake_lon,
+            )
+
+            game["players"][name][
+                "distance"
+            ] = distance
+
         return name
 
     # =====================================================
     # رسالة البداية
     # =====================================================
 
-    async def send_start_message(self, game):
+    async def send_start_message(
+        self,
+        game,
+    ):
 
         channel = game["channel"]
 
@@ -1048,12 +1194,15 @@ class GuessCountryCog(commands.Cog):
             title="🌍 خمن الدولة",
             description=(
                 "🎮 **بدأت اللعبة!**\n\n"
-                f"👤 صاحب اللعبة: <@{game['owner_id']}>\n"
-                f"🔢 عدد الجولات: **{GAME_ROUNDS}**\n"
-                f"⏱️ وقت كل جولة: **{ROUND_TIME} ثانية**\n\n"
+                f"👤 صاحب اللعبة: "
+                f"<@{game['owner_id']}>\n"
+                f"🔢 عدد الجولات: "
+                f"**{GAME_ROUNDS}**\n"
+                f"⏱️ وقت الجولة: "
+                f"**{ROUND_TIME} ثانية**\n\n"
                 "📸 ستظهر صورة لمكان حقيقي.\n"
                 "✍️ اكتب اسم الدولة التي تعتقد أن الصورة فيها.\n\n"
-                "🏆 كلما كان تخمينك أقرب للموقع الحقيقي، "
+                "🏆 كلما كان تخمينك أقرب، "
                 "تحصل على نقاط أكثر."
             ),
         )
@@ -1075,21 +1224,36 @@ class GuessCountryCog(commands.Cog):
         )
 
     # =====================================================
-    # بدء جولة
+    # بدء الجولة
     # =====================================================
 
-    async def start_round(self, game):
+    async def start_round(
+        self,
+        game,
+    ):
 
         if not game["running"]:
             return
 
         if game["round"] > GAME_ROUNDS:
-            await self.finish_game(game)
+
+            await self.finish_game(
+                game
+            )
+
             return
+
+        # مهم جداً لمنع مؤقت الجولة القديمة
+        game["active_round_number"] = (
+            game["round"]
+        )
 
         channel = game["channel"]
 
-        # تصفير تخمينات الجولة
+        # ==============================================
+        # تصفير بيانات الجولة
+        # ==============================================
+
         for player in game["players"].values():
 
             player["guess"] = None
@@ -1097,7 +1261,10 @@ class GuessCountryCog(commands.Cog):
             player["distance"] = None
             player["round_score"] = 0
 
-        # نستخدم الأماكن التي لم تستخدم سابقاً
+        # ==============================================
+        # الأماكن المتبقية
+        # ==============================================
+
         available_locations = [
             location
             for location in LOCATIONS
@@ -1105,30 +1272,52 @@ class GuessCountryCog(commands.Cog):
             not in game["used_cities"]
         ]
 
-        # إذا خلصت الأماكن، نعيد استخدامها
         if not available_locations:
+
             available_locations = LOCATIONS.copy()
 
-        location, image = await self.get_round_image(
-            available_locations
+        # ==============================================
+        # الحصول على صورة
+        # ==============================================
+
+        location, image = (
+            await self.get_round_image(
+                available_locations
+            )
         )
 
-        # إذا لم نجد صورة، لا نستهلك الجولة
-        if location is None or image is None:
+        # محاولة ثانية
+        if (
+            location is None
+            or image is None
+        ):
 
-            # محاولة أخيرة باستخدام جميع الأماكن
-            location, image = await self.get_round_image(
-                LOCATIONS
+            location, image = (
+                await self.get_round_image(
+                    LOCATIONS
+                )
             )
 
-        if location is None or image is None:
+        # فشل نهائي
+        if (
+            location is None
+            or image is None
+        ):
+
+            print(
+                "❌ لم يتم العثور على أي صورة صالحة."
+            )
 
             await channel.send(
-                "❌ تعذر الحصول على صورة حالياً. "
-                "تم إيقاف اللعبة بدون احتساب هذه الجولة."
+                "❌ تعذر الحصول على صورة للجولة حالياً."
             )
 
-            await self.finish_game(game)
+            game["running"] = False
+            game["round_active"] = False
+
+            await self.finish_game(
+                game
+            )
 
             return
 
@@ -1142,7 +1331,7 @@ class GuessCountryCog(commands.Cog):
         game["round_active"] = True
 
         # ==============================================
-        # تخمين اللاعب الوهمي
+        # اللاعبون الوهميون
         # ==============================================
 
         for player in game["players"].values():
@@ -1150,32 +1339,41 @@ class GuessCountryCog(commands.Cog):
             if not player["fake"]:
                 continue
 
-            # الوهمي يختار دولة عشوائية
             fake_country = random.choice(
-                list(COUNTRY_COORDS.keys())
+                list(
+                    COUNTRY_COORDS.keys()
+                )
             )
 
-            player["guess_country"] = fake_country
-
-            fake_lat, fake_lon = COUNTRY_COORDS[
+            player["guess_country"] = (
                 fake_country
-            ]
-
-            distance = haversine_distance(
-                location["lat"],
-                location["lon"],
-                fake_lat,
-                fake_lon,
             )
 
-            player["distance"] = distance
+            fake_lat, fake_lon = (
+                COUNTRY_COORDS[
+                    fake_country
+                ]
+            )
+
+            player["distance"] = (
+                haversine_distance(
+                    location["lat"],
+                    location["lon"],
+                    fake_lat,
+                    fake_lon,
+                )
+            )
 
         # ==============================================
-        # Embed
+        # Embed الصورة
         # ==============================================
 
         embed = discord.Embed(
-            title=f"🌍 خمن الدولة — الجولة {game['round']}/{GAME_ROUNDS}",
+            title=(
+                f"🌍 خمن الدولة "
+                f"— الجولة "
+                f"{game['round']}/{GAME_ROUNDS}"
+            ),
             description=(
                 "📸 **أين التقطت هذه الصورة؟**\n\n"
                 "✍️ اكتب اسم الدولة في الشات.\n\n"
@@ -1191,10 +1389,22 @@ class GuessCountryCog(commands.Cog):
             text="اكتب اسم الدولة فقط"
         )
 
+        # ==============================================
+        # إرسال الصورة
+        # ==============================================
+
         try:
 
+            # الإصلاح الأساسي:
+            # تحويل bytes إلى ملف في الذاكرة
+            image_file = io.BytesIO(
+                image["bytes"]
+            )
+
+            image_file.seek(0)
+
             file = discord.File(
-                image["bytes"],
+                fp=image_file,
                 filename="location.jpg",
             )
 
@@ -1203,49 +1413,60 @@ class GuessCountryCog(commands.Cog):
                 file=file,
             )
 
-        except Exception:
+        except Exception as e:
 
-            # لو حصل خطأ في رفع الصورة
-            await channel.send(
-                "❌ حصل خطأ أثناء إرسال الصورة، "
-                "سيتم تجاوز المكان وتجربة مكان آخر."
+            print(
+                "❌ Discord image upload error:",
+                type(e).__name__,
+                e,
             )
 
             game["round_active"] = False
 
-            await asyncio.sleep(1)
-
-            await self.start_round(game)
+            # لا نرسل سبام للاعبين
+            # نحاول مكاناً آخر
+            await self.start_round(
+                game
+            )
 
             return
 
         # ==============================================
-        # مؤقت الجولة
+        # المؤقت
         # ==============================================
 
-        game["round_end_time"] = (
-            asyncio.get_running_loop().time()
-            + ROUND_TIME
+        current_round = (
+            game["active_round_number"]
         )
 
-        await asyncio.sleep(ROUND_TIME)
+        await asyncio.sleep(
+            ROUND_TIME
+        )
 
         if not game["running"]:
             return
 
-        if game["round"] != game.get(
-            "active_round_number"
-        ):
-
+        if not game["round_active"]:
             return
 
-        await self.finish_round(game)
+        if (
+            game["active_round_number"]
+            != current_round
+        ):
+            return
+
+        await self.finish_round(
+            game
+        )
 
     # =====================================================
     # إنهاء الجولة
     # =====================================================
 
-    async def finish_round(self, game):
+    async def finish_round(
+        self,
+        game,
+    ):
 
         if not game["running"]:
             return
@@ -1257,10 +1478,12 @@ class GuessCountryCog(commands.Cog):
 
         channel = game["channel"]
 
-        location = game["current_location"]
+        location = (
+            game["current_location"]
+        )
 
         # ==============================================
-        # حساب اللاعبين الحقيقيين الذين جاوبوا
+        # حساب المسافة للاعبين الحقيقيين
         # ==============================================
 
         for player in game["players"].values():
@@ -1268,33 +1491,35 @@ class GuessCountryCog(commands.Cog):
             if player["fake"]:
                 continue
 
-            guess_country = player.get(
-                "guess_country"
+            guess_country = (
+                player.get(
+                    "guess_country"
+                )
             )
 
             if not guess_country:
                 continue
 
-            guess_coords = COUNTRY_COORDS.get(
+            coords = COUNTRY_COORDS.get(
                 guess_country
             )
 
-            if not guess_coords:
+            if not coords:
                 continue
 
-            guess_lat, guess_lon = guess_coords
+            guess_lat, guess_lon = coords
 
-            distance = haversine_distance(
-                location["lat"],
-                location["lon"],
-                guess_lat,
-                guess_lon,
+            player["distance"] = (
+                haversine_distance(
+                    location["lat"],
+                    location["lon"],
+                    guess_lat,
+                    guess_lon,
+                )
             )
 
-            player["distance"] = distance
-
         # ==============================================
-        # ترتيب تخمينات الجولة
+        # ترتيب حسب المسافة
         # ==============================================
 
         guessed_players = [
@@ -1304,7 +1529,8 @@ class GuessCountryCog(commands.Cog):
         ]
 
         guessed_players.sort(
-            key=lambda p: p["distance"]
+            key=lambda player:
+            player["distance"]
         )
 
         # ==============================================
@@ -1315,31 +1541,37 @@ class GuessCountryCog(commands.Cog):
             guessed_players
         ):
 
-            if index < len(POINTS_TABLE):
+            if index < len(
+                POINTS_TABLE
+            ):
 
-                points = POINTS_TABLE[index]
+                points = POINTS_TABLE[
+                    index
+                ]
 
             else:
 
                 points = 1
 
-            player["round_score"] = points
+            player["round_score"] = (
+                points
+            )
+
             player["score"] += points
 
         # ==============================================
-        # رسالة النتيجة
+        # النتائج
         # ==============================================
 
-        lines = []
-
-        # نعرض الجميع حتى الذي لم يجاوب
         players_sorted = sorted(
             game["players"].values(),
-            key=lambda p: (
-                -p["score"],
-                p["name"],
+            key=lambda player: (
+                -player["score"],
+                player["name"],
             ),
         )
+
+        lines = []
 
         for player in players_sorted:
 
@@ -1361,8 +1593,10 @@ class GuessCountryCog(commands.Cog):
 
             else:
 
-                distance_text = format_distance(
-                    distance
+                distance_text = (
+                    format_distance(
+                        distance
+                    )
                 )
 
             round_points = player.get(
@@ -1376,19 +1610,35 @@ class GuessCountryCog(commands.Cog):
                 f"**{name}**\n"
                 f"↳ 🌍 {country}\n"
                 f"↳ 📏 {distance_text}\n"
-                f"↳ ⭐ +{round_points} | المجموع: **{total}**"
+                f"↳ ⭐ +{round_points}"
+                f" | المجموع: **{total}**"
             )
 
-        results_text = "\n\n".join(lines)
+        results_text = "\n\n".join(
+            lines
+        )
+
+        # حماية من تجاوز حد Discord
+        if len(results_text) > 3900:
+
+            results_text = (
+                results_text[:3890]
+                + "\n..."
+            )
 
         embed = discord.Embed(
-            title=f"📊 نتيجة الجولة {game['round']}",
-            description=results_text[:4000],
+            title=(
+                f"📊 نتيجة الجولة "
+                f"{game['round']}"
+            ),
+            description=results_text,
         )
 
         embed.add_field(
             name="📍 الدولة الصحيحة",
-            value=f"**{location['country']}**",
+            value=(
+                f"**{location['country']}**"
+            ),
             inline=False,
         )
 
@@ -1399,7 +1649,7 @@ class GuessCountryCog(commands.Cog):
         )
 
         embed.add_field(
-            name="📏 موقع الجولة",
+            name="📌 الإحداثيات",
             value=(
                 f"{location['lat']:.4f}, "
                 f"{location['lon']:.4f}"
@@ -1407,17 +1657,20 @@ class GuessCountryCog(commands.Cog):
             inline=True,
         )
 
-        # رابط خريطة للموقع
         map_url = (
             "https://www.openstreetmap.org/"
             f"?mlat={location['lat']}"
             f"&mlon={location['lon']}"
-            f"#map=12/{location['lat']}/{location['lon']}"
+            f"#map=12/"
+            f"{location['lat']}/"
+            f"{location['lon']}"
         )
 
         embed.add_field(
             name="🗺️ الخريطة",
-            value=f"[فتح موقع الجولة]({map_url})",
+            value=(
+                f"[فتح موقع الجولة]({map_url})"
+            ),
             inline=False,
         )
 
@@ -1431,27 +1684,43 @@ class GuessCountryCog(commands.Cog):
 
         game["round"] += 1
 
-        if game["round"] > GAME_ROUNDS:
+        if (
+            game["round"]
+            > GAME_ROUNDS
+        ):
 
             await asyncio.sleep(2)
 
-            await self.finish_game(game)
+            await self.finish_game(
+                game
+            )
 
             return
 
         await asyncio.sleep(2)
 
-        await self.start_round(game)
+        await self.start_round(
+            game
+        )
 
     # =====================================================
     # نهاية اللعبة
     # =====================================================
 
-    async def finish_game(self, game):
+    async def finish_game(
+        self,
+        game,
+    ):
 
-        if not game["running"]:
+        # منع التنفيذ مرتين
+        if game.get(
+            "finished",
+            False,
+        ):
+
             return
 
+        game["finished"] = True
         game["running"] = False
         game["round_active"] = False
 
@@ -1462,7 +1731,8 @@ class GuessCountryCog(commands.Cog):
         )
 
         players.sort(
-            key=lambda p: p["score"],
+            key=lambda player:
+            player["score"],
             reverse=True,
         )
 
@@ -1474,19 +1744,44 @@ class GuessCountryCog(commands.Cog):
             "🥉",
         ]
 
-        for index, player in enumerate(players):
+        for index, player in enumerate(
+            players
+        ):
 
             if index < 3:
-                prefix = medals[index]
+
+                prefix = medals[
+                    index
+                ]
+
             else:
-                prefix = f"**{index + 1}.**"
+
+                prefix = (
+                    f"**{index + 1}.**"
+                )
 
             lines.append(
-                f"{prefix} {player['name']} — "
+                f"{prefix} "
+                f"{player['name']} — "
                 f"**{player['score']} نقطة**"
             )
 
-        leaderboard = "\n".join(lines)
+        leaderboard = "\n".join(
+            lines
+        )
+
+        if not leaderboard:
+
+            leaderboard = (
+                "لا توجد نتائج."
+            )
+
+        if len(leaderboard) > 3900:
+
+            leaderboard = (
+                leaderboard[:3890]
+                + "\n..."
+            )
 
         winner = (
             players[0]
@@ -1495,7 +1790,10 @@ class GuessCountryCog(commands.Cog):
         )
 
         embed = discord.Embed(
-            title="🏆 انتهت لعبة خمن الدولة!",
+            title=(
+                "🏆 انتهت لعبة "
+                "خمن الدولة!"
+            ),
             description=(
                 "🔥 **النتائج النهائية**\n\n"
                 f"{leaderboard}"
@@ -1503,6 +1801,7 @@ class GuessCountryCog(commands.Cog):
         )
 
         if winner:
+
             embed.add_field(
                 name="👑 الفائز",
                 value=(
@@ -1513,12 +1812,25 @@ class GuessCountryCog(commands.Cog):
             )
 
         embed.set_footer(
-            text="يمكن تشغيل لعبة جديدة باستخدام -خمن-الدولة"
+            text=(
+                "يمكن تشغيل لعبة جديدة "
+                "باستخدام -خمن-الدولة"
+            )
         )
 
-        await channel.send(
-            embed=embed
-        )
+        try:
+
+            await channel.send(
+                embed=embed
+            )
+
+        except Exception as e:
+
+            print(
+                "Finish message error:",
+                type(e).__name__,
+                e,
+            )
 
         # حذف اللعبة من الذاكرة
         self.games.pop(
@@ -1531,9 +1843,11 @@ class GuessCountryCog(commands.Cog):
     # =====================================================
 
     @commands.Cog.listener()
-    async def on_message(self, message):
+    async def on_message(
+        self,
+        message,
+    ):
 
-        # تجاهل البوتات
         if message.author.bot:
             return
 
@@ -1550,7 +1864,7 @@ class GuessCountryCog(commands.Cog):
         if not game["round_active"]:
             return
 
-        # صاحب الرسالة يجب أن يكون لاعباً
+        # اللاعب الحقيقي فقط
         player = game["players"].get(
             message.author.id
         )
@@ -1558,13 +1872,26 @@ class GuessCountryCog(commands.Cog):
         if not player:
             return
 
-        # اللاعب لا يقدر يغير إجابته
-        if player["guess_country"] is not None:
+        # منع تغيير الإجابة
+        if (
+            player["guess_country"]
+            is not None
+        ):
+
             return
 
-        content = message.content.strip()
+        content = (
+            message.content.strip()
+        )
 
         if not content:
+            return
+
+        # تجاهل أوامر البوت
+        if content.startswith(
+            PREFIX
+        ):
+
             return
 
         country = get_country_from_guess(
@@ -1577,7 +1904,8 @@ class GuessCountryCog(commands.Cog):
 
                 await message.reply(
                     "❌ ما تعرفت على الدولة.\n"
-                    "اكتب اسم دولة واضح مثل: **الأردن** أو **اليابان**.",
+                    "اكتب اسم دولة واضح مثل: "
+                    "**الأردن** أو **اليابان**.",
                     delete_after=3,
                 )
 
@@ -1586,13 +1914,17 @@ class GuessCountryCog(commands.Cog):
 
             return
 
-        # تسجيل الإجابة
         player["guess"] = content
-        player["guess_country"] = country
+
+        player["guess_country"] = (
+            country
+        )
 
         try:
 
-            await message.add_reaction("✅")
+            await message.add_reaction(
+                "✅"
+            )
 
         except Exception:
             pass
@@ -1614,7 +1946,9 @@ class GuessCountryCog(commands.Cog):
         # الروم
         # -----------------------------------------------
 
-        if not self.valid_channel(ctx):
+        if not self.valid_channel(
+            ctx
+        ):
 
             return
 
@@ -1633,29 +1967,34 @@ class GuessCountryCog(commands.Cog):
             return
 
         # -----------------------------------------------
-        # تحقق من الرتبة
+        # الرتبة
         # -----------------------------------------------
 
         role = ctx.guild.get_role(
             ADMIN_ROLE_ID
         )
 
-        if role is None or role not in ctx.author.roles:
+        if (
+            role is None
+            or role not in ctx.author.roles
+        ):
 
             await ctx.send(
-                "❌ ما عندك صلاحية تشغيل لعبة خمن الدولة."
+                "❌ ما عندك صلاحية تشغيل "
+                "لعبة خمن الدولة."
             )
 
             return
 
         # -----------------------------------------------
-        # منع لعبتين
+        # منع لعبة ثانية
         # -----------------------------------------------
 
         if ctx.channel.id in self.games:
 
             await ctx.send(
-                "⚠️ **يوجد لعبة خمن الدولة جارية بالفعل.**\n"
+                "⚠️ **يوجد لعبة خمن الدولة "
+                "جارية بالفعل.**\n"
                 "انتظر حتى تنتهي اللعبة الحالية."
             )
 
@@ -1666,11 +2005,14 @@ class GuessCountryCog(commands.Cog):
         # -----------------------------------------------
 
         game = {
+
             "channel": ctx.channel,
 
             "owner_id": ctx.author.id,
 
             "running": True,
+
+            "finished": False,
 
             "round_active": False,
 
@@ -1680,6 +2022,8 @@ class GuessCountryCog(commands.Cog):
 
             "players": {},
 
+            "fake_names": set(),
+
             "used_cities": set(),
 
             "current_location": None,
@@ -1687,35 +2031,71 @@ class GuessCountryCog(commands.Cog):
             "current_image": None,
 
             "view": None,
-
         }
 
         # اللاعب الأساسي
-        game["players"][ctx.author.id] = {
+        game["players"][
+            ctx.author.id
+        ] = {
+
             "name": ctx.author.mention,
+
             "user_id": ctx.author.id,
+
             "fake": False,
+
             "score": 0,
+
             "guess": None,
+
             "guess_country": None,
+
             "distance": None,
+
             "round_score": 0,
         }
 
-        self.games[ctx.channel.id] = game
+        self.games[
+            ctx.channel.id
+        ] = game
 
-        await self.send_start_message(
-            game
-        )
+        try:
 
-        await asyncio.sleep(2)
+            await self.send_start_message(
+                game
+            )
 
-        await self.start_round(
-            game
-        )
+            await asyncio.sleep(2)
+
+            await self.start_round(
+                game
+            )
+
+        except Exception as e:
+
+            print(
+                "❌ Guess Country error:",
+                type(e).__name__,
+                e,
+            )
+
+            self.games.pop(
+                ctx.channel.id,
+                None,
+            )
+
+            try:
+
+                await ctx.send(
+                    "❌ حدث خطأ أثناء تشغيل اللعبة. "
+                    "راجع لوق البوت."
+                )
+
+            except Exception:
+                pass
 
     # =====================================================
-    # إيقاف اللعبة للإدارة
+    # إيقاف اللعبة
     # =====================================================
 
     @commands.command(
@@ -1726,14 +2106,21 @@ class GuessCountryCog(commands.Cog):
         ctx,
     ):
 
-        if not self.valid_channel(ctx):
+        if not self.valid_channel(
+            ctx
+        ):
+
             return
 
         role = ctx.guild.get_role(
             ADMIN_ROLE_ID
         )
 
-        if role is None or role not in ctx.author.roles:
+        if (
+            role is None
+            or role not in ctx.author.roles
+        ):
+
             return
 
         game = self.games.get(
@@ -1757,7 +2144,8 @@ class GuessCountryCog(commands.Cog):
         )
 
         await ctx.send(
-            "🛑 تم إيقاف لعبة **خمن الدولة**."
+            "🛑 تم إيقاف لعبة "
+            "**خمن الدولة**."
         )
 
 
