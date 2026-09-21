@@ -4,7 +4,6 @@ from discord.ext import commands
 from flask import Flask
 from threading import Thread
 from pymongo import MongoClient
-from discord.ext.commands.view import StringView
 
 # === إعدادات سيرفر الحفاظ على البوت شغال (Keep Alive) ===
 app = Flask('')
@@ -39,7 +38,7 @@ intents.message_content = True
 # ========================================================
 
 bot = commands.Bot(
-    command_prefix="-",
+    command_prefix="",
     intents=intents
 )
 
@@ -62,32 +61,18 @@ async def on_message(message):
     if not content:
         return
 
-    parts = content.split(maxsplit=1)
+    # ====================================================
+    # منع أي أمر يبدأ بـ - أو . أو /
+    # ====================================================
 
-    command_name = parts[0]
-
-    # إذا بدأ المستخدم بـ - نتجاهله نهائياً
-    if command_name.startswith("-"):
+    if content.startswith(("-", ".", "/")):
         return
 
-    command = bot.get_command(command_name)
+    # ====================================================
+    # تشغيل الأوامر بدون Prefix
+    # ====================================================
 
-    if command is None:
-        return
-
-    ctx = await bot.get_context(message)
-
-    ctx.prefix = ""
-    ctx.command = command
-
-    ctx.view = StringView(content)
-    ctx.view.index = len(command_name)
-
-    try:
-        await command.invoke(ctx)
-
-    except commands.CommandError:
-        pass
+    await bot.process_commands(message)
 
 
 # ========================================================
