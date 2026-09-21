@@ -45,7 +45,6 @@ class MinesView(discord.ui.View):
         while len(self.mines) < self.total_mines:
             self.mines.add(random.randint(0, 24))
 
-        # Create 5x5 grid
         for index in range(25):
 
             button = discord.ui.Button(
@@ -58,10 +57,6 @@ class MinesView(discord.ui.View):
             button.callback = self.button_callback
             self.add_item(button)
 
-    # =====================================================
-    # NUMBER BUTTON STYLE
-    # =====================================================
-
     @staticmethod
     def get_number_style(number):
 
@@ -73,16 +68,12 @@ class MinesView(discord.ui.View):
 
         return discord.ButtonStyle.danger
 
-    # =====================================================
-    # REMOVE ACTIVE GAME
-    # =====================================================
-
     def remove_active_game(self):
-        self.cog.active_games.pop(self.user_id, None)
 
-    # =====================================================
-    # GAME TIMEOUT
-    # =====================================================
+        self.cog.active_games.pop(
+            self.user_id,
+            None
+        )
 
     async def on_timeout(self):
 
@@ -92,7 +83,6 @@ class MinesView(discord.ui.View):
         self.game_over = True
         self.remove_active_game()
 
-        # Disable all buttons
         for child in self.children:
 
             child.disabled = True
@@ -109,7 +99,6 @@ class MinesView(discord.ui.View):
             except (ValueError, IndexError):
                 continue
 
-            # Show mines
             if index in self.mines:
 
                 child.style = discord.ButtonStyle.danger
@@ -138,13 +127,8 @@ class MinesView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    # =====================================================
-    # BUTTON CALLBACK
-    # =====================================================
-
     async def button_callback(self, interaction):
 
-        # Only game owner can play
         if interaction.user.id != self.user_id:
 
             await interaction.response.send_message(
@@ -154,7 +138,6 @@ class MinesView(discord.ui.View):
 
             return
 
-        # Game already finished
         if self.game_over:
 
             await interaction.response.send_message(
@@ -164,7 +147,6 @@ class MinesView(discord.ui.View):
 
             return
 
-        # Prevent simultaneous clicks
         if self.processing:
 
             await interaction.response.send_message(
@@ -178,11 +160,12 @@ class MinesView(discord.ui.View):
 
         try:
 
-            # Get cell index
             try:
 
+                custom_id = interaction.data["custom_id"]
+
                 index = int(
-                    interaction.data["custom_id"].split("_")[1]
+                    custom_id.split("_")[1]
                 )
 
             except (ValueError, KeyError, IndexError):
@@ -194,7 +177,6 @@ class MinesView(discord.ui.View):
 
                 return
 
-            # Already revealed
             if index in self.revealed:
 
                 await interaction.response.send_message(
@@ -205,7 +187,7 @@ class MinesView(discord.ui.View):
                 return
 
             # =================================================
-            # MINE
+            # HIT MINE
             # =================================================
 
             if index in self.mines:
@@ -213,7 +195,6 @@ class MinesView(discord.ui.View):
                 self.game_over = True
                 self.remove_active_game()
 
-                # Disable all buttons and reveal mines
                 for child in self.children:
 
                     child.disabled = True
@@ -238,7 +219,6 @@ class MinesView(discord.ui.View):
 
                         child.label = "M"
 
-                # Remove gold
                 current_gold = self.cog.get_balance(
                     self.user_id
                 )
@@ -297,7 +277,6 @@ class MinesView(discord.ui.View):
                     if nearby_index in self.mines:
                         nearby_mines += 1
 
-            # Update selected button
             for child in self.children:
 
                 if child.custom_id == f"mine_{index}":
@@ -337,7 +316,6 @@ class MinesView(discord.ui.View):
                 self.game_over = True
                 self.remove_active_game()
 
-                # Disable everything
                 for child in self.children:
 
                     child.disabled = True
@@ -362,7 +340,6 @@ class MinesView(discord.ui.View):
 
                         child.label = "M"
 
-                # Add gold
                 current_gold = self.cog.get_balance(
                     self.user_id
                 )
@@ -392,10 +369,6 @@ class MinesView(discord.ui.View):
 
                 return
 
-            # =================================================
-            # UPDATE GAME
-            # =================================================
-
             await interaction.response.edit_message(
                 view=self
             )
@@ -406,7 +379,7 @@ class MinesView(discord.ui.View):
 
 
 # =========================================================
-# COG
+# MINES GAME COG
 # =========================================================
 
 class MinesGame(commands.Cog):
@@ -415,17 +388,12 @@ class MinesGame(commands.Cog):
 
         self.bot = bot
 
-        # User balances
         self.user_balances = {}
-
-        # Currently active games
         self.active_games = {}
-
-        # Last game time
         self.last_game_time = {}
 
     # =====================================================
-    # GET BALANCE
+    # BALANCE
     # =====================================================
 
     def get_balance(self, user_id):
@@ -437,7 +405,7 @@ class MinesGame(commands.Cog):
         return self.user_balances[user_id]
 
     # =====================================================
-    # CHECK GAME CHANNEL
+    # CHANNEL CHECK
     # =====================================================
 
     def is_game_channel(self, ctx):
@@ -451,16 +419,12 @@ class MinesGame(commands.Cog):
     @commands.command(name="الغام")
     async def mines_game(self, ctx):
 
-        # Ignore other channels
         if not self.is_game_channel(ctx):
             return
 
         user_id = ctx.author.id
 
-        # =================================================
-        # ACTIVE GAME CHECK
-        # =================================================
-
+        # Prevent multiple active games
         if user_id in self.active_games:
 
             await ctx.send(
@@ -470,13 +434,12 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # ONE GAME EVERY 60 SECONDS
-        # =================================================
-
+        # Cooldown
         current_time = asyncio.get_running_loop().time()
 
-        last_time = self.last_game_time.get(user_id)
+        last_time = self.last_game_time.get(
+            user_id
+        )
 
         if last_time is not None:
 
@@ -498,12 +461,7 @@ class MinesGame(commands.Cog):
 
         self.last_game_time[user_id] = current_time
 
-        # Create starting balance
         self.get_balance(user_id)
-
-        # =================================================
-        # CREATE GAME
-        # =================================================
 
         view = MinesView(
             self,
@@ -542,22 +500,23 @@ class MinesGame(commands.Cog):
             )
 
     # =====================================================
-    # BALANCE COMMAND
+    # WALLET COMMAND
     # =====================================================
 
-    @commands.command(name="رصيد")
-    async def check_balance(self, ctx):
+    @commands.command(name="محفظتي")
+    async def my_wallet(self, ctx):
 
-        # Ignore other channels
         if not self.is_game_channel(ctx):
             return
 
         user_id = ctx.author.id
 
-        gold = self.get_balance(user_id)
+        gold = self.get_balance(
+            user_id
+        )
 
         embed = discord.Embed(
-            title="Gold Balance",
+            title="Gold Wallet",
             description=(
                 f"Player: {ctx.author.mention}\n\n"
                 f"Gold: {gold:,}"
@@ -571,14 +530,9 @@ class MinesGame(commands.Cog):
 
     # =====================================================
     # ADD GOLD COMMAND
-    #
-    # Usage:
-    #
-    # -اضافة @user 1000000
-    #
     # =====================================================
 
-    @commands.command(name="اضافة")
+    @commands.command(name="ضيف")
     async def add_gold(
         self,
         ctx,
@@ -586,20 +540,11 @@ class MinesGame(commands.Cog):
         amount: str = None
     ):
 
-        # Ignore other channels
         if not self.is_game_channel(ctx):
             return
 
-        # =================================================
-        # CHECK GUILD
-        # =================================================
-
         if ctx.guild is None:
             return
-
-        # =================================================
-        # CHECK ROLE
-        # =================================================
 
         role = ctx.guild.get_role(
             GOLD_ROLE_ID
@@ -613,6 +558,7 @@ class MinesGame(commands.Cog):
 
             return
 
+        # Check role
         if role not in ctx.author.roles:
 
             await ctx.send(
@@ -621,33 +567,27 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # CHECK MEMBER
-        # =================================================
-
+        # Check member
         if member is None:
 
             await ctx.send(
                 "Correct usage:\n"
-                "-اضافة @member 1000000"
+                "-ضيف @member 1000000"
             )
 
             return
 
-        # =================================================
-        # CHECK AMOUNT
-        # =================================================
-
+        # Check amount
         if amount is None:
 
             await ctx.send(
                 "Correct usage:\n"
-                "-اضافة @member 1000000"
+                "-ضيف @member 1000000"
             )
 
             return
 
-        # Remove common number separators
+        # Clean number
         clean_amount = (
             amount
             .replace(",", "")
@@ -670,7 +610,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # No zero or negative values
         if gold_amount <= 0:
 
             await ctx.send(
@@ -678,10 +617,6 @@ class MinesGame(commands.Cog):
             )
 
             return
-
-        # =================================================
-        # ADD GOLD
-        # =================================================
 
         current_gold = self.get_balance(
             member.id
@@ -694,10 +629,6 @@ class MinesGame(commands.Cog):
         self.user_balances[
             member.id
         ] = new_gold
-
-        # =================================================
-        # SUCCESS MESSAGE
-        # =================================================
 
         embed = discord.Embed(
             title="Gold Added",
@@ -715,7 +646,7 @@ class MinesGame(commands.Cog):
 
 
 # =========================================================
-# LOAD COG
+# SETUP
 # =========================================================
 
 async def setup(bot):
