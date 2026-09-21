@@ -1,6 +1,7 @@
-discord.py
+Discord.py
 pymongo
 dnspython
 flask
 groq
 motor
+folium
