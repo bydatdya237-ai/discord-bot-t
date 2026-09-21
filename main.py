@@ -29,9 +29,13 @@ db = client['discord_bot_db']
 # تفعيل الصلاحيات الأساسية وقراءة محتوى الرسائل للذكاء الاصطناعي
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True  # <--- تمت الإضافة هنا
+intents.message_content = True
 
-bot = commands.Bot(command_prefix="-", intents=intents)
+# ========================================================
+# البوت يعمل بدون أي Prefix
+# ========================================================
+
+bot = commands.Bot(command_prefix="", intents=intents)
 
 @bot.event
 async def on_ready():
@@ -61,5 +65,6 @@ async def setup_hook():
     await load_extensions()
 
 keep_alive()
+
 TOKEN = os.environ.get('TOKEN')
 bot.run(TOKEN)
