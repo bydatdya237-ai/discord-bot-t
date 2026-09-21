@@ -13,14 +13,12 @@ GAME_ROOM_ID = 1547418557032308830
 
 GOLD_ROLE_ID = 1545608277159579718
 
-GAME_COOLDOWN = 60
-
-GAME_TIMEOUT = 120
+GAME_COOLDOWN = 60          # دقيقة بين كل لعبة لكل لاعب
+GAME_TIMEOUT = 120          # مدة اللعبة دقيقتان
 
 STARTING_GOLD = 1000
 
 LOSS_GOLD = 35
-
 WIN_GOLD = 50
 
 
@@ -31,31 +29,41 @@ WIN_GOLD = 50
 class MinesView(discord.ui.View):
 
     def __init__(self, cog, user_id):
-
         super().__init__(timeout=GAME_TIMEOUT)
 
         self.cog = cog
         self.user_id = user_id
 
-        self.rows = 5
-        self.cols = 5
+        self.total_cells = 25
         self.total_mines = 5
 
         self.game_over = False
         self.revealed = set()
 
+        # لمنع ضغطتين في نفس اللحظة
+        self.processing = False
+
+        # رسالة اللعبة
+        self.message = None
+
+        # =================================================
         # إنشاء الألغام
+        # =================================================
+
         self.mines = set()
 
         while len(self.mines) < self.total_mines:
             self.mines.add(random.randint(0, 24))
 
-        # إنشاء شبكة 5x5
+        # =================================================
+        # إنشاء أزرار 5x5
+        # =================================================
+
         for i in range(25):
 
             button = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
-                label="\u200b",
+                label="❓",
                 row=i // 5,
                 custom_id=f"mine_{i}"
             )
@@ -65,7 +73,39 @@ class MinesView(discord.ui.View):
             self.add_item(button)
 
     # =====================================================
-    # انتهاء وقت اللعبة
+    # لون الرقم حسب عدد الألغام
+    # =====================================================
+
+    @staticmethod
+    def number_style(number):
+
+        if number == 0:
+            return discord.ButtonStyle.success
+
+        if number == 1:
+            return discord.ButtonStyle.primary
+
+        if number == 2:
+            return discord.ButtonStyle.success
+
+        if number == 3:
+            return discord.ButtonStyle.danger
+
+        return discord.ButtonStyle.danger
+
+    # =====================================================
+    # تنظيف اللعبة
+    # =====================================================
+
+    def remove_active_game(self):
+
+        self.cog.active_games.pop(
+            self.user_id,
+            None
+        )
+
+    # =====================================================
+    # انتهاء الوقت
     # =====================================================
 
     async def on_timeout(self):
@@ -75,9 +115,9 @@ class MinesView(discord.ui.View):
 
         self.game_over = True
 
-        self.cog.active_games.pop(self.user_id, None)
+        self.remove_active_game()
 
-        # تعطيل الأزرار
+        # تعطيل كل الأزرار
         for child in self.children:
 
             child.disabled = True
@@ -85,8 +125,12 @@ class MinesView(discord.ui.View):
             if child.custom_id:
 
                 try:
-                    index = int(child.custom_id.split("_")[1])
 
+                    index = int(
+                        child.custom_id.split("_")[1]
+                    )
+
+                    # إظهار الألغام
                     if index in self.mines:
                         child.style = discord.ButtonStyle.danger
                         child.label = "💣"
@@ -94,34 +138,45 @@ class MinesView(discord.ui.View):
                 except (ValueError, IndexError):
                     pass
 
-        # تعديل رسالة اللعبة إن كانت موجودة
-        if hasattr(self, "message") and self.message:
+        if self.message is None:
+            return
 
-            embed = discord.Embed(
-                title="الألغام | ⏰",
-                description=(
-                    "انتهى وقت اللعبة!\n\n"
-                    "⏱️ مدة اللعبة كانت **دقيقتين**.\n"
-                    "لم يتم خصم أو إضافة ذهب."
-                ),
-                color=0x95A5A6
+        embed = discord.Embed(
+            title="💣 الألغام",
+            description=(
+                "━━━━━━━━━━━━━━━━━━\n"
+                "⏰ **انتهى الوقت!**\n\n"
+                "انتهت مدة اللعبة قبل أن تكشف جميع "
+                "الخانات الآمنة.\n\n"
+                "🪙 لم يتم خصم أو إضافة أي ذهب.\n"
+                "━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x95A5A6
+        )
+
+        try:
+
+            await self.message.edit(
+                embed=embed,
+                view=self
             )
 
-            try:
-                await self.message.edit(
-                    embed=embed,
-                    view=self
-                )
-            except discord.HTTPException:
-                pass
+        except discord.HTTPException:
+            pass
 
     # =====================================================
     # الضغط على زر
     # =====================================================
 
-    async def button_callback(self, interaction: discord.Interaction):
+    async def button_callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
-        # التأكد أن اللاعب هو صاحب اللعبة
+        # =================================================
+        # التأكد من صاحب اللعبة
+        # =================================================
+
         if interaction.user.id != self.user_id:
 
             await interaction.response.send_message(
@@ -131,204 +186,268 @@ class MinesView(discord.ui.View):
 
             return
 
-        # التأكد أن اللعبة لم تنته
+        # =================================================
+        # التأكد من حالة اللعبة
+        # =================================================
+
         if self.game_over:
 
             await interaction.response.send_message(
-                "❌ انتهت اللعبة بالفعل!",
+                "❌ انتهت هذه اللعبة بالفعل.",
                 ephemeral=True
             )
 
             return
 
-        # الحصول على رقم الخانة
+        # =================================================
+        # منع الضغط المتزامن
+        # =================================================
+
+        if self.processing:
+
+            await interaction.response.send_message(
+                "⏳ انتظر لحظة...",
+                ephemeral=True
+            )
+
+            return
+
+        self.processing = True
+
         try:
-            idx = int(interaction.data["custom_id"].split("_")[1])
-        except (ValueError, KeyError, IndexError):
 
-            await interaction.response.send_message(
-                "❌ حدث خطأ في اللعبة.",
-                ephemeral=True
-            )
+            # =================================================
+            # قراءة رقم الخانة
+            # =================================================
 
-            return
+            try:
 
-        # منع الضغط على خانة مفتوحة
-        if idx in self.revealed:
-
-            await interaction.response.send_message(
-                "⚠️ هذه الخانة مفتوحة بالفعل.",
-                ephemeral=True
-            )
-
-            return
-
-        # =================================================
-        # إذا كانت الخانة لغم
-        # =================================================
-
-        if idx in self.mines:
-
-            self.game_over = True
-
-            self.cog.active_games.pop(self.user_id, None)
-
-            # تعطيل جميع الأزرار وكشف الألغام
-            for child in self.children:
-
-                child.disabled = True
-
-                if child.custom_id:
-
-                    try:
-                        button_index = int(
-                            child.custom_id.split("_")[1]
-                        )
-
-                        if button_index in self.mines:
-                            child.style = discord.ButtonStyle.danger
-                            child.label = "💣"
-
-                    except (ValueError, IndexError):
-                        pass
-
-            # خصم الذهب
-            current_gold = self.cog.get_balance(self.user_id)
-
-            new_gold = max(
-                0,
-                current_gold - LOSS_GOLD
-            )
-
-            self.cog.user_balances[self.user_id] = new_gold
-
-            embed = discord.Embed(
-                title="الألغام | 💣",
-                description=(
-                    "لقد خسرت 😕\n\n"
-                    f"تم خصم **{LOSS_GOLD}** ذهب من رصيدك.\n\n"
-                    f"🪙 ذهبك الحالي: **{new_gold}**"
-                ),
-                color=0xE74C3C
-            )
-
-            await interaction.response.edit_message(
-                embed=embed,
-                view=self
-            )
-
-            return
-
-        # =================================================
-        # الخانة ليست لغم
-        # =================================================
-
-        self.revealed.add(idx)
-
-        row, col = divmod(idx, 5)
-
-        nearby_mines = 0
-
-        for r in range(
-            max(0, row - 1),
-            min(5, row + 2)
-        ):
-
-            for c in range(
-                max(0, col - 1),
-                min(5, col + 2)
-            ):
-
-                if r * 5 + c in self.mines:
-                    nearby_mines += 1
-
-        # تحديث الزر
-        for child in self.children:
-
-            if child.custom_id == f"mine_{idx}":
-
-                child.style = discord.ButtonStyle.success
-
-                child.label = (
-                    str(nearby_mines)
-                    if nearby_mines > 0
-                    else " "
+                idx = int(
+                    interaction.data["custom_id"].split("_")[1]
                 )
 
-                child.disabled = True
+            except (ValueError, KeyError, IndexError):
 
-                break
+                await interaction.response.send_message(
+                    "❌ حدث خطأ في قراءة الخانة.",
+                    ephemeral=True
+                )
 
-        # =================================================
-        # فوز اللاعب
-        # =================================================
+                return
 
-        if len(self.revealed) >= (
-            25 - self.total_mines
-        ):
+            # =================================================
+            # منع فتح الخانة مرتين
+            # =================================================
 
-            self.game_over = True
+            if idx in self.revealed:
 
-            self.cog.active_games.pop(
-                self.user_id,
-                None
-            )
+                await interaction.response.send_message(
+                    "⚠️ هذه الخانة مفتوحة بالفعل.",
+                    ephemeral=True
+                )
 
-            # تعطيل كل الأزرار وكشف الألغام
-            for child in self.children:
+                return
 
-                child.disabled = True
+            # =================================================
+            # لغم
+            # =================================================
 
-                if child.custom_id:
+            if idx in self.mines:
 
-                    try:
-                        button_index = int(
-                            child.custom_id.split("_")[1]
-                        )
+                self.game_over = True
 
-                        if button_index in self.mines:
+                self.remove_active_game()
 
-                            child.style = (
-                                discord.ButtonStyle.danger
+                # إظهار جميع الألغام
+                for child in self.children:
+
+                    child.disabled = True
+
+                    if child.custom_id:
+
+                        try:
+
+                            button_index = int(
+                                child.custom_id.split("_")[1]
                             )
 
-                            child.label = "💣"
+                            if button_index in self.mines:
 
-                    except (ValueError, IndexError):
-                        pass
+                                child.style = (
+                                    discord.ButtonStyle.danger
+                                )
 
-            # إضافة الذهب
-            current_gold = self.cog.get_balance(
-                self.user_id
-            )
+                                child.label = "💣"
 
-            new_gold = current_gold + WIN_GOLD
+                        except (ValueError, IndexError):
+                            pass
 
-            self.cog.user_balances[
-                self.user_id
-            ] = new_gold
+                # خصم الذهب
+                current_gold = self.cog.get_balance(
+                    self.user_id
+                )
 
-            embed = discord.Embed(
-                title="الألغام | 🎉",
-                description=(
-                    "مبروك! لقد فزت 🎉\n\n"
-                    f"تمت إضافة **{WIN_GOLD}** ذهب إلى رصيدك.\n\n"
-                    f"🪙 ذهبك الحالي: **{new_gold}**"
-                ),
-                color=0x2ECC71
-            )
+                new_gold = max(
+                    0,
+                    current_gold - LOSS_GOLD
+                )
+
+                self.cog.user_balances[
+                    self.user_id
+                ] = new_gold
+
+                embed = discord.Embed(
+                    title="💥 الألغام",
+                    description=(
+                        "━━━━━━━━━━━━━━━━━━\n"
+                        "💣 **انفجرت في لغم!**\n\n"
+                        f"تم خصم **{LOSS_GOLD:,}** 🪙 من رصيدك.\n\n"
+                        f"💰 رصيدك الحالي: "
+                        f"**{new_gold:,}** ذهب\n"
+                        "━━━━━━━━━━━━━━━━━━"
+                    ),
+                    color=0xE74C3C
+                )
+
+                await interaction.response.edit_message(
+                    embed=embed,
+                    view=self
+                )
+
+                return
+
+            # =================================================
+            # الخانة آمنة
+            # =================================================
+
+            self.revealed.add(idx)
+
+            row, col = divmod(idx, 5)
+
+            nearby_mines = 0
+
+            for r in range(
+                max(0, row - 1),
+                min(5, row + 2)
+            ):
+
+                for c in range(
+                    max(0, col - 1),
+                    min(5, col + 2)
+                ):
+
+                    if r * 5 + c in self.mines:
+                        nearby_mines += 1
+
+            # =================================================
+            # تحديث الزر
+            # =================================================
+
+            for child in self.children:
+
+                if child.custom_id == f"mine_{idx}":
+
+                    child.disabled = True
+
+                    if nearby_mines == 0:
+
+                        child.style = (
+                            discord.ButtonStyle.success
+                        )
+
+                        child.label = "✓"
+
+                    else:
+
+                        child.style = self.number_style(
+                            nearby_mines
+                        )
+
+                        child.label = str(
+                            nearby_mines
+                        )
+
+                    break
+
+            # =================================================
+            # فوز
+            # =================================================
+
+            if len(self.revealed) >= (
+                self.total_cells - self.total_mines
+            ):
+
+                self.game_over = True
+
+                self.remove_active_game()
+
+                # تعطيل جميع الأزرار
+                for child in self.children:
+
+                    child.disabled = True
+
+                    if child.custom_id:
+
+                        try:
+
+                            button_index = int(
+                                child.custom_id.split("_")[1]
+                            )
+
+                            if button_index in self.mines:
+
+                                child.style = (
+                                    discord.ButtonStyle.danger
+                                )
+
+                                child.label = "💣"
+
+                        except (ValueError, IndexError):
+                            pass
+
+                # إضافة الذهب
+                current_gold = self.cog.get_balance(
+                    self.user_id
+                )
+
+                new_gold = current_gold + WIN_GOLD
+
+                self.cog.user_balances[
+                    self.user_id
+                ] = new_gold
+
+                embed = discord.Embed(
+                    title="🏆 الألغام",
+                    description=(
+                        "━━━━━━━━━━━━━━━━━━\n"
+                        "🎉 **فــــوز!**\n\n"
+                        f"تمت إضافة **{WIN_GOLD:,}** 🪙 "
+                        "إلى رصيدك.\n\n"
+                        f"💰 رصيدك الحالي: "
+                        f"**{new_gold:,}** ذهب\n"
+                        "━━━━━━━━━━━━━━━━━━"
+                    ),
+                    color=0x2ECC71
+                )
+
+                await interaction.response.edit_message(
+                    embed=embed,
+                    view=self
+                )
+
+                return
+
+            # =================================================
+            # تحديث اللعبة
+            # =================================================
 
             await interaction.response.edit_message(
-                embed=embed,
                 view=self
             )
 
-            return
+        finally:
 
-        # تحديث اللعبة
-        await interaction.response.edit_message(
-            view=self
-        )
+            self.processing = False
 
 
 # =========================================================
@@ -341,13 +460,13 @@ class MinesGame(commands.Cog):
 
         self.bot = bot
 
-        # أرصدة الذهب
+        # أرصدة اللاعبين
         self.user_balances = {}
 
         # الألعاب الحالية
         self.active_games = {}
 
-        # وقت آخر لعبة لكل لاعب
+        # آخر وقت بدأ فيه اللاعب لعبة
         self.last_game_time = {}
 
     # =====================================================
@@ -363,7 +482,7 @@ class MinesGame(commands.Cog):
         return self.user_balances[user_id]
 
     # =====================================================
-    # التحقق من الروم
+    # التحقق من روم اللعبة
     # =====================================================
 
     def is_game_channel(self, ctx):
@@ -371,30 +490,33 @@ class MinesGame(commands.Cog):
         return ctx.channel.id == GAME_ROOM_ID
 
     # =====================================================
-    # أمر الألغام
+    # لعبة الألغام
     # =====================================================
 
     @commands.command(name="الغام")
     async def mines_game(self, ctx):
 
-        # تجاهل الأمر خارج الروم
+        # لا يعمل إلا في الروم المحدد
         if not self.is_game_channel(ctx):
             return
 
         user_id = ctx.author.id
 
-        # منع تشغيل أكثر من لعبة بنفس الوقت
+        # =================================================
+        # منع لعبتين في نفس الوقت
+        # =================================================
+
         if user_id in self.active_games:
 
             await ctx.send(
-                f"⚠️ {ctx.author.mention} "
-                "لديك لعبة قيد التشغيل بالفعل!"
+                f"⚠️ {ctx.author.mention}\n"
+                "لديك لعبة ألغام قيد التشغيل بالفعل!"
             )
 
             return
 
         # =================================================
-        # Cooldown دقيقة
+        # Cooldown
         # =================================================
 
         current_time = asyncio.get_running_loop().time()
@@ -414,19 +536,22 @@ class MinesGame(commands.Cog):
 
                 await ctx.send(
                     f"⏳ {ctx.author.mention}\n"
-                    f"يمكنك لعب الألغام مرة أخرى بعد "
+                    f"يمكنك اللعب مرة أخرى بعد "
                     f"**{remaining} ثانية**."
                 )
 
                 return
 
-        # تسجيل وقت بداية اللعبة
+        # تسجيل وقت اللعبة
         self.last_game_time[user_id] = current_time
 
-        # إنشاء الرصيد إذا لم يكن موجود
+        # إنشاء الرصيد
         self.get_balance(user_id)
 
+        # =================================================
         # إنشاء اللعبة
+        # =================================================
+
         view = MinesView(
             self,
             user_id
@@ -435,16 +560,20 @@ class MinesGame(commands.Cog):
         self.active_games[user_id] = view
 
         embed = discord.Embed(
-            title="الألغام | 🎮",
+            title="💣 الألغام",
             description=(
-                "حاول تجنب الألغام من خلال تحليل "
-                "الأرقام واتجاهات الأزرار.\n\n"
-                f"🏆 الفوز: **+{WIN_GOLD} ذهب**\n"
-                f"💣 الخسارة: **-{LOSS_GOLD} ذهب**\n\n"
-                "⏱️ الوقت: **2:00**\n\n"
-                "🍀 حظًا موفقًا!"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "🎮 **اختبر حظك وذكاءك!**\n\n"
+                "اكشف الخانات الآمنة وتجنب الألغام.\n"
+                "الأرقام تخبرك بعدد الألغام الموجودة "
+                "حول الخانة.\n\n"
+                f"🏆 الفوز: **+{WIN_GOLD:,} 🪙**\n"
+                f"💥 الخسارة: **-{LOSS_GOLD:,} 🪙**\n\n"
+                "⏱️ مدة اللعبة: **2:00**\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "🍀 **حظًا موفقًا!**"
             ),
-            color=0x3498DB
+            color=0x5865F2
         )
 
         message = await ctx.send(
@@ -452,17 +581,15 @@ class MinesGame(commands.Cog):
             view=view
         )
 
-        # حفظ الرسالة حتى يتم تعديلها عند انتهاء الوقت
         view.message = message
 
     # =====================================================
-    # أمر الرصيد
+    # الرصيد
     # =====================================================
 
     @commands.command(name="رصيد")
     async def check_balance(self, ctx):
 
-        # تجاهل الأمر خارج الروم
         if not self.is_game_channel(ctx):
             return
 
@@ -471,11 +598,13 @@ class MinesGame(commands.Cog):
         gold = self.get_balance(user_id)
 
         embed = discord.Embed(
-            title="البنك | 💰",
+            title="💰 رصيدك",
             description=(
-                f"مرحباً {ctx.author.mention}\n\n"
-                "🪙 رصيدك الحالي من الذهب:\n"
-                f"**{gold}**"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"👤 اللاعب: {ctx.author.mention}\n\n"
+                f"🪙 الذهب:\n"
+                f"**{gold:,}**\n"
+                "━━━━━━━━━━━━━━━━━━"
             ),
             color=0xF1C40F
         )
@@ -483,20 +612,23 @@ class MinesGame(commands.Cog):
         await ctx.send(embed=embed)
 
     # =====================================================
-    # أمر إضافة الذهب
+    # إضافة الذهب
     #
     # الاستخدام:
-    # -اضافة ذهب @الشخص 500
+    #
+    # -اضافة @الشخص 1000000
     #
     # =====================================================
 
-    @commands.command(
-        name="اضافة",
-        aliases=["اضافة-ذهب"]
-    )
-    async def add_gold(self, ctx, *args):
+    @commands.command(name="اضافة")
+    async def add_gold(
+        self,
+        ctx,
+        member: discord.Member = None,
+        amount: str = None
+    ):
 
-        # تجاهل الأمر خارج الروم
+        # لا يعمل إلا في روم اللعبة
         if not self.is_game_channel(ctx):
             return
 
@@ -507,12 +639,14 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        role = ctx.guild.get_role(GOLD_ROLE_ID)
+        role = ctx.guild.get_role(
+            GOLD_ROLE_ID
+        )
 
         if role is None:
 
             await ctx.send(
-                "❌ لم يتم العثور على رتبة إضافة الذهب."
+                "❌ رتبة إضافة الذهب غير موجودة."
             )
 
             return
@@ -520,70 +654,67 @@ class MinesGame(commands.Cog):
         if role not in ctx.author.roles:
 
             await ctx.send(
-                "❌ ليس لديك صلاحية استخدام هذا الأمر."
+                "❌ ليس لديك صلاحية استخدام أمر إضافة الذهب."
             )
 
             return
 
         # =================================================
-        # التحقق من الصيغة
+        # التحقق من الشخص
         # =================================================
 
-        if len(args) < 2:
+        if member is None:
 
             await ctx.send(
                 "❌ الاستخدام الصحيح:\n"
-                "`-اضافة ذهب @الشخص 500`"
+                "`-اضافة @الشخص 1000000`"
             )
 
             return
 
-        # أول كلمة يجب أن تكون ذهب
-        if args[0] != "ذهب":
+        # =================================================
+        # التحقق من المبلغ
+        # =================================================
+
+        if amount is None:
 
             await ctx.send(
-                "❌ الاستخدام الصحيح:\n"
-                "`-اضافة ذهب @الشخص 500`"
+                "❌ اكتب المبلغ بعد الشخص.\n"
+                "مثال:\n"
+                "`-اضافة @الشخص 1000000`"
             )
 
             return
 
-        # =================================================
-        # الحصول على العضو
-        # =================================================
-
-        if not ctx.message.mentions:
-
-            await ctx.send(
-                "❌ يجب تحديد الشخص الذي تريد "
-                "إضافة الذهب له."
-            )
-
-            return
-
-        member = ctx.message.mentions[0]
-
-        # =================================================
-        # الحصول على المبلغ
-        # =================================================
+        # إزالة الفواصل
+        clean_amount = (
+            amount
+            .replace(",", "")
+            .replace("٬", "")
+            .strip()
+        )
 
         try:
 
-            amount = int(args[1])
+            gold_amount = int(
+                clean_amount
+            )
 
         except ValueError:
 
             await ctx.send(
-                "❌ مبلغ الذهب يجب أن يكون رقمًا صحيحًا."
+                "❌ المبلغ يجب أن يكون رقمًا.\n"
+                "مثال:\n"
+                "`-اضافة @الشخص 1000000`"
             )
 
             return
 
         # منع الصفر والسالب
-        if amount <= 0:
+        if gold_amount <= 0:
 
             await ctx.send(
-                "❌ يجب أن يكون مقدار الذهب أكبر من 0."
+                "❌ يجب أن يكون المبلغ أكبر من 0."
             )
 
             return
@@ -592,27 +723,37 @@ class MinesGame(commands.Cog):
         # إضافة الذهب
         # =================================================
 
-        current_gold = self.get_balance(member.id)
+        current_gold = self.get_balance(
+            member.id
+        )
 
-        new_gold = current_gold + amount
+        new_gold = current_gold + gold_amount
 
-        self.user_balances[member.id] = new_gold
+        self.user_balances[
+            member.id
+        ] = new_gold
 
         # =================================================
         # رسالة النجاح
         # =================================================
 
         embed = discord.Embed(
-            title="إضافة ذهب | 🪙",
+            title="🪙 إضافة ذهب",
             description=(
-                f"تمت إضافة **{amount}** ذهب إلى "
-                f"{member.mention} بنجاح.\n\n"
-                f"💰 الرصيد الجديد: **{new_gold}** ذهب"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"👤 اللاعب: {member.mention}\n\n"
+                f"➕ تمت إضافة:\n"
+                f"**{gold_amount:,}** 🪙\n\n"
+                f"💰 الرصيد الجديد:\n"
+                f"**{new_gold:,}** 🪙\n"
+                "━━━━━━━━━━━━━━━━━━"
             ),
             color=0xF1C40F
         )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
 
 
 # =========================================================
@@ -624,3 +765,23 @@ async def setup(bot):
     await bot.add_cog(
         MinesGame(bot)
     )
+
+الاستخدام الآن:
+
+-الغام
+
+-رصيد
+
+وإضافة الذهب صارت فقط:
+
+-اضافة @الشخص 1000000
+
+وتقدر حتى تكتب:
+
+-اضافة @الشخص 1,000,000
+
+وسيُحسب المبلغ 1,000,000 ذهب.
+
+«ملاحظة مهمة: نظام الذهب في هذا الملف ما زال داخل الذاكرة، لذلك إعادة تشغيل البوت تصفّر الأرصدة. أما مشكلة أمر "-اضافة" نفسها فتم تغيير طريقة استقبال المبلغ والعضو بحيث تطابق الصيغة التي طلبتها.»
+
+ولو قصدك بـ "اللعبة تعلق" أنها أحيانًا تكون الأزرار ما تستجيب رغم أن البوت شغال، فالنسخة فوق عالجت حالات الضغط المتزامن وانتهاء المهلة.
