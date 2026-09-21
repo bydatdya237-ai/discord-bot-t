@@ -5,33 +5,52 @@ from flask import Flask
 from threading import Thread
 from pymongo import MongoClient
 
-# === إعدادات سيرفر الحفاظ على البوت شغال (Keep Alive) ===
+
+# ========================================================
+# إعدادات Keep Alive
+# ========================================================
+
 app = Flask('')
+
 
 @app.route('/')
 def home():
     return "I am alive!"
 
+
 def run():
     app.run(host='0.0.0.0', port=8080)
 
+
 def keep_alive():
     t = Thread(target=run)
+    t.daemon = True
     t.start()
 
+
+# ========================================================
+# الاتصال بقاعدة البيانات
 # ========================================================
 
-# === الاتصال بقاعدة البيانات لنظام الألعاب والبيانات ===
-mongo_url = os.environ.get('MONGO_URI')
+mongo_url = os.environ.get("MONGO_URI")
+
+if not mongo_url:
+    raise RuntimeError("❌ MONGO_URI غير موجود في Environment Variables")
+
 client = MongoClient(mongo_url)
+
 db = client['discord_bot_db']
 
-# ==================================================
 
-# تفعيل الصلاحيات الأساسية وقراءة محتوى الرسائل للذكاء الاصطناعي
+# ========================================================
+# Intents
+# ========================================================
+
 intents = discord.Intents.default()
+
 intents.members = True
 intents.message_content = True
+
 
 # ========================================================
 # البوت
@@ -39,21 +58,24 @@ intents.message_content = True
 
 bot = commands.Bot(
     command_prefix="",
-    intents=intents
+    intents=intents,
+    help_command=None
 )
 
 
 # ========================================================
-# تشغيل الأوامر بدون Prefix
+# معالجة الرسائل
 # ========================================================
 
 @bot.event
 async def on_message(message):
 
+    # تجاهل البوتات
     if message.author.bot:
         return
 
-    if not message.guild:
+    # تجاهل الخاص
+    if message.guild is None:
         return
 
     content = message.content.strip()
@@ -62,53 +84,20 @@ async def on_message(message):
         return
 
     # ====================================================
-    # منع أي أمر يبدأ بـ - أو . أو /
+    # منع الأوامر التي تبدأ بـ:
+    # -
+    # .
+    # /
     # ====================================================
 
-    if content.startswith(("-", ".", "/")):
+    if content[0] in ("-", ".", "/"):
         return
 
     # ====================================================
-    # تشغيل الأوامر بدون Prefix
+    # تشغيل أوامر البوت بدون Prefix
     # ====================================================
 
     await bot.process_commands(message)
-
-
-# ========================================================
-# جاهزية البوت
-# ========================================================
-
-@bot.event
-async def on_ready():
-
-    print(f'دخلت السيرفر باسم: {bot.user}')
-
-    try:
-
-        # مزامنة أوامر Slash
-        synced = await bot.tree.sync()
-
-        command_names = [
-            cmd.name
-            for cmd in synced
-        ]
-
-        print(
-            f"الأوامر المزامنة حالياً: "
-            f"{command_names}"
-        )
-
-        print(
-            f"تمت مزامنة {len(synced)} "
-            f"أمر عالمياً بنجاح!"
-        )
-
-    except Exception as e:
-
-        print(
-            f"خطأ في مزامنة الأوامر: {e}"
-        )
 
 
 # ========================================================
@@ -117,28 +106,37 @@ async def on_ready():
 
 async def load_extensions():
 
-    for filename in os.listdir('./cogs'):
+    if not os.path.exists("./cogs"):
+        print("❌ مجلد cogs غير موجود!")
+        return
 
-        if filename.endswith('.py'):
+    for filename in os.listdir("./cogs"):
 
-            try:
+        if not filename.endswith(".py"):
+            continue
 
-                await bot.load_extension(
-                    f'cogs.{filename[:-3]}'
-                )
+        if filename.startswith("_"):
+            continue
 
-                print(
-                    f'✅ تم تحميل الملف بنجاح: '
-                    f'{filename}'
-                )
+        extension = f"cogs.{filename[:-3]}"
 
-            except Exception as e:
+        try:
 
-                print(
-                    f'❌ فشل تحميل الملف '
-                    f'{filename} بسبب الخطأ التالي: '
-                    f'{e}'
-                )
+            await bot.load_extension(extension)
+
+            print(
+                f"✅ تم تحميل الملف بنجاح: {filename}"
+            )
+
+        except Exception as e:
+
+            print(
+                f"❌ فشل تحميل الملف {filename}"
+            )
+
+            print(
+                f"الخطأ: {type(e).__name__}: {e}"
+            )
 
 
 # ========================================================
@@ -152,11 +150,59 @@ async def setup_hook():
 
 
 # ========================================================
-# تشغيل البوت
+# جاهزية البوت
+# ========================================================
+
+@bot.event
+async def on_ready():
+
+    print("========================================")
+    print(f"🤖 دخلت السيرفر باسم: {bot.user}")
+    print(f"🆔 ID: {bot.user.id}")
+    print("========================================")
+
+    try:
+
+        synced = await bot.tree.sync()
+
+        command_names = [
+            command.name
+            for command in synced
+        ]
+
+        print(
+            f"✅ تمت مزامنة {len(synced)} "
+            f"أمر Slash"
+        )
+
+        if command_names:
+            print(
+                f"📋 أوامر Slash: {command_names}"
+            )
+
+    except Exception as e:
+
+        print(
+            f"❌ خطأ في مزامنة أوامر Slash: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+# ========================================================
+# تشغيل Keep Alive
 # ========================================================
 
 keep_alive()
 
-TOKEN = os.environ.get('TOKEN')
+
+# ========================================================
+# تشغيل البوت
+# ========================================================
+
+TOKEN = os.environ.get("TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("❌ TOKEN غير موجود في Environment Variables")
+
 
 bot.run(TOKEN)
