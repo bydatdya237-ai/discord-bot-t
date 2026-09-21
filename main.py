@@ -35,11 +35,13 @@ def keep_alive():
 mongo_url = os.environ.get("MONGO_URI")
 
 if not mongo_url:
-    raise RuntimeError("❌ MONGO_URI غير موجود في Environment Variables")
+    raise RuntimeError(
+        "❌ MONGO_URI غير موجود في Environment Variables"
+    )
 
 client = MongoClient(mongo_url)
 
-db = client['discord_bot_db']
+db = client["discord_bot_db"]
 
 
 # ========================================================
@@ -64,6 +66,28 @@ bot = commands.Bot(
 
 
 # ========================================================
+# منع أي أمر يبدأ بـ - أو . أو /
+# ========================================================
+
+@bot.check
+async def global_command_check(ctx):
+
+    content = ctx.message.content.strip()
+
+    if not content:
+        return False
+
+    # ممنوع:
+    # -رصيد
+    # .رصيد
+    # /رصيد
+    if content[0] in ("-", ".", "/"):
+        return False
+
+    return True
+
+
+# ========================================================
 # معالجة الرسائل
 # ========================================================
 
@@ -84,17 +108,14 @@ async def on_message(message):
         return
 
     # ====================================================
-    # منع الأوامر التي تبدأ بـ:
-    # -
-    # .
-    # /
+    # منع البادئات
     # ====================================================
 
     if content[0] in ("-", ".", "/"):
         return
 
     # ====================================================
-    # تشغيل أوامر البوت بدون Prefix
+    # تشغيل الأوامر بدون Prefix
     # ====================================================
 
     await bot.process_commands(message)
@@ -171,8 +192,7 @@ async def on_ready():
         ]
 
         print(
-            f"✅ تمت مزامنة {len(synced)} "
-            f"أمر Slash"
+            f"✅ تمت مزامنة {len(synced)} أمر Slash"
         )
 
         if command_names:
@@ -202,7 +222,9 @@ keep_alive()
 TOKEN = os.environ.get("TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("❌ TOKEN غير موجود في Environment Variables")
+    raise RuntimeError(
+        "❌ TOKEN غير موجود في Environment Variables"
+    )
 
 
 bot.run(TOKEN)
