@@ -6,7 +6,7 @@ from discord.ext import commands
 
 
 # =========================================================
-# SETTINGS
+# الاعدادات
 # =========================================================
 
 GAME_ROOM_ID = 1547418557032308830
@@ -21,7 +21,7 @@ LOSS_GOLD = 35
 
 
 # =========================================================
-# MINES GAME VIEW
+# لعبة الالغام
 # =========================================================
 
 class MinesView(discord.ui.View):
@@ -43,18 +43,22 @@ class MinesView(discord.ui.View):
         self.mines = set()
 
         while len(self.mines) < self.total_mines:
-            self.mines.add(random.randint(0, 24))
+            self.mines.add(
+                random.randint(0, 24)
+            )
 
+        # انشاء شبكة 5x5
         for index in range(25):
 
             button = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
-                label="?",
+                label="؟",
                 row=index // 5,
                 custom_id=f"mine_{index}"
             )
 
             button.callback = self.button_callback
+
             self.add_item(button)
 
     @staticmethod
@@ -75,12 +79,17 @@ class MinesView(discord.ui.View):
             None
         )
 
+    # =====================================================
+    # انتهاء الوقت
+    # =====================================================
+
     async def on_timeout(self):
 
         if self.game_over:
             return
 
         self.game_over = True
+
         self.remove_active_game()
 
         for child in self.children:
@@ -101,18 +110,21 @@ class MinesView(discord.ui.View):
 
             if index in self.mines:
 
-                child.style = discord.ButtonStyle.danger
-                child.label = "M"
+                child.style = (
+                    discord.ButtonStyle.danger
+                )
+
+                child.label = "💣"
 
         if self.message is None:
             return
 
         embed = discord.Embed(
-            title="Mines",
+            title="💣 لعبة الألغام",
             description=(
-                "Time is over.\n\n"
-                "The game has ended.\n"
-                "No gold was added or removed."
+                "⏰ انتهى الوقت!\n\n"
+                "انتهت اللعبة بسبب انتهاء الوقت.\n"
+                "لم يتم إضافة أو خصم أي ذهب."
             ),
             color=0x808080
         )
@@ -127,30 +139,37 @@ class MinesView(discord.ui.View):
         except discord.HTTPException:
             pass
 
+    # =====================================================
+    # الضغط على الخانة
+    # =====================================================
+
     async def button_callback(self, interaction):
 
+        # منع اللاعبين الآخرين من اللعب
         if interaction.user.id != self.user_id:
 
             await interaction.response.send_message(
-                "This is not your game.",
+                "❌ هذه اللعبة ليست لك.",
                 ephemeral=True
             )
 
             return
 
+        # اللعبة منتهية
         if self.game_over:
 
             await interaction.response.send_message(
-                "This game has already ended.",
+                "❌ انتهت هذه اللعبة بالفعل.",
                 ephemeral=True
             )
 
             return
 
+        # منع الضغط المتزامن
         if self.processing:
 
             await interaction.response.send_message(
-                "Please wait.",
+                "⏳ انتظر لحظة...",
                 ephemeral=True
             )
 
@@ -159,6 +178,10 @@ class MinesView(discord.ui.View):
         self.processing = True
 
         try:
+
+            # =================================================
+            # معرفة الخانة
+            # =================================================
 
             try:
 
@@ -171,30 +194,33 @@ class MinesView(discord.ui.View):
             except (ValueError, KeyError, IndexError):
 
                 await interaction.response.send_message(
-                    "An error occurred.",
+                    "❌ حدث خطأ أثناء فتح الخانة.",
                     ephemeral=True
                 )
 
                 return
 
+            # الخانة مفتوحة مسبقا
             if index in self.revealed:
 
                 await interaction.response.send_message(
-                    "This cell is already open.",
+                    "⚠️ هذه الخانة مفتوحة بالفعل.",
                     ephemeral=True
                 )
 
                 return
 
             # =================================================
-            # HIT MINE
+            # اذا كانت لغم
             # =================================================
 
             if index in self.mines:
 
                 self.game_over = True
+
                 self.remove_active_game()
 
+                # اظهار جميع الالغام
                 for child in self.children:
 
                     child.disabled = True
@@ -217,8 +243,9 @@ class MinesView(discord.ui.View):
                             discord.ButtonStyle.danger
                         )
 
-                        child.label = "M"
+                        child.label = "💣"
 
+                # خصم الذهب
                 current_gold = self.cog.get_balance(
                     self.user_id
                 )
@@ -233,11 +260,11 @@ class MinesView(discord.ui.View):
                 ] = new_gold
 
                 embed = discord.Embed(
-                    title="Mines - Game Over",
+                    title="💥 انفجر اللغم!",
                     description=(
-                        "You hit a mine.\n\n"
-                        f"Gold lost: {LOSS_GOLD:,}\n"
-                        f"Current gold: {new_gold:,}"
+                        "💣 للأسف اخترت لغماً.\n\n"
+                        f"💰 الذهب المخصوم: -{LOSS_GOLD:,}\n"
+                        f"💳 رصيدك الحالي: {new_gold:,}"
                     ),
                     color=0xE74C3C
                 )
@@ -250,15 +277,19 @@ class MinesView(discord.ui.View):
                 return
 
             # =================================================
-            # SAFE CELL
+            # خانة آمنة
             # =================================================
 
             self.revealed.add(index)
 
-            row, column = divmod(index, 5)
+            row, column = divmod(
+                index,
+                5
+            )
 
             nearby_mines = 0
 
+            # حساب الالغام المحيطة
             for current_row in range(
                 max(0, row - 1),
                 min(5, row + 2)
@@ -275,14 +306,17 @@ class MinesView(discord.ui.View):
                     )
 
                     if nearby_index in self.mines:
+
                         nearby_mines += 1
 
+            # تغيير شكل الخانة
             for child in self.children:
 
                 if child.custom_id == f"mine_{index}":
 
                     child.disabled = True
 
+                    # لا توجد الغام حولها
                     if nearby_mines == 0:
 
                         child.style = (
@@ -306,16 +340,19 @@ class MinesView(discord.ui.View):
                     break
 
             # =================================================
-            # WIN
+            # الفوز
             # =================================================
 
             if len(self.revealed) >= (
-                self.total_cells - self.total_mines
+                self.total_cells
+                - self.total_mines
             ):
 
                 self.game_over = True
+
                 self.remove_active_game()
 
+                # تعطيل جميع الازرار واظهار الالغام
                 for child in self.children:
 
                     child.disabled = True
@@ -338,8 +375,9 @@ class MinesView(discord.ui.View):
                             discord.ButtonStyle.danger
                         )
 
-                        child.label = "M"
+                        child.label = "💣"
 
+                # اضافة الجائزة
                 current_gold = self.cog.get_balance(
                     self.user_id
                 )
@@ -353,11 +391,11 @@ class MinesView(discord.ui.View):
                 ] = new_gold
 
                 embed = discord.Embed(
-                    title="Mines - Victory",
+                    title="🏆 فوز!",
                     description=(
-                        "Congratulations!\n\n"
-                        f"Gold received: +{WIN_GOLD:,}\n"
-                        f"Current gold: {new_gold:,}"
+                        "🎉 مبروك! لقد فتحت جميع الخانات الآمنة.\n\n"
+                        f"💰 الجائزة: +{WIN_GOLD:,}\n"
+                        f"💳 رصيدك الحالي: {new_gold:,}"
                     ),
                     color=0x2ECC71
                 )
@@ -369,6 +407,7 @@ class MinesView(discord.ui.View):
 
                 return
 
+            # تحديث اللعبة
             await interaction.response.edit_message(
                 view=self
             )
@@ -379,7 +418,7 @@ class MinesView(discord.ui.View):
 
 
 # =========================================================
-# MINES GAME COG
+# Mines Game Cog
 # =========================================================
 
 class MinesGame(commands.Cog):
@@ -388,32 +427,44 @@ class MinesGame(commands.Cog):
 
         self.bot = bot
 
+        # الارصدة
         self.user_balances = {}
+
+        # الالعاب الحالية
         self.active_games = {}
+
+        # اخر وقت لعب
         self.last_game_time = {}
 
     # =====================================================
-    # BALANCE
+    # جلب الرصيد
     # =====================================================
 
     def get_balance(self, user_id):
 
         if user_id not in self.user_balances:
 
-            self.user_balances[user_id] = STARTING_GOLD
+            self.user_balances[
+                user_id
+            ] = STARTING_GOLD
 
-        return self.user_balances[user_id]
+        return self.user_balances[
+            user_id
+        ]
 
     # =====================================================
-    # CHANNEL CHECK
+    # التأكد من الروم
     # =====================================================
 
     def is_game_channel(self, ctx):
 
-        return ctx.channel.id == GAME_ROOM_ID
+        return (
+            ctx.channel.id
+            == GAME_ROOM_ID
+        )
 
     # =====================================================
-    # MINES COMMAND
+    # امر لعبة الالغام
     # =====================================================
 
     @commands.command(name="الغام")
@@ -424,18 +475,23 @@ class MinesGame(commands.Cog):
 
         user_id = ctx.author.id
 
-        # Prevent multiple active games
+        # منع اكثر من لعبة للشخص
         if user_id in self.active_games:
 
             await ctx.send(
                 f"{ctx.author.mention}\n"
-                "You already have an active game."
+                "⚠️ لديك لعبة قيد التشغيل بالفعل."
             )
 
             return
 
-        # Cooldown
-        current_time = asyncio.get_running_loop().time()
+        # =================================================
+        # الكول داون
+        # =================================================
+
+        current_time = (
+            asyncio.get_running_loop().time()
+        )
 
         last_time = self.last_game_time.get(
             user_id
@@ -443,42 +499,68 @@ class MinesGame(commands.Cog):
 
         if last_time is not None:
 
-            elapsed = current_time - last_time
+            elapsed = (
+                current_time
+                - last_time
+            )
 
             if elapsed < GAME_COOLDOWN:
 
                 remaining = max(
                     1,
-                    int(GAME_COOLDOWN - elapsed)
+                    int(
+                        GAME_COOLDOWN
+                        - elapsed
+                    )
                 )
 
                 await ctx.send(
                     f"{ctx.author.mention}\n"
-                    f"Please wait {remaining} seconds."
+                    f"⏳ انتظر {remaining} ثانية قبل بدء لعبة جديدة."
                 )
 
                 return
 
-        self.last_game_time[user_id] = current_time
+        self.last_game_time[
+            user_id
+        ] = current_time
 
-        self.get_balance(user_id)
+        # انشاء الرصيد اذا لم يكن موجودا
+        self.get_balance(
+            user_id
+        )
 
+        # انشاء اللعبة
         view = MinesView(
             self,
             user_id
         )
 
-        self.active_games[user_id] = view
+        self.active_games[
+            user_id
+        ] = view
+
+        # =================================================
+        # واجهة اللعبة
+        # =================================================
 
         embed = discord.Embed(
-            title="Mines",
+            title="💣 لعبة الألغام",
             description=(
-                "Find the safe cells and avoid the mines.\n\n"
-                "The number on a cell tells you how many "
-                "mines are around it.\n\n"
-                f"WIN: +{WIN_GOLD:,} GOLD\n"
-                f"LOSE: -{LOSS_GOLD:,} GOLD\n\n"
-                "TIME: 2 MINUTES"
+                "🎯 **الهدف**\n"
+                "افتح الخانات الآمنة وتجنب الألغام.\n\n"
+
+                "🔢 **الأرقام**\n"
+                "الرقم الموجود في الخانة يخبرك بعدد "
+                "الألغام الموجودة حولها.\n\n"
+
+                "💰 **المكافآت**\n"
+                f"🏆 الفوز: +{WIN_GOLD:,} ذهب\n"
+                f"💥 الخسارة: -{LOSS_GOLD:,} ذهب\n\n"
+
+                "⏱️ **الوقت:** دقيقتان\n"
+                "💣 **عدد الألغام:** 5\n"
+                "⬜ **حجم اللوحة:** 5 × 5"
             ),
             color=0x5865F2
         )
@@ -500,7 +582,7 @@ class MinesGame(commands.Cog):
             )
 
     # =====================================================
-    # WALLET COMMAND
+    # امر محفظتي
     # =====================================================
 
     @commands.command(name="محفظتي")
@@ -516,10 +598,10 @@ class MinesGame(commands.Cog):
         )
 
         embed = discord.Embed(
-            title="Gold Wallet",
+            title="💰 محفظتي",
             description=(
-                f"Player: {ctx.author.mention}\n\n"
-                f"Gold: {gold:,}"
+                f"👤 اللاعب: {ctx.author.mention}\n\n"
+                f"💰 رصيدك: **{gold:,} ذهب**"
             ),
             color=0xF1C40F
         )
@@ -529,7 +611,7 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # ADD GOLD COMMAND
+    # امر ضيف
     # =====================================================
 
     @commands.command(name="ضيف")
@@ -546,6 +628,7 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
+        # البحث عن الرتبة
         role = ctx.guild.get_role(
             GOLD_ROLE_ID
         )
@@ -553,41 +636,41 @@ class MinesGame(commands.Cog):
         if role is None:
 
             await ctx.send(
-                "The required role was not found."
+                "❌ لم يتم العثور على الرتبة المطلوبة."
             )
 
             return
 
-        # Check role
+        # التأكد من امتلاك الرتبة
         if role not in ctx.author.roles:
 
             await ctx.send(
-                "You do not have permission to use this command."
+                "❌ ليس لديك صلاحية استخدام هذا الأمر."
             )
 
             return
 
-        # Check member
+        # عدم وجود شخص
         if member is None:
 
             await ctx.send(
-                "Correct usage:\n"
-                "-ضيف @member 1000000"
+                "❌ الاستخدام الصحيح:\n"
+                "`-ضيف @الشخص 1000000`"
             )
 
             return
 
-        # Check amount
+        # عدم وجود مبلغ
         if amount is None:
 
             await ctx.send(
-                "Correct usage:\n"
-                "-ضيف @member 1000000"
+                "❌ الاستخدام الصحيح:\n"
+                "`-ضيف @الشخص 1000000`"
             )
 
             return
 
-        # Clean number
+        # تنظيف الرقم
         clean_amount = (
             amount
             .replace(",", "")
@@ -605,37 +688,42 @@ class MinesGame(commands.Cog):
         except ValueError:
 
             await ctx.send(
-                "The amount must be a valid number."
+                "❌ المبلغ يجب أن يكون رقماً صحيحاً."
             )
 
             return
 
+        # منع المبالغ السالبة او صفر
         if gold_amount <= 0:
 
             await ctx.send(
-                "The amount must be greater than zero."
+                "❌ يجب أن يكون المبلغ أكبر من صفر."
             )
 
             return
 
+        # الرصيد الحالي
         current_gold = self.get_balance(
             member.id
         )
 
+        # الرصيد الجديد
         new_gold = (
-            current_gold + gold_amount
+            current_gold
+            + gold_amount
         )
 
         self.user_balances[
             member.id
         ] = new_gold
 
+        # رسالة النجاح
         embed = discord.Embed(
-            title="Gold Added",
+            title="💰 تمت إضافة الذهب",
             description=(
-                f"Player: {member.mention}\n\n"
-                f"Added: +{gold_amount:,} GOLD\n"
-                f"New balance: {new_gold:,} GOLD"
+                f"👤 اللاعب: {member.mention}\n\n"
+                f"➕ المبلغ المضاف: **{gold_amount:,} ذهب**\n"
+                f"💳 الرصيد الجديد: **{new_gold:,} ذهب**"
             ),
             color=0xF1C40F
         )
