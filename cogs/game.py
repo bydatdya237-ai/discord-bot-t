@@ -27,13 +27,23 @@ ALLOWED_ROLE_IDS = {
 class GameSession:
 
     def __init__(self, creator_id):
+
         self.creator_id = creator_id
+
         self.questions = []
+
         self.scores = {}
+
         self.is_running = False
+
         self.starting = False
+
         self.current_question_index = 0
+
         self.game_name = GAME_NAME
+
+        # رسالة لوحة التحكم الأصلية
+        self.control_message = None
 
 
 # =========================================================
@@ -43,19 +53,27 @@ class GameSession:
 class GameCog(commands.Cog):
 
     def __init__(self, bot):
+
         self.bot = bot
+
         self.active_games = {}
+
         self.game_locks = {}
+
 
     # =====================================================
     # التحقق من الروم
     # =====================================================
 
     def is_setup_room(self, ctx):
+
         return ctx.channel.id == SETUP_ROOM_ID
 
+
     def is_game_room(self, ctx):
+
         return ctx.channel.id == GAME_ROOM_ID
+
 
     # =====================================================
     # التحقق من الرتب
@@ -71,6 +89,7 @@ class GameCog(commands.Cog):
             for role in member.roles
         )
 
+
     # =====================================================
     # قفل العمليات
     # =====================================================
@@ -78,9 +97,109 @@ class GameCog(commands.Cog):
     def get_lock(self, channel_id):
 
         if channel_id not in self.game_locks:
+
             self.game_locks[channel_id] = asyncio.Lock()
 
         return self.game_locks[channel_id]
+
+
+    # =====================================================
+    # إنشاء Embed لوحة التحكم
+    # =====================================================
+
+    def create_control_embed(
+        self,
+        session,
+        creator_name
+    ):
+
+        embed = discord.Embed(
+            title=f"🎮 {session.game_name}",
+            description=(
+                "تم تجهيز فعالية جديدة بنجاح! 🔥\n\n"
+
+                "🖼️ **إضافة سؤال**\n"
+                "اضغط الزر، ثم أرسل صورة الماركة في هذا الروم، "
+                "وبعدها يتم حفظ الإجابة والصورة.\n\n"
+
+                "يمكنك إضافة عدد غير محدود من الصور.\n\n"
+
+                "⚠️ **مهم:**\n"
+                "لا تحذف الصور من روم التجهيز، "
+                "لأن البوت يحتاج رابط الصورة أثناء اللعبة.\n\n"
+
+                "✏️ **تعديل اسم اللعبة**\n"
+                "استخدم الأمر:\n"
+                "`تعديل`\n\n"
+
+                "▶️ **بدء اللعبة**\n"
+                "بعد الانتهاء من إضافة جميع الصور، "
+                "اذهب إلى روم اللعبة واستخدم:\n"
+                "`ابدا`\n\n"
+
+                "🏆 **ترتيب النقاط**\n"
+                "استخدم:\n"
+                "`ط`\n\n"
+
+                "🔄 **تصفير النقاط فقط**\n"
+                "استخدم:\n"
+                "`دن`\n\n"
+
+                "🗑️ **إنهاء وحذف الفعالية**\n"
+                "استخدم:\n"
+                "`انهي`"
+            ),
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text=f"أنشئت بواسطة: {creator_name}"
+        )
+
+        return embed
+
+
+    # =====================================================
+    # تحديث رسالة لوحة التحكم بعد تعديل الاسم
+    # =====================================================
+
+    async def update_control_message(
+        self,
+        session,
+        guild
+    ):
+
+        if not session.control_message:
+            return
+
+        try:
+
+            creator = guild.get_member(
+                session.creator_id
+            )
+
+            creator_name = (
+                creator.display_name
+                if creator
+                else "غير معروف"
+            )
+
+            embed = self.create_control_embed(
+                session,
+                creator_name
+            )
+
+            await session.control_message.edit(
+                embed=embed
+            )
+
+        except (
+            discord.NotFound,
+            discord.HTTPException
+        ):
+
+            pass
+
 
     # =====================================================
     # إنشاء اللعبة
@@ -95,14 +214,18 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        lock = self.get_lock(SETUP_ROOM_ID)
+        lock = self.get_lock(
+            SETUP_ROOM_ID
+        )
 
         if lock.locked():
             return
 
         async with lock:
 
-            old_session = self.active_games.get(GAME_ROOM_ID)
+            old_session = self.active_games.get(
+                GAME_ROOM_ID
+            )
 
             if old_session:
 
@@ -117,58 +240,24 @@ class GameCog(commands.Cog):
 
                 await ctx.send(
                     "⚠️ توجد فعالية محفوظة حالياً.\n"
-                    "استخدم `-انهي` من روم اللعبة "
+                    "استخدم `انهي` من روم اللعبة "
                     "لحذفها ثم أنشئ فعالية جديدة.",
                     delete_after=7
                 )
 
                 return
 
-            session = GameSession(ctx.author.id)
-
-            self.active_games[GAME_ROOM_ID] = session
-
-            embed = discord.Embed(
-                title=f"🎮 {session.game_name}",
-                description=(
-                    "تم تجهيز فعالية جديدة بنجاح! 🔥\n\n"
-
-                    "🖼️ **إضافة سؤال**\n"
-                    "اضغط الزر، ثم أرسل صورة الماركة في هذا الروم، "
-                    "وبعدها يتم حفظ الإجابة والصورة.\n\n"
-
-                    "يمكنك إضافة عدد غير محدود من الصور.\n\n"
-
-                    "⚠️ **مهم:**\n"
-                    "لا تحذف الصور من روم التجهيز، "
-                    "لأن البوت يحتاج رابط الصورة أثناء اللعبة.\n\n"
-
-                    "✏️ **تعديل اسم اللعبة**\n"
-                    "استخدم الأمر:\n"
-                    "`-تعديل`\n\n"
-
-                    "▶️ **بدء اللعبة**\n"
-                    "بعد الانتهاء من إضافة جميع الصور، "
-                    "اذهب إلى روم اللعبة واستخدم:\n"
-                    "`-ابدا`\n\n"
-
-                    "🏆 **ترتيب النقاط**\n"
-                    "استخدم:\n"
-                    "`-ط`\n\n"
-
-                    "🔄 **تصفير النقاط فقط**\n"
-                    "استخدم:\n"
-                    "`-دن`\n\n"
-
-                    "🗑️ **إنهاء وحذف الفعالية**\n"
-                    "استخدم:\n"
-                    "`-انهي`"
-                ),
-                color=discord.Color.blurple()
+            session = GameSession(
+                ctx.author.id
             )
 
-            embed.set_footer(
-                text=f"أنشئت بواسطة: {ctx.author.display_name}"
+            self.active_games[
+                GAME_ROOM_ID
+            ] = session
+
+            embed = self.create_control_embed(
+                session,
+                ctx.author.display_name
             )
 
             view = GameControlView(
@@ -176,23 +265,45 @@ class GameCog(commands.Cog):
                 GAME_ROOM_ID
             )
 
-            await ctx.send(
+            message = await ctx.send(
                 embed=embed,
                 view=view
             )
 
+            # حفظ رسالة لوحة التحكم
+            session.control_message = message
+
             try:
+
                 await ctx.message.delete()
 
             except discord.HTTPException:
+
                 pass
+
 
     # =====================================================
     # تعديل اسم اللعبة
+    #
+    # يدعم:
+    #
+    # تعديل
+    #
+    # أو:
+    #
+    # تعديل اسم اللعبة الجديد
     # =====================================================
 
-    @commands.command(name="تعديل")
-    async def edit_game_name(self, ctx):
+    @commands.command(
+        name="تعديل",
+        aliases=["تعديل-اسم"]
+    )
+    async def edit_game_name(
+        self,
+        ctx,
+        *,
+        new_name: str = None
+    ):
 
         if not self.is_setup_room(ctx):
             return
@@ -200,13 +311,15 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        session = self.active_games.get(GAME_ROOM_ID)
+        session = self.active_games.get(
+            GAME_ROOM_ID
+        )
 
         if not session:
 
             await ctx.send(
                 "⚠️ لا توجد فعالية محفوظة حالياً.\n"
-                "استخدم `-انشاء-لعبة` أولاً.",
+                "استخدم `انشاء-لعبة` أولاً.",
                 delete_after=5
             )
 
@@ -221,23 +334,100 @@ class GameCog(commands.Cog):
 
             return
 
-        modal = EditGameNameModal(
+        # =================================================
+        # إذا كتب:
+        #
+        # تعديل اسم جديد
+        #
+        # يتم التعديل مباشرة
+        # =================================================
+
+        if new_name:
+
+            new_name = new_name.strip()
+
+            if not new_name:
+
+                await ctx.send(
+                    "❌ اسم اللعبة لا يمكن أن يكون فارغًا.",
+                    delete_after=5
+                )
+
+                return
+
+            if len(new_name) > 100:
+
+                await ctx.send(
+                    "❌ اسم اللعبة طويل جدًا.\n"
+                    "الحد الأقصى 100 حرف.",
+                    delete_after=5
+                )
+
+                return
+
+            old_name = session.game_name
+
+            session.game_name = new_name
+
+            await self.update_control_message(
+                session,
+                ctx.guild
+            )
+
+            await ctx.send(
+                "✅ **تم تعديل اسم اللعبة بنجاح!**\n\n"
+                f"📝 الاسم السابق:\n"
+                f"**{old_name}**\n\n"
+                f"🎮 الاسم الجديد:\n"
+                f"**{new_name}**",
+                delete_after=8
+            )
+
+            try:
+
+                await ctx.message.delete()
+
+            except discord.HTTPException:
+
+                pass
+
+            return
+
+        # =================================================
+        # إذا كتب فقط "تعديل"
+        #
+        # نرسل زر يفتح Modal
+        # =================================================
+
+        embed = discord.Embed(
+            title="✏️ تعديل اسم اللعبة",
+            description=(
+                f"الاسم الحالي:\n"
+                f"**{session.game_name}**\n\n"
+                "اضغط الزر بالأسفل لفتح نافذة تعديل الاسم."
+            ),
+            color=discord.Color.orange()
+        )
+
+        view = EditNameView(
+            self,
             session
         )
 
         await ctx.send(
-            "✏️ **فتح نافذة تعديل اسم اللعبة...**",
-            delete_after=2
+            embed=embed,
+            view=view,
+            delete_after=30
         )
 
-        # لا يمكن فتح Modal من خلال ctx مباشرة،
-        # لذلك نرسل تنبيه بسيط ثم نطلب استخدام الزر الداخلي.
-        # سيتم استبدال الرسالة بزر فتح التعديل بالأسفل.
-        await ctx.send(
-            "❌ تعديل الاسم يحتاج فتح نافذة من زر.\n"
-            "استخدم الزر الموجود بالأسفل.",
-            delete_after=5
-        )
+        try:
+
+            await ctx.message.delete()
+
+        except discord.HTTPException:
+
+            pass
+
 
     # =====================================================
     # بدء اللعبة
@@ -252,14 +442,18 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        lock = self.get_lock(GAME_ROOM_ID)
+        lock = self.get_lock(
+            GAME_ROOM_ID
+        )
 
         if lock.locked():
             return
 
         async with lock:
 
-            session = self.active_games.get(GAME_ROOM_ID)
+            session = self.active_games.get(
+                GAME_ROOM_ID
+            )
 
             if not session:
 
@@ -296,7 +490,10 @@ class GameCog(commands.Cog):
                 "🔥 استعدوا للصورة الأولى..."
             )
 
-        await self.run_game_loop(ctx.channel)
+        await self.run_game_loop(
+            ctx.channel
+        )
+
 
     # =====================================================
     # ترتيب النقاط
@@ -311,7 +508,9 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        session = self.active_games.get(GAME_ROOM_ID)
+        session = self.active_games.get(
+            GAME_ROOM_ID
+        )
 
         if not session:
 
@@ -337,19 +536,31 @@ class GameCog(commands.Cog):
             reverse=True
         )
 
-        medals = ["🥇", "🥈", "🥉"]
+        medals = [
+            "🥇",
+            "🥈",
+            "🥉"
+        ]
 
         description = []
 
-        for index, (user_id, points) in enumerate(
+        for index, (
+            user_id,
+            points
+        ) in enumerate(
             sorted_scores[:10]
         ):
 
-            member = ctx.guild.get_member(user_id)
+            member = ctx.guild.get_member(
+                user_id
+            )
 
             if member:
+
                 name = member.mention
+
             else:
+
                 name = f"<@{user_id}>"
 
             medal = (
@@ -372,7 +583,10 @@ class GameCog(commands.Cog):
             text=f"عدد اللاعبين: {len(sorted_scores)}"
         )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
+
 
     # =====================================================
     # تصفير النقاط فقط
@@ -387,14 +601,18 @@ class GameCog(commands.Cog):
         if not self.has_allowed_role(ctx.author):
             return
 
-        lock = self.get_lock(GAME_ROOM_ID)
+        lock = self.get_lock(
+            GAME_ROOM_ID
+        )
 
         if lock.locked():
             return
 
         async with lock:
 
-            session = self.active_games.get(GAME_ROOM_ID)
+            session = self.active_games.get(
+                GAME_ROOM_ID
+            )
 
             if not session:
 
@@ -405,7 +623,9 @@ class GameCog(commands.Cog):
 
                 return
 
-            players_count = len(session.scores)
+            players_count = len(
+                session.scores
+            )
 
             session.scores.clear()
 
@@ -413,14 +633,17 @@ class GameCog(commands.Cog):
                 "🔄 **تم تصفير النقاط بنجاح!**\n\n"
                 f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n"
                 "🖼️ الصور والأسئلة **لم يتم حذفها**.\n\n"
-                "✅ يمكنك بدء اللعبة من جديد باستخدام `-ابدا`."
+                "✅ يمكنك بدء اللعبة من جديد باستخدام `ابدا`."
             )
 
             try:
+
                 await ctx.message.delete()
 
             except discord.HTTPException:
+
                 pass
+
 
     # =====================================================
     # إنهاء اللعبة بالكامل
@@ -432,17 +655,21 @@ class GameCog(commands.Cog):
         if not self.is_game_room(ctx):
             return
 
-        if not self.has_allowed_role(ctx.author):
+        if not self.has_allowed_role(ctx):
             return
 
-        lock = self.get_lock(GAME_ROOM_ID)
+        lock = self.get_lock(
+            GAME_ROOM_ID
+        )
 
         if lock.locked():
             return
 
         async with lock:
 
-            session = self.active_games.get(GAME_ROOM_ID)
+            session = self.active_games.get(
+                GAME_ROOM_ID
+            )
 
             if not session:
 
@@ -456,14 +683,24 @@ class GameCog(commands.Cog):
             session.is_running = False
             session.starting = False
 
-            questions_count = len(session.questions)
-            players_count = len(session.scores)
+            questions_count = len(
+                session.questions
+            )
+
+            players_count = len(
+                session.scores
+            )
 
             session.questions.clear()
             session.scores.clear()
 
-            if self.active_games.get(GAME_ROOM_ID) is session:
-                del self.active_games[GAME_ROOM_ID]
+            if self.active_games.get(
+                GAME_ROOM_ID
+            ) is session:
+
+                del self.active_games[
+                    GAME_ROOM_ID
+                ]
 
             await ctx.send(
                 "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
@@ -473,23 +710,33 @@ class GameCog(commands.Cog):
             )
 
             try:
+
                 await ctx.message.delete()
 
             except discord.HTTPException:
+
                 pass
+
 
     # =====================================================
     # تشغيل الأسئلة
     # =====================================================
 
-    async def run_game_loop(self, channel):
+    async def run_game_loop(
+        self,
+        channel
+    ):
 
-        session = self.active_games.get(GAME_ROOM_ID)
+        session = self.active_games.get(
+            GAME_ROOM_ID
+        )
 
         if not session:
             return
 
-        for index, question in enumerate(session.questions):
+        for index, question in enumerate(
+            session.questions
+        ):
 
             if not session.is_running:
                 break
@@ -497,14 +744,20 @@ class GameCog(commands.Cog):
             session.current_question_index = index
 
             question_number = index + 1
-            total_questions = len(session.questions)
 
-            question_start_time = asyncio.get_running_loop().time()
+            total_questions = len(
+                session.questions
+            )
+
+            question_start_time = (
+                asyncio.get_running_loop().time()
+            )
 
             embed = discord.Embed(
                 title=(
                     f"🖼️ {session.game_name} | "
-                    f"السؤال {question_number} من {total_questions}"
+                    f"السؤال {question_number} من "
+                    f"{total_questions}"
                 ),
                 description=(
                     "⚡ **خمن الماركة من الصورة!**\n\n"
@@ -553,7 +806,10 @@ class GameCog(commands.Cog):
                 user_id = message.author.id
 
                 session.scores[user_id] = (
-                    session.scores.get(user_id, 0) + 1
+                    session.scores.get(
+                        user_id,
+                        0
+                    ) + 1
                 )
 
                 await channel.send(
@@ -606,12 +862,13 @@ class GameCog(commands.Cog):
                 f"🏁 **انتهت لعبة {session.game_name}!**\n\n"
                 "❤️ شكراً لحضوركم ومشاركتكم.\n"
                 "🏆 **النتائج ما زالت محفوظة.**\n"
-                "📊 استخدموا `-ط` لعرض الترتيب.\n"
-                "🔄 استخدموا `-دن` لتصفير النقاط وإعادة اللعب."
+                "📊 استخدموا `ط` لعرض الترتيب.\n"
+                "🔄 استخدموا `دن` لتصفير النقاط وإعادة اللعب."
             )
 
         session.is_running = False
         session.starting = False
+
 
     # =====================================================
     # النتائج النهائية
@@ -637,11 +894,18 @@ class GameCog(commands.Cog):
             reverse=True
         )
 
-        medals = ["🥇", "🥈", "🥉"]
+        medals = [
+            "🥇",
+            "🥈",
+            "🥉"
+        ]
 
         description = []
 
-        for index, (user_id, points) in enumerate(
+        for index, (
+            user_id,
+            points
+        ) in enumerate(
             sorted_scores[:10]
         ):
 
@@ -650,8 +914,11 @@ class GameCog(commands.Cog):
             )
 
             if member:
+
                 name = member.mention
+
             else:
+
                 name = f"<@{user_id}>"
 
             medal = (
@@ -665,7 +932,10 @@ class GameCog(commands.Cog):
             )
 
         embed = discord.Embed(
-            title=f"🏆 النتائج النهائية - {session.game_name}",
+            title=(
+                f"🏆 النتائج النهائية - "
+                f"{session.game_name}"
+            ),
             description="\n".join(description),
             color=discord.Color.gold()
         )
@@ -681,7 +951,11 @@ class GameCog(commands.Cog):
 
 class GameControlView(ui.View):
 
-    def __init__(self, cog, channel_id):
+    def __init__(
+        self,
+        cog,
+        channel_id
+    ):
 
         super().__init__(
             timeout=None
@@ -689,6 +963,11 @@ class GameControlView(ui.View):
 
         self.cog = cog
         self.channel_id = channel_id
+
+
+    # =====================================================
+    # التحقق من الصلاحية
+    # =====================================================
 
     async def check_permission(
         self,
@@ -732,14 +1011,19 @@ class GameControlView(ui.View):
 
         return False
 
+
+    # =====================================================
+    # إضافة سؤال
+    # =====================================================
+
     @ui.button(
         label="إضافة سؤال 🖼️",
         style=discord.ButtonStyle.primary
     )
     async def add_question(
         self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
+        interaction,
+        button
     ):
 
         if interaction.channel_id != SETUP_ROOM_ID:
@@ -754,6 +1038,7 @@ class GameControlView(ui.View):
         if not await self.check_permission(
             interaction
         ):
+
             return
 
         session = self.cog.active_games.get(
@@ -764,7 +1049,7 @@ class GameControlView(ui.View):
 
             await interaction.response.send_message(
                 "❌ لا توجد جلسة لعبة حالياً.\n"
-                "استخدم `-انشاء-لعبة` أولاً.",
+                "استخدم `انشاء-لعبة` أولاً.",
                 ephemeral=True
             )
 
@@ -789,14 +1074,19 @@ class GameControlView(ui.View):
             modal
         )
 
+
+    # =====================================================
+    # بدء اللعبة
+    # =====================================================
+
     @ui.button(
         label="بدء اللعبة ▶️",
         style=discord.ButtonStyle.success
     )
     async def start_game_button(
         self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
+        interaction,
+        button
     ):
 
         if interaction.channel_id != GAME_ROOM_ID:
@@ -811,6 +1101,7 @@ class GameControlView(ui.View):
         if not await self.check_permission(
             interaction
         ):
+
             return
 
         lock = self.cog.get_lock(
@@ -866,14 +1157,19 @@ class GameControlView(ui.View):
             interaction.channel
         )
 
+
+    # =====================================================
+    # إنهاء اللعبة
+    # =====================================================
+
     @ui.button(
         label="إنهاء ⏹️",
         style=discord.ButtonStyle.danger
     )
     async def end_game(
         self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
+        interaction,
+        button
     ):
 
         if interaction.channel_id != GAME_ROOM_ID:
@@ -888,6 +1184,7 @@ class GameControlView(ui.View):
         if not await self.check_permission(
             interaction
         ):
+
             return
 
         session = self.cog.active_games.get(
@@ -931,10 +1228,94 @@ class GameControlView(ui.View):
         )
 
         try:
+
             await interaction.message.delete()
 
         except discord.HTTPException:
+
             pass
+
+
+# =========================================================
+# View تعديل الاسم
+# =========================================================
+
+class EditNameView(ui.View):
+
+    def __init__(
+        self,
+        cog,
+        session
+    ):
+
+        super().__init__(
+            timeout=30
+        )
+
+        self.cog = cog
+        self.session = session
+
+
+    @ui.button(
+        label="✏️ تعديل اسم اللعبة",
+        style=discord.ButtonStyle.primary
+    )
+    async def edit_name_button(
+        self,
+        interaction,
+        button
+    ):
+
+        if interaction.channel_id != SETUP_ROOM_ID:
+
+            await interaction.response.send_message(
+                "❌ تعديل اسم اللعبة متاح فقط في روم التجهيز.",
+                ephemeral=True
+            )
+
+            return
+
+        if not self.cog.has_allowed_role(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية تعديل اسم اللعبة.",
+                ephemeral=True
+            )
+
+            return
+
+        session = self.cog.active_games.get(
+            GAME_ROOM_ID
+        )
+
+        if not session:
+
+            await interaction.response.send_message(
+                "❌ الفعالية لم تعد موجودة.",
+                ephemeral=True
+            )
+
+            return
+
+        if session.is_running:
+
+            await interaction.response.send_message(
+                "❌ لا يمكنك تعديل الاسم أثناء تشغيل اللعبة.",
+                ephemeral=True
+            )
+
+            return
+
+        modal = EditGameNameModal(
+            self.cog,
+            session
+        )
+
+        await interaction.response.send_modal(
+            modal
+        )
 
 
 # =========================================================
@@ -946,16 +1327,23 @@ class EditGameNameModal(
     title="تعديل اسم اللعبة"
 ):
 
-    def __init__(self, session):
+    def __init__(
+        self,
+        cog,
+        session
+    ):
 
         super().__init__()
 
+        self.cog = cog
         self.session = session
 
         self.name_input = ui.TextInput(
             label="اسم اللعبة الجديد",
-            placeholder="مثال: خمن الماركة من الصورة",
+            placeholder="اكتب اسم اللعبة الجديد...",
+            default=session.game_name,
             required=True,
+            min_length=1,
             max_length=100,
             style=discord.TextStyle.short
         )
@@ -964,9 +1352,10 @@ class EditGameNameModal(
             self.name_input
         )
 
+
     async def on_submit(
         self,
-        interaction: discord.Interaction
+        interaction
     ):
 
         new_name = self.name_input.value.strip()
@@ -980,10 +1369,20 @@ class EditGameNameModal(
 
             return
 
+        old_name = self.session.game_name
+
         self.session.game_name = new_name
+
+        # تحديث رسالة لوحة التحكم الأصلية
+        await self.cog.update_control_message(
+            self.session,
+            interaction.guild
+        )
 
         await interaction.response.send_message(
             "✅ **تم تعديل اسم اللعبة بنجاح!**\n\n"
+            f"📝 الاسم السابق:\n"
+            f"**{old_name}**\n\n"
             f"🎮 الاسم الجديد:\n"
             f"**{new_name}**",
             ephemeral=True
@@ -991,7 +1390,7 @@ class EditGameNameModal(
 
 
 # =========================================================
-# Modal إدخال الإجابة
+# Modal إضافة سؤال
 # =========================================================
 
 class QuestionAnswerModal(
@@ -1009,7 +1408,9 @@ class QuestionAnswerModal(
         super().__init__()
 
         self.cog = cog
+
         self.session = session
+
         self.user_id = user_id
 
         self.answer_input = ui.TextInput(
@@ -1024,9 +1425,10 @@ class QuestionAnswerModal(
             self.answer_input
         )
 
+
     async def on_submit(
         self,
-        interaction: discord.Interaction
+        interaction
     ):
 
         if interaction.channel_id != SETUP_ROOM_ID:
@@ -1050,7 +1452,7 @@ class QuestionAnswerModal(
             return
 
         await interaction.response.send_message(
-            "🖼️ **تم تجهيز الصورة!**\n\n"
+            "🖼️ **تم تجهيز السؤال!**\n\n"
             "الآن أرسل صورة الماركة في هذا الروم.\n"
             "⏳ **لا يوجد وقت محدد، أرسلها متى ما تريد.**\n\n"
             "⚠️ **مهم:** لا تحذف الصورة بعد إرسالها، "
@@ -1067,10 +1469,16 @@ class QuestionAnswerModal(
                 and len(message.attachments) > 0
             )
 
-        message = await self.cog.bot.wait_for(
-            "message",
-            check=image_check
-        )
+        try:
+
+            message = await self.cog.bot.wait_for(
+                "message",
+                check=image_check
+            )
+
+        except asyncio.CancelledError:
+
+            return
 
         attachment = message.attachments[0]
 
@@ -1096,10 +1504,12 @@ class QuestionAnswerModal(
 
             return
 
-        self.session.questions.append({
-            "image": attachment.url,
-            "answer": answer
-        })
+        self.session.questions.append(
+            {
+                "image": attachment.url,
+                "answer": answer
+            }
+        )
 
         question_number = len(
             self.session.questions
@@ -1119,6 +1529,7 @@ class QuestionAnswerModal(
 # =========================================================
 
 async def setup(bot):
+
     await bot.add_cog(
         GameCog(bot)
     )
