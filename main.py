@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+from discord.ext.commands.view import StringView
 from flask import Flask
 from threading import Thread
 from pymongo import MongoClient
@@ -58,37 +59,165 @@ intents.message_content = True
 
 
 # ========================================================
-# Prefix مخصص
+# Bot مخصص
+#
+# لا نستخدم command_prefix="" بالطريقة التقليدية.
+#
+# البوت يبحث عن اسم الأمر مباشرة من الرسالة.
 # ========================================================
 
-def get_command_prefix(bot, message):
+class NoPrefixBot(commands.Bot):
 
-    content = message.content.strip()
+    async def get_context(
+        self,
+        message,
+        *,
+        cls=commands.Context
+    ):
 
-    # ----------------------------------------------------
-    # رسالة فارغة
-    # ----------------------------------------------------
+        content = message.content.strip()
 
-    if not content:
+        # ==================================================
+        # إنشاء Context
+        # ==================================================
 
-        print(
-            "⚪ [PREFIX CHECK] رسالة فارغة"
+        ctx = cls(
+            message=message,
+            bot=self
         )
 
-        return "\0"
+        ctx.prefix = ""
+        ctx.command = None
 
-    # ----------------------------------------------------
-    # منع البادئات
-    # ----------------------------------------------------
+        # ==================================================
+        # رسالة فارغة
+        # ==================================================
 
-    if content[0] in ("-", ".", "/"):
+        if not content:
+            return ctx
+
+        # ==================================================
+        # منع Prefix
+        # ==================================================
+
+        if content[0] in ("-", ".", "/"):
+
+            print(
+                "=================================================="
+            )
+
+            print(
+                "🚫 [COMMAND BLOCKED]"
+            )
+
+            print(
+                f"👤 المستخدم: "
+                f"{message.author} "
+                f"(ID: {message.author.id})"
+            )
+
+            print(
+                f"💬 المحتوى: {message.content!r}"
+            )
+
+            print(
+                f"🔤 Prefix المكتشف: {content[0]!r}"
+            )
+
+            print(
+                "📌 السبب: Prefix غير مسموح"
+            )
+
+            print(
+                "=================================================="
+            )
+
+            return ctx
+
+        # ==================================================
+        # إنشاء View للرسالة
+        # ==================================================
+
+        view = StringView(message.content)
+
+        ctx.view = view
+
+        # ==================================================
+        # قراءة أول كلمة فقط
+        #
+        # مثال:
+        #
+        # رصيد
+        # توب 1
+        # اعطي @شخص 5000
+        #
+        # أول كلمة هي اسم الأمر.
+        # ==================================================
+
+        command_name = view.get_word()
+
+        if not command_name:
+
+            return ctx
+
+        # ==================================================
+        # البحث عن الأمر
+        # ==================================================
+
+        command = self.get_command(command_name)
+
+        # ==================================================
+        # الأمر غير موجود
+        # ==================================================
+
+        if command is None:
+
+            print(
+                "=================================================="
+            )
+
+            print(
+                "⚠️ [COMMAND NOT FOUND]"
+            )
+
+            print(
+                f"👤 المستخدم: "
+                f"{message.author} "
+                f"(ID: {message.author.id})"
+            )
+
+            print(
+                f"💬 المحتوى: {message.content!r}"
+            )
+
+            print(
+                f"🔎 الأمر المطلوب: {command_name!r}"
+            )
+
+            print(
+                "📌 السبب: لا يوجد أمر مسجل بهذا الاسم"
+            )
+
+            print(
+                "=================================================="
+            )
+
+            return ctx
+
+        # ==================================================
+        # الأمر موجود
+        # ==================================================
+
+        ctx.command = command
+
+        ctx.prefix = ""
 
         print(
             "=================================================="
         )
 
         print(
-            "🚫 [COMMAND BLOCKED]"
+            "✅ [COMMAND DETECTED]"
         )
 
         print(
@@ -98,36 +227,34 @@ def get_command_prefix(bot, message):
         )
 
         print(
-            f"💬 المحتوى: {message.content}"
+            f"💬 المحتوى: {message.content!r}"
         )
 
         print(
-            f"🔤 البادئة المكتشفة: {content[0]}"
+            f"⚡ الأمر: {command.name!r}"
         )
 
         print(
-            "📌 السبب: Prefix غير مسموح"
+            "📌 Prefix: بدون Prefix"
         )
 
         print(
             "=================================================="
         )
 
-        return "\0"
-
-    # ----------------------------------------------------
-    # بدون Prefix
-    # ----------------------------------------------------
-
-    return ""
+        return ctx
 
 
 # ========================================================
 # البوت
+#
+# مهم:
+# command_prefix هنا مجرد قيمة شكلية لأننا عملنا
+# get_context مخصص فوق.
 # ========================================================
 
-bot = commands.Bot(
-    command_prefix=get_command_prefix,
+bot = NoPrefixBot(
+    command_prefix="",
     intents=intents,
     help_command=None
 )
@@ -164,7 +291,9 @@ async def on_message(message):
         return
 
     # ====================================================
-    # منع -, . و /
+    # منع Prefix
+    #
+    # هذا الفحص يتم قبل process_commands.
     # ====================================================
 
     if content[0] in ("-", ".", "/"):
@@ -184,11 +313,11 @@ async def on_message(message):
         )
 
         print(
-            f"💬 المحتوى: {message.content}"
+            f"💬 المحتوى: {message.content!r}"
         )
 
         print(
-            f"🔤 البادئة: {content[0]}"
+            f"🔤 Prefix: {content[0]!r}"
         )
 
         print(
@@ -202,14 +331,14 @@ async def on_message(message):
         return
 
     # ====================================================
-    # تشغيل الأوامر
+    # تشغيل نظام الأوامر
     # ====================================================
 
     await bot.process_commands(message)
 
 
 # ========================================================
-# مراقبة Command Not Found
+# مراقبة أخطاء الأوامر
 # ========================================================
 
 @bot.event
@@ -229,7 +358,7 @@ async def on_command_error(ctx, error):
         )
 
         print(
-            "⚠️ [COMMAND NOT FOUND]"
+            "⚠️ [COMMAND NOT FOUND ERROR]"
         )
 
         print(
@@ -239,11 +368,11 @@ async def on_command_error(ctx, error):
         )
 
         print(
-            f"💬 المحتوى: {ctx.message.content}"
+            f"💬 المحتوى: {ctx.message.content!r}"
         )
 
         print(
-            "📌 السبب: لا يوجد أمر مسجل بهذا الاسم"
+            "📌 السبب: الأمر غير موجود"
         )
 
         print(
@@ -253,7 +382,7 @@ async def on_command_error(ctx, error):
         return
 
     # ====================================================
-    # خطأ في صلاحيات الأمر
+    # فشل Check
     # ====================================================
 
     if isinstance(
@@ -276,11 +405,12 @@ async def on_command_error(ctx, error):
         )
 
         print(
-            f"💬 المحتوى: {ctx.message.content}"
+            f"💬 المحتوى: {ctx.message.content!r}"
         )
 
         print(
-            f"📌 الأمر: {ctx.command}"
+            f"📌 الأمر: "
+            f"{ctx.command.name if ctx.command else 'غير معروف'}"
         )
 
         print(
@@ -294,7 +424,7 @@ async def on_command_error(ctx, error):
         return
 
     # ====================================================
-    # خطأ في عدد أو نوع المدخلات
+    # متغير مطلوب
     # ====================================================
 
     if isinstance(
@@ -317,15 +447,16 @@ async def on_command_error(ctx, error):
         )
 
         print(
-            f"💬 المحتوى: {ctx.message.content}"
+            f"💬 المحتوى: {ctx.message.content!r}"
         )
 
         print(
-            f"📌 الأمر: {ctx.command}"
+            f"📌 الأمر: "
+            f"{ctx.command.name if ctx.command else 'غير معروف'}"
         )
 
         print(
-            f"📌 السبب: المتغير المطلوب غير موجود: "
+            f"📌 المتغير المطلوب: "
             f"{error.param.name}"
         )
 
@@ -336,7 +467,7 @@ async def on_command_error(ctx, error):
         return
 
     # ====================================================
-    # خطأ غير معروف
+    # خطأ آخر
     # ====================================================
 
     print(
@@ -354,11 +485,12 @@ async def on_command_error(ctx, error):
     )
 
     print(
-        f"💬 المحتوى: {ctx.message.content}"
+        f"💬 المحتوى: {ctx.message.content!r}"
     )
 
     print(
-        f"📌 الأمر: {ctx.command}"
+        f"📌 الأمر: "
+        f"{ctx.command.name if ctx.command else 'غير معروف'}"
     )
 
     print(
@@ -453,7 +585,7 @@ async def on_ready():
     )
 
     print(
-        "✅ الأوامر تعمل بدون Prefix"
+        "✅ نظام الأوامر: بدون Prefix"
     )
 
     print(
@@ -508,5 +640,9 @@ if not TOKEN:
         "❌ TOKEN غير موجود في Environment Variables"
     )
 
+
+print(
+    "🔥🔥🔥 MAIN FILE RUNNING - NO PREFIX VERSION 🔥🔥🔥"
+)
 
 bot.run(TOKEN)
