@@ -12,7 +12,7 @@ from discord.ext import commands
 GAME_ROOM_ID = 1547418557032308830
 GOLD_ROLE_ID = 1545608277159579718
 
-GAME_COOLDOWN = 60
+GAME_COOLDOWN = 30
 GAME_TIMEOUT = 120
 
 STARTING_GOLD = 1000
@@ -187,12 +187,12 @@ class MinesView(discord.ui.View):
                 current_index
             )
 
-            # افتح الخانة
             self.revealed.add(
                 current_index
             )
 
-            # اذا كانت 0 افتح الخانات الآمنة حولها
+            # اذا كانت الخانة 0
+            # نفتح المنطقة الآمنة المتصلة بها
             if nearby_mines == 0:
 
                 for neighbor in self.get_neighbors(
@@ -272,7 +272,7 @@ class MinesView(discord.ui.View):
                 child.label = "؟"
 
     # =====================================================
-    # اظهار الالغام
+    # اظهار الالغام عند الخسارة فقط
     # =====================================================
 
     def reveal_all_mines(self):
@@ -315,7 +315,9 @@ class MinesView(discord.ui.View):
 
         self.remove_active_game()
 
-        self.reveal_all_mines()
+        # عند انتهاء الوقت لا نكشف الالغام
+        for child in self.children:
+            child.disabled = True
 
         if self.message is None:
             return
@@ -428,6 +430,7 @@ class MinesView(discord.ui.View):
 
                 self.remove_active_game()
 
+                # عند الخسارة فقط تظهر الالغام
                 self.reveal_all_mines()
 
                 current_gold = self.cog.get_balance(
@@ -500,7 +503,9 @@ class MinesView(discord.ui.View):
 
                 self.remove_active_game()
 
-                self.reveal_all_mines()
+                # عند الفوز لا نكشف مواقع الالغام
+                for child in self.children:
+                    child.disabled = True
 
                 current_gold = self.cog.get_balance(
                     self.user_id
@@ -611,7 +616,7 @@ class MinesGame(commands.Cog):
             return
 
         # =================================================
-        # الكول داون
+        # الكول داون - 30 ثانية
         # =================================================
 
         current_time = (
