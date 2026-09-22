@@ -16,7 +16,7 @@ COMMAND_ROOM_ID = 1545601155952812044
 # =========================================================
 
 COLORS = {
-    # أساسية
+    # ألوان أساسية
     "احمر": "#FF0000",
     "أحمر": "#FF0000",
 
@@ -32,12 +32,14 @@ COLORS = {
     "برتقالي": "#FFA500",
     "بنفسجي": "#800080",
     "وردي": "#FF69B4",
+
     "اسود": "#000000",
     "أسود": "#000000",
+
     "ابيض": "#FFFFFF",
     "أبيض": "#FFFFFF",
 
-    # فاتحة
+    # ألوان فاتحة
     "احمر فاتح": "#FF6666",
     "أحمر فاتح": "#FF6666",
 
@@ -55,7 +57,7 @@ COLORS = {
 
     "برتقالي فاتح": "#FFB347",
 
-    # غامقة
+    # ألوان غامقة
     "احمر غامق": "#990000",
     "أحمر غامق": "#990000",
 
@@ -66,9 +68,7 @@ COLORS = {
     "أزرق غامق": "#000099",
 
     "بنفسجي غامق": "#4B0082",
-
     "وردي غامق": "#C71585",
-
     "برتقالي غامق": "#CC5500",
 
     # ألوان إضافية
@@ -83,40 +83,52 @@ COLORS = {
     "موف": "#C8A2C8",
     "كحلي": "#000080",
     "زيتي": "#808000",
+
+    # ألوان مشهورة إضافية
+    "مرجاني": "#FF7F50",
+    "خوخي": "#FFDAB9",
+    "عنابي": "#800000",
+    "تركوازي": "#40E0D0",
+    "لافندر": "#E6E6FA",
+    "مشمشي": "#FBCEB1",
+    "رمادي": "#808080",
+    "رمادي فاتح": "#D3D3D3",
+    "رمادي غامق": "#404040",
 }
 
 
 # =========================================================
-# تحويل اللون
+# الحصول على اللون
 # =========================================================
 
-def get_color(color_text: str):
-    color_text = color_text.strip()
+def get_color(color_text):
 
-    # إذا كتب HEX
+    color_text = color_text.strip()
+    color_lower = color_text.lower()
+
+    # دعم HEX
     if re.fullmatch(r"#?[0-9A-Fa-f]{6}", color_text):
+
         if not color_text.startswith("#"):
             color_text = "#" + color_text
 
-        return discord.Color.from_str(color_text)
+        try:
+            return discord.Color.from_str(color_text)
+        except Exception:
+            return None
 
-    # إذا كتب اسم لون معروف
-    color_key = color_text.lower()
-
-    if color_key in COLORS:
-        return discord.Color.from_str(COLORS[color_key])
-
-    # محاولات بسيطة للألوان العربية
-    normalized = color_text.replace("ال", "", 1)
-
-    if normalized in COLORS:
-        return discord.Color.from_str(COLORS[normalized])
+    # اسم اللون
+    if color_lower in COLORS:
+        try:
+            return discord.Color.from_str(COLORS[color_lower])
+        except Exception:
+            return None
 
     return None
 
 
 # =========================================================
-# البوت
+# Cog
 # =========================================================
 
 class RoleRoom(commands.Cog):
@@ -125,177 +137,260 @@ class RoleRoom(commands.Cog):
         self.bot = bot
 
     # =====================================================
-    # التحقق
+    # التحقق من الصلاحية
     # =====================================================
 
-    def allowed(self, ctx):
+    def is_allowed(self, message):
 
-        # روم خاطئ = تجاهل كامل
-        if ctx.channel.id != COMMAND_ROOM_ID:
+        # الروم الصحيح فقط
+        if message.channel.id != COMMAND_ROOM_ID:
             return False
 
-        # رتبة غير مسموحة = تجاهل كامل
-        if not any(role.id == ALLOWED_ROLE_ID for role in ctx.author.roles):
+        # الرتبة المطلوبة
+        if not any(
+            role.id == ALLOWED_ROLE_ID
+            for role in message.author.roles
+        ):
             return False
 
         return True
 
     # =====================================================
-    # إنشاء رتبة
-    #
-    # مثال:
-    # -رتبة + احمد محسن + بنفسجي فاتح
-    #
-    # أو:
-    # -رتبة + احمد محسن + #B76EFF
+    # معالجة الرسائل بدون Prefix
     # =====================================================
 
-    @commands.command(name="رتبة")
-    async def create_role(self, ctx, *, text: str = None):
+    @commands.Cog.listener()
+    async def on_message(self, message):
 
-        if not self.allowed(ctx):
+        # تجاهل البوتات
+        if message.author.bot:
             return
 
-        if not text:
+        # الروم الخاطئ = تجاهل كامل
+        if message.channel.id != COMMAND_ROOM_ID:
             return
 
-        parts = [x.strip() for x in text.split("+")]
-
-        if len(parts) < 2:
-            await ctx.send(
-                "❌ الاستخدام الصحيح:\n"
-                "`-رتبة + اسم الرتبة + اللون`"
-            )
+        # الرتبة غير موجودة = تجاهل كامل
+        if not any(
+            role.id == ALLOWED_ROLE_ID
+            for role in message.author.roles
+        ):
             return
 
-        role_name = parts[0]
-        color_text = parts[1]
+        content = message.content.strip()
 
-        if not role_name:
-            return
+        # =================================================
+        # أمر إنشاء رتبة
+        # =================================================
 
-        if not color_text:
-            return
+        if content.startswith("رتبة"):
 
-        # الحصول على اللون
-        color = get_color(color_text)
+            parts = [
+                x.strip()
+                for x in content.split("+")
+            ]
 
-        if color is None:
-            await ctx.send(
-                "❌ ما قدرت أتعرف على اللون.\n\n"
-                "اكتب اسم اللون أو استخدم HEX، مثل:\n"
-                "`-رتبة + الاسطورة + بنفسجي فاتح`\n"
-                "`-رتبة + الاسطورة + #B76EFF`"
-            )
-            return
+            # الشكل:
+            # رتبة + اسم + لون
 
-        # التأكد أن اسم الرتبة غير موجود
-        for role in ctx.guild.roles:
-            if role.name.lower() == role_name.lower():
-                await ctx.send(
-                    f"❌ رتبة **{role.name}** موجودة بالفعل."
+            if len(parts) != 3 or parts[0] != "رتبة":
+
+                await message.channel.send(
+                    "❌ **طريقة الاستخدام الصحيحة:**\n\n"
+                    "`رتبة + اسم الرتبة + اللون`\n\n"
+                    "**مثال:**\n"
+                    "`رتبة + احمد محسن + بنفسجي فاتح`\n\n"
+                    "ويمكنك أيضًا استخدام HEX:\n"
+                    "`رتبة + احمد محسن + #B76EFF`"
                 )
+
                 return
 
-        try:
+            role_name = parts[1]
+            color_text = parts[2]
 
-            # إنشاء الرتبة
-            role = await ctx.guild.create_role(
-                name=role_name,
-                color=color,
-                reason=f"إنشاء رتبة بواسطة {ctx.author}"
-            )
+            # اسم فارغ
+            if not role_name:
 
-            await ctx.send(
-                f"✅ تم إنشاء الرتبة بنجاح!\n\n"
-                f"**الرتبة:** {role.mention}\n"
-                f"**اللون:** `{color_text}`"
-            )
-
-        except discord.Forbidden:
-            await ctx.send(
-                "❌ البوت ما عنده صلاحية **Manage Roles**."
-            )
-
-        except discord.HTTPException:
-            await ctx.send(
-                "❌ حدث خطأ أثناء إنشاء الرتبة."
-            )
-
-    # =====================================================
-    # إنشاء روم
-    #
-    # مثال:
-    # -سوي+روم
-    #
-    # أو:
-    # -سوي+روم + الشات الجديد
-    # =====================================================
-
-    @commands.command(name="سوي+روم")
-    async def create_channel(self, ctx, *, channel_name: str = None):
-
-        if not self.allowed(ctx):
-            return
-
-        # إذا ما كتب اسم
-        if not channel_name:
-            await ctx.send(
-                "❌ اكتب اسم الروم.\n"
-                "مثال:\n"
-                "`-سوي+روم + الشات الجديد`"
-            )
-            return
-
-        # تنظيف الاسم
-        channel_name = channel_name.strip()
-
-        # تحويل المسافات إلى -
-        channel_name = re.sub(r"\s+", "-", channel_name)
-
-        # إزالة الرموز الغريبة
-        channel_name = re.sub(
-            r"[^a-zA-Z0-9\u0600-\u06FF\-_]",
-            "",
-            channel_name
-        )
-
-        # منع الاسم الفارغ
-        if not channel_name:
-            return
-
-        # حد Discord
-        channel_name = channel_name[:100]
-
-        # التأكد أن الروم غير موجود
-        for channel in ctx.guild.text_channels:
-            if channel.name.lower() == channel_name.lower():
-                await ctx.send(
-                    f"❌ الروم **#{channel.name}** موجود بالفعل."
+                await message.channel.send(
+                    "❌ يجب كتابة اسم الرتبة."
                 )
+
                 return
 
-        try:
+            # لون فارغ
+            if not color_text:
 
-            channel = await ctx.guild.create_text_channel(
-                channel_name,
-                reason=f"إنشاء روم بواسطة {ctx.author}"
+                await message.channel.send(
+                    "❌ يجب كتابة لون الرتبة."
+                )
+
+                return
+
+            # الحصول على اللون
+            color = get_color(color_text)
+
+            if color is None:
+
+                await message.channel.send(
+                    "❌ اللون غير معروف.\n\n"
+                    "اكتب اسم اللون، مثل:\n"
+                    "`بنفسجي فاتح`\n"
+                    "`أحمر`\n"
+                    "`أزرق سماوي`\n\n"
+                    "أو استخدم HEX مثل:\n"
+                    "`#B76EFF`"
+                )
+
+                return
+
+            # التأكد من عدم وجود الرتبة
+            existing_role = discord.utils.find(
+                lambda r: r.name.lower() == role_name.lower(),
+                message.guild.roles
             )
 
-            await ctx.send(
-                f"✅ تم إنشاء الروم بنجاح!\n"
-                f"{channel.mention}"
+            if existing_role:
+
+                await message.channel.send(
+                    f"❌ الرتبة **{existing_role.name}** موجودة بالفعل."
+                )
+
+                return
+
+            try:
+
+                # إنشاء الرتبة
+                role = await message.guild.create_role(
+                    name=role_name,
+                    color=color,
+                    reason=f"إنشاء رتبة بواسطة {message.author}"
+                )
+
+                await message.channel.send(
+                    "✅ **تم إنشاء الرتبة بنجاح!**\n\n"
+                    f"**الاسم:** {role.name}\n"
+                    f"**اللون:** {color_text}\n"
+                    f"**الرتبة:** {role.mention}"
+                )
+
+            except discord.Forbidden:
+
+                await message.channel.send(
+                    "❌ البوت لا يملك صلاحية **Manage Roles**."
+                )
+
+            except discord.HTTPException:
+
+                await message.channel.send(
+                    "❌ حدث خطأ أثناء إنشاء الرتبة."
+                )
+
+            return
+
+        # =================================================
+        # أمر إنشاء روم
+        # =================================================
+
+        if content.startswith("سوي+روم"):
+
+            parts = [
+                x.strip()
+                for x in content.split("+")
+            ]
+
+            # الشكل:
+            # سوي+روم + اسم الروم
+
+            if len(parts) != 2 or parts[0] != "سوي":
+
+                await message.channel.send(
+                    "❌ **طريقة الاستخدام الصحيحة:**\n\n"
+                    "`سوي+روم + اسم الروم`\n\n"
+                    "**مثال:**\n"
+                    "`سوي+روم + شات الاساطير`"
+                )
+
+                return
+
+            channel_name = parts[1]
+
+            if not channel_name:
+
+                await message.channel.send(
+                    "❌ يجب كتابة اسم الروم."
+                )
+
+                return
+
+            # تنظيف الاسم
+            channel_name = channel_name.strip()
+
+            # تحويل المسافات إلى -
+            # حتى يكون اسم الروم مقبولًا في Discord
+            channel_name = re.sub(
+                r"\s+",
+                "-",
+                channel_name
             )
 
-        except discord.Forbidden:
-            await ctx.send(
-                "❌ البوت ما عنده صلاحية **Manage Channels**."
+            # إزالة الرموز غير المناسبة
+            channel_name = re.sub(
+                r"[^a-zA-Z0-9\u0600-\u06FF\-_]",
+                "",
+                channel_name
             )
 
-        except discord.HTTPException:
-            await ctx.send(
-                "❌ حدث خطأ أثناء إنشاء الروم."
+            if not channel_name:
+
+                await message.channel.send(
+                    "❌ اسم الروم غير صالح."
+                )
+
+                return
+
+            # Discord يسمح حتى 100 حرف
+            channel_name = channel_name[:100]
+
+            # التأكد أن الروم غير موجود
+            existing_channel = discord.utils.find(
+                lambda c: c.name.lower() == channel_name.lower(),
+                message.guild.text_channels
             )
+
+            if existing_channel:
+
+                await message.channel.send(
+                    f"❌ الروم {existing_channel.mention} موجود بالفعل."
+                )
+
+                return
+
+            try:
+
+                channel = await message.guild.create_text_channel(
+                    name=channel_name,
+                    reason=f"إنشاء روم بواسطة {message.author}"
+                )
+
+                await message.channel.send(
+                    "✅ **تم إنشاء الروم بنجاح!**\n\n"
+                    f"{channel.mention}"
+                )
+
+            except discord.Forbidden:
+
+                await message.channel.send(
+                    "❌ البوت لا يملك صلاحية **Manage Channels**."
+                )
+
+            except discord.HTTPException:
+
+                await message.channel.send(
+                    "❌ حدث خطأ أثناء إنشاء الروم."
+                )
+
+            return
 
 
 # =========================================================
