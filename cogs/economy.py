@@ -15,19 +15,8 @@ from pymongo import ReturnDocument
 
 
 # =========================================================
-# الإعدادات
+# الإعدادات العامة
 # =========================================================
-
-ECONOMY_ROOM_ID = 1544334212734124174
-
-CONTROL_ROOM_ID = 1547711993568305232
-BANNER_ROOM_ID = 1547711993568305232
-
-ALLOWED_ROLE_IDS = {
-    1544078469657530578,
-    1544426415766896690,
-    1545851911121666108
-}
 
 REWARD_MIN = 3000
 REWARD_MAX = 4000
@@ -47,6 +36,7 @@ WITHDRAW_COOLDOWN_SECONDS = 2
 # =========================================================
 
 def parse_amount(amount_str: str):
+
     if not amount_str:
         return 0
 
@@ -65,26 +55,36 @@ def parse_amount(amount_str: str):
     multiplier = 1
 
     if "b" in amount_str:
+
         multiplier = 1_000_000_000
         amount_str = amount_str.replace("b", "")
 
     elif "m" in amount_str:
+
         multiplier = 1_000_000
         amount_str = amount_str.replace("m", "")
 
     elif "k" in amount_str:
+
         multiplier = 1_000
         amount_str = amount_str.replace("k", "")
 
-    numbers = re.findall(r"\d+\.?\d*", amount_str)
+    numbers = re.findall(
+        r"\d+\.?\d*",
+        amount_str
+    )
 
     if not numbers:
         return 0
 
     try:
-        return int(float(numbers[0]) * multiplier)
+
+        return int(
+            float(numbers[0]) * multiplier
+        )
 
     except Exception:
+
         return 0
 
 
@@ -95,13 +95,25 @@ def parse_amount(amount_str: str):
 def format_coins(amount: int):
 
     if amount >= 1_000_000_000:
-        return f"{amount / 1_000_000_000:.2f}b".replace(".00", "")
+
+        return (
+            f"{amount / 1_000_000_000:.2f}b"
+            .replace(".00", "")
+        )
 
     elif amount >= 1_000_000:
-        return f"{amount / 1_000_000:.2f}m".replace(".00", "")
+
+        return (
+            f"{amount / 1_000_000:.2f}m"
+            .replace(".00", "")
+        )
 
     elif amount >= 1_000:
-        return f"{amount / 1_000:.1f}k".replace(".0", "")
+
+        return (
+            f"{amount / 1_000:.1f}k"
+            .replace(".0", "")
+        )
 
     return str(amount)
 
@@ -110,7 +122,10 @@ def format_coins(amount: int):
 # مودال الشعار
 # =========================================================
 
-class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
+class BannerModal(
+    ui.Modal,
+    title="🎁 تسليم شعار ومكافأة"
+):
 
     amount_input = ui.TextInput(
         label="💰 مبلغ المكافأة",
@@ -127,33 +142,63 @@ class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
         max_length=1000
     )
 
-    def __init__(self, cog, target_member):
+    def __init__(
+        self,
+        cog,
+        target_member
+    ):
 
         super().__init__()
 
         self.cog = cog
         self.target_member = target_member
 
-    async def on_submit(self, interaction):
+    async def on_submit(
+        self,
+        interaction
+    ):
 
-        member = interaction.guild.get_member(interaction.user.id)
+        if not interaction.guild:
+
+            return
+
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
 
         if not member:
+
             return
 
-        if not self.cog.has_admin_role(member):
+        allowed = await self.cog.has_admin_permission(
+            interaction.guild.id,
+            member,
+            "شعار"
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام هذا النظام.",
+                ephemeral=True
+            )
+
             return
 
-        amount = parse_amount(self.amount_input.value)
+        amount = parse_amount(
+            self.amount_input.value
+        )
 
         if amount <= 0:
 
             await interaction.response.send_message(
+
                 "❌ المبلغ غير صحيح.\n\n"
                 "مثال:\n"
                 "`25k`\n"
                 "`50000`\n"
                 "`2 مليون`",
+
                 ephemeral=True
             )
 
@@ -179,16 +224,24 @@ class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
 
             return
 
-        reward_id = str(uuid.uuid4())
+        reward_id = str(
+            uuid.uuid4()
+        )
 
         await self.cog.rewards.insert_one({
 
             "reward_id": reward_id,
+
             "user_id": self.target_member.id,
+
             "amount": amount,
+
             "reason": reason,
+
             "claimed": False,
+
             "created_by": interaction.user.id,
+
             "guild_id": interaction.guild.id
 
         })
@@ -208,17 +261,20 @@ class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
             ),
 
             color=discord.Color.gold()
-
         )
 
         dm_embed.set_footer(
 
-            text=f"بواسطة الإدارة في سيرفر: "
-                 f"{interaction.guild.name}"
+            text=(
+                f"بواسطة الإدارة في سيرفر: "
+                f"{interaction.guild.name}"
+            )
 
         )
 
-        view = ClaimRewardView(reward_id)
+        view = ClaimRewardView(
+            reward_id
+        )
 
         try:
 
@@ -260,7 +316,9 @@ class BannerModal(ui.Modal, title="🎁 تسليم شعار ومكافأة"):
             })
 
             await interaction.response.send_message(
+
                 "⚠️ حدث خطأ أثناء إرسال المكافأة.",
+
                 ephemeral=True
             )
 
@@ -295,16 +353,30 @@ class DistributionModal(
 
         self.cog = cog
 
-    async def on_submit(self, interaction):
+    async def on_submit(
+        self,
+        interaction
+    ):
+
+        if not interaction.guild:
+
+            return
 
         member = interaction.guild.get_member(
             interaction.user.id
         )
 
         if not member:
+
             return
 
-        if not self.cog.has_admin_role(member):
+        allowed = await self.cog.has_admin_permission(
+            interaction.guild.id,
+            member,
+            "توزيع"
+        )
+
+        if not allowed:
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -353,13 +425,13 @@ class DistributionModal(
 
         count = 0
 
-        for member in interaction.guild.members:
+        for guild_member in interaction.guild.members:
 
-            if member.bot:
+            if guild_member.bot:
                 continue
 
             await self.cog.update_balance(
-                member.id,
+                guild_member.id,
                 amount
             )
 
@@ -380,7 +452,6 @@ class DistributionModal(
             ),
 
             color=discord.Color.gold()
-
         )
 
         await interaction.channel.send(
@@ -394,9 +465,15 @@ class DistributionModal(
 
 class BannerButtonView(ui.View):
 
-    def __init__(self, cog, target_member):
+    def __init__(
+        self,
+        cog,
+        target_member
+    ):
 
-        super().__init__(timeout=60)
+        super().__init__(
+            timeout=60
+        )
 
         self.cog = cog
         self.target_member = target_member
@@ -412,14 +489,25 @@ class BannerButtonView(ui.View):
         button
     ):
 
+        if not interaction.guild:
+
+            return
+
         member = interaction.guild.get_member(
             interaction.user.id
         )
 
         if not member:
+
             return
 
-        if not self.cog.has_admin_role(member):
+        allowed = await self.cog.has_admin_permission(
+            interaction.guild.id,
+            member,
+            "شعار"
+        )
+
+        if not allowed:
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -429,10 +517,12 @@ class BannerButtonView(ui.View):
             return
 
         await interaction.response.send_modal(
+
             BannerModal(
                 self.cog,
                 self.target_member
             )
+
         )
 
 
@@ -444,7 +534,9 @@ class DistributionButtonView(ui.View):
 
     def __init__(self, cog):
 
-        super().__init__(timeout=60)
+        super().__init__(
+            timeout=60
+        )
 
         self.cog = cog
 
@@ -459,14 +551,25 @@ class DistributionButtonView(ui.View):
         button
     ):
 
+        if not interaction.guild:
+
+            return
+
         member = interaction.guild.get_member(
             interaction.user.id
         )
 
         if not member:
+
             return
 
-        if not self.cog.has_admin_role(member):
+        allowed = await self.cog.has_admin_permission(
+            interaction.guild.id,
+            member,
+            "توزيع"
+        )
+
+        if not allowed:
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام هذا النظام.",
@@ -476,7 +579,9 @@ class DistributionButtonView(ui.View):
             return
 
         await interaction.response.send_modal(
-            DistributionModal(self.cog)
+            DistributionModal(
+                self.cog
+            )
         )
 
 
@@ -486,9 +591,14 @@ class DistributionButtonView(ui.View):
 
 class ClaimRewardView(ui.View):
 
-    def __init__(self, reward_id: str):
+    def __init__(
+        self,
+        reward_id: str
+    ):
 
-        super().__init__(timeout=None)
+        super().__init__(
+            timeout=None
+        )
 
         button = ui.Button(
 
@@ -498,11 +608,15 @@ class ClaimRewardView(ui.View):
 
             emoji="💰",
 
-            custom_id=f"claim_reward:{reward_id}"
+            custom_id=(
+                f"claim_reward:{reward_id}"
+            )
 
         )
 
-        self.add_item(button)
+        self.add_item(
+            button
+        )
 
 
 # =========================================================
@@ -511,7 +625,10 @@ class ClaimRewardView(ui.View):
 
 class EconomyCog(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
@@ -525,15 +642,21 @@ class EconomyCog(commands.Cog):
 
         self.luck_locks = {}
 
-        mongo_uri = os.environ.get("MONGO_URI")
+        mongo_uri = os.environ.get(
+            "MONGO_URI"
+        )
 
         if mongo_uri:
 
-            self.db_client = AsyncIOMotorClient(
-                mongo_uri
+            self.db_client = (
+                AsyncIOMotorClient(
+                    mongo_uri
+                )
             )
 
-            self.db = self.db_client.discord_bot_db
+            self.db = (
+                self.db_client.discord_bot_db
+            )
 
             self.balances = (
                 self.db.economy_balances
@@ -555,6 +678,10 @@ class EconomyCog(commands.Cog):
                 self.db.economy_luck_cooldowns
             )
 
+            self.website_command_settings = (
+                self.db.website_command_settings
+            )
+
         else:
 
             self.db_client = None
@@ -564,66 +691,215 @@ class EconomyCog(commands.Cog):
             self.settings = None
             self.reward_cooldowns = None
             self.luck_cooldowns = None
+            self.website_command_settings = None
 
 
     # =====================================================
-    # الصلاحيات
+    # إعدادات الموقع
     # =====================================================
 
-    def has_admin_role(self, member):
+    async def get_command_setting(
+        self,
+        guild_id,
+        command_name
+    ):
 
-        return any(
-            role.id in ALLOWED_ROLE_IDS
+        if self.website_command_settings is None:
+
+            return None
+
+        setting = await self.website_command_settings.find_one({
+
+            "guild_id": guild_id,
+
+            "command_name": command_name
+
+        })
+
+        if setting:
+            return setting
+
+        # دعم بعض النسخ القديمة التي تستخدم name
+        setting = await self.website_command_settings.find_one({
+
+            "guild_id": guild_id,
+
+            "name": command_name
+
+        })
+
+        return setting
+
+
+    async def has_admin_permission(
+        self,
+        guild_id,
+        member,
+        command_name
+    ):
+
+        if not member:
+            return False
+
+        setting = await self.get_command_setting(
+            guild_id,
+            command_name
+        )
+
+        # لا توجد إعدادات = لا توجد صلاحية
+        if not setting:
+            return False
+
+        if not setting.get(
+            "enabled",
+            False
+        ):
+
+            return False
+
+        role_ids = setting.get(
+            "role_ids",
+            []
+        )
+
+        channel_ids = setting.get(
+            "channel_ids",
+            []
+        )
+
+        # يجب تحديد رتبة من الموقع
+        if not role_ids:
+            return False
+
+        # يجب أن يمتلك المستخدم إحدى الرتب
+        user_role_ids = {
+            role.id
             for role in member.roles
+        }
+
+        if not any(
+            role_id in user_role_ids
+            for role_id in role_ids
+        ):
+
+            return False
+
+        return True
+
+
+    async def command_channel_allowed(
+        self,
+        guild_id,
+        command_name,
+        channel_id
+    ):
+
+        setting = await self.get_command_setting(
+            guild_id,
+            command_name
         )
 
+        if not setting:
+            return False
 
-    def is_admin(self, ctx):
+        if not setting.get(
+            "enabled",
+            False
+        ):
 
-        return (
-            isinstance(ctx.author, discord.Member)
-            and self.has_admin_role(ctx.author)
+            return False
+
+        channel_ids = setting.get(
+            "channel_ids",
+            []
         )
+
+        # إذا الموقع لم يحدد روم
+        # فلا نستخدم أي روم افتراضي
+        if not channel_ids:
+            return False
+
+        return channel_id in channel_ids
 
 
     # =====================================================
-    # الرومات
+    # روم الاقتصاد
     # =====================================================
 
-    def economy_room(self, ctx):
+    async def get_economy_room_id(
+        self,
+        guild_id
+    ):
 
-        return ctx.channel.id == ECONOMY_ROOM_ID
+        if self.settings is None:
+
+            return None
+
+        data = await self.settings.find_one({
+
+            "guild_id": guild_id
+
+        })
+
+        if not data:
+            return None
+
+        room_id = data.get(
+            "economy_room_id"
+        )
+
+        if not room_id:
+            return None
+
+        try:
+            return int(room_id)
+
+        except Exception:
+            return None
 
 
-    def control_room(self, ctx):
+    async def economy_room(
+        self,
+        ctx
+    ):
 
-        return ctx.channel.id == CONTROL_ROOM_ID
+        if not ctx.guild:
+            return False
 
+        room_id = await self.get_economy_room_id(
+            ctx.guild.id
+        )
 
-    def banner_room(self, ctx):
+        if not room_id:
+            return False
 
-        return ctx.channel.id == BANNER_ROOM_ID
+        return ctx.channel.id == room_id
 
 
     # =====================================================
     # العملة
     # =====================================================
 
-    async def currency_enabled(self, guild_id):
+    async def currency_enabled(
+        self,
+        guild_id
+    ):
 
         if self.settings is None:
-            return True
+            return False
 
         data = await self.settings.find_one({
+
             "guild_id": guild_id
+
         })
 
         if not data:
-            return True
+            return False
 
         return data.get(
             "currency_enabled",
-            True
+            False
         )
 
 
@@ -649,20 +925,60 @@ class EconomyCog(commands.Cog):
             },
 
             upsert=True
+
         )
 
 
     # =====================================================
-    # الرصيد
+    # فحص أمر الاقتصاد
     # =====================================================
 
-    async def get_balance(self, user_id):
+    async def economy_available(
+        self,
+        ctx
+    ):
+
+        if not ctx.guild:
+            return False
+
+        if not await self.currency_enabled(
+            ctx.guild.id
+        ):
+
+            return False
+
+        if not await self.economy_room(
+            ctx
+        ):
+
+            return False
+
+        return True
+
+
+    # =====================================================
+    # الرصيد
+    #
+    # مهم:
+    # لا يوجد guild_id هنا.
+    #
+    # الرصيد مربوط بـ user_id فقط.
+    #
+    # لذلك نفس الرصيد يظهر في جميع السيرفرات.
+    # =====================================================
+
+    async def get_balance(
+        self,
+        user_id
+    ):
 
         if self.balances is None:
             return 0
 
         user_data = await self.balances.find_one({
+
             "user_id": user_id
+
         })
 
         if not user_data:
@@ -696,6 +1012,7 @@ class EconomyCog(commands.Cog):
             },
 
             upsert=True
+
         )
 
 
@@ -758,11 +1075,15 @@ class EconomyCog(commands.Cog):
             user_id
         )
 
-        now = asyncio.get_running_loop().time()
+        now = (
+            asyncio.get_running_loop().time()
+        )
 
-        last_time = self.withdraw_cooldowns.get(
-            key,
-            0
+        last_time = (
+            self.withdraw_cooldowns.get(
+                key,
+                0
+            )
         )
 
         if (
@@ -827,20 +1148,50 @@ class EconomyCog(commands.Cog):
 
     # =====================================================
     # تعطيل العملة
+    #
+    # هذا الأمر نفسه يتحكم فيه الموقع.
     # =====================================================
 
     @commands.command(name="تعطيل")
-    async def disable_currency(self, ctx):
+    async def disable_currency(
+        self,
+        ctx
+    ):
 
-        if not self.control_room(ctx):
+        if not ctx.guild:
             return
 
-        if not self.is_admin(ctx):
+        allowed = await self.has_admin_permission(
+
+            ctx.guild.id,
+
+            ctx.author,
+
+            "تعطيل"
+
+        )
+
+        if not allowed:
+            return
+
+        if not await self.command_channel_allowed(
+
+            ctx.guild.id,
+
+            "تعطيل",
+
+            ctx.channel.id
+
+        ):
+
             return
 
         await self.set_currency_enabled(
+
             ctx.guild.id,
+
             False
+
         )
 
         embed = discord.Embed(
@@ -851,51 +1202,18 @@ class EconomyCog(commands.Cog):
 
                 "تم تعطيل **أوامر العملة فقط**.\n\n"
 
-                "يمكن إعادة تشغيلها باستخدام:\n"
-                "`تفعيل`"
+                "يمكن إعادة تفعيل النظام من "
+                "لوحة تحكم الموقع."
 
             ),
 
             color=discord.Color.red()
+
         )
 
-        await ctx.send(embed=embed)
-
-
-    # =====================================================
-    # تفعيل العملة
-    # =====================================================
-
-    @commands.command(name="تفعيل")
-    async def enable_currency(self, ctx):
-
-        if not self.control_room(ctx):
-            return
-
-        if not self.is_admin(ctx):
-            return
-
-        await self.set_currency_enabled(
-            ctx.guild.id,
-            True
+        await ctx.send(
+            embed=embed
         )
-
-        embed = discord.Embed(
-
-            title="🟢 تم تفعيل العملة",
-
-            description=(
-
-                "تم تفعيل **أوامر العملة** من جديد.\n\n"
-
-                "جميع أوامر الاقتصاد أصبحت متاحة الآن."
-
-            ),
-
-            color=discord.Color.green()
-        )
-
-        await ctx.send(embed=embed)
 
 
     # =====================================================
@@ -903,14 +1221,15 @@ class EconomyCog(commands.Cog):
     # =====================================================
 
     @commands.command(name="شرح")
-    async def help_economy(self, ctx):
+    async def help_economy(
+        self,
+        ctx
+    ):
 
-        if not self.economy_room(ctx):
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
+        if not await self.economy_available(
+            ctx
         ):
+
             return
 
         embed = discord.Embed(
@@ -960,13 +1279,16 @@ class EconomyCog(commands.Cog):
             ),
 
             color=discord.Color.gold()
+
         )
 
         embed.set_footer(
             text="عملة السيرفر: Ai"
         )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
 
 
     # =====================================================
@@ -980,15 +1302,16 @@ class EconomyCog(commands.Cog):
         member: discord.Member = None
     ):
 
-        if not self.economy_room(ctx):
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
+        if not await self.economy_available(
+            ctx
         ):
+
             return
 
-        target = member or ctx.author
+        target = (
+            member
+            or ctx.author
+        )
 
         bal = await self.get_balance(
             target.id
@@ -1006,9 +1329,12 @@ class EconomyCog(commands.Cog):
             ),
 
             color=discord.Color.gold()
+
         )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
 
 
     # =====================================================
@@ -1022,7 +1348,10 @@ class EconomyCog(commands.Cog):
         page_str: str = None
     ):
 
-        if not self.economy_room(ctx):
+        if not await self.economy_available(
+            ctx
+        ):
+
             return
 
         if page_str is None:
@@ -1044,7 +1373,9 @@ class EconomyCog(commands.Cog):
 
                 return
 
-            page = int(page_str)
+            page = int(
+                page_str
+            )
 
         if page < 1:
 
@@ -1057,11 +1388,6 @@ class EconomyCog(commands.Cog):
 
             )
 
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
-        ):
             return
 
         if self.balances is None:
@@ -1103,6 +1429,7 @@ class EconomyCog(commands.Cog):
         description_lines = []
 
         medals = [
+
             "🥇",
             "🥈",
             "🥉",
@@ -1113,6 +1440,7 @@ class EconomyCog(commands.Cog):
             "🔹",
             "🔹",
             "🔹"
+
         ]
 
         for idx, doc in enumerate(
@@ -1164,6 +1492,7 @@ class EconomyCog(commands.Cog):
             ),
 
             color=discord.Color.gold()
+
         )
 
         embed.set_footer(
@@ -1180,14 +1509,15 @@ class EconomyCog(commands.Cog):
     # =====================================================
 
     @commands.command(name="مكافاة")
-    async def reward_cmd(self, ctx):
+    async def reward_cmd(
+        self,
+        ctx
+    ):
 
-        if not self.economy_room(ctx):
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
+        if not await self.economy_available(
+            ctx
         ):
+
             return
 
         if (
@@ -1218,6 +1548,7 @@ class EconomyCog(commands.Cog):
                 await self.reward_cooldowns.find_one({
 
                     "guild_id": ctx.guild.id,
+
                     "user_id": ctx.author.id
 
                 })
@@ -1225,10 +1556,8 @@ class EconomyCog(commands.Cog):
 
             if cooldown_data:
 
-                last_claim = (
-                    cooldown_data.get(
-                        "last_claim"
-                    )
+                last_claim = cooldown_data.get(
+                    "last_claim"
                 )
 
                 if last_claim:
@@ -1324,7 +1653,9 @@ class EconomyCog(commands.Cog):
 
                 {
                     "guild_id": ctx.guild.id,
+
                     "user_id": ctx.author.id
+
                 },
 
                 {
@@ -1338,8 +1669,10 @@ class EconomyCog(commands.Cog):
             )
 
             amount = random.randint(
+
                 REWARD_MIN,
                 REWARD_MAX
+
             )
 
             await self.update_balance(
@@ -1366,6 +1699,7 @@ class EconomyCog(commands.Cog):
             ),
 
             color=discord.Color.gold()
+
         )
 
         await ctx.send(
@@ -1378,14 +1712,15 @@ class EconomyCog(commands.Cog):
     # =====================================================
 
     @commands.command(name="حظ")
-    async def luck_cmd(self, ctx):
+    async def luck_cmd(
+        self,
+        ctx
+    ):
 
-        if not self.economy_room(ctx):
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
+        if not await self.economy_available(
+            ctx
         ):
+
             return
 
         if (
@@ -1400,8 +1735,10 @@ class EconomyCog(commands.Cog):
             return
 
         lock = self.get_luck_lock(
+
             ctx.guild.id,
             ctx.author.id
+
         )
 
         async with lock:
@@ -1414,6 +1751,7 @@ class EconomyCog(commands.Cog):
                 await self.luck_cooldowns.find_one({
 
                     "guild_id": ctx.guild.id,
+
                     "user_id": ctx.author.id
 
                 })
@@ -1444,10 +1782,12 @@ class EconomyCog(commands.Cog):
                         )
 
                     next_claim = (
+
                         last_claim
                         + timedelta(
                             hours=LUCK_COOLDOWN_HOURS
                         )
+
                     )
 
                     if now < next_claim:
@@ -1467,11 +1807,13 @@ class EconomyCog(commands.Cog):
                         )
 
                         minutes = (
+
                             (
                                 remaining_seconds
                                 % 3600
                             )
                             // 60
+
                         )
 
                         if hours > 0:
@@ -1507,15 +1849,19 @@ class EconomyCog(commands.Cog):
                         return
 
             amount = random.randint(
+
                 LUCK_MIN,
                 LUCK_MAX
+
             )
 
             await self.luck_cooldowns.update_one(
 
                 {
                     "guild_id": ctx.guild.id,
+
                     "user_id": ctx.author.id
+
                 },
 
                 {
@@ -1552,6 +1898,7 @@ class EconomyCog(commands.Cog):
             ),
 
             color=discord.Color.gold()
+
         )
 
         await ctx.send(
@@ -1560,7 +1907,7 @@ class EconomyCog(commands.Cog):
 
 
     # =====================================================
-    # التحويل - للجميع
+    # التحويل
     # =====================================================
 
     @commands.command(name="تحويل")
@@ -1572,12 +1919,10 @@ class EconomyCog(commands.Cog):
         amount_str: str = None
     ):
 
-        if not self.economy_room(ctx):
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
+        if not await self.economy_available(
+            ctx
         ):
+
             return
 
         if self.balances is None:
@@ -1621,7 +1966,11 @@ class EconomyCog(commands.Cog):
 
             return
 
-        amount_text = amount_str.strip().lower()
+        amount_text = (
+            amount_str
+            .strip()
+            .lower()
+        )
 
         lock = self.get_transfer_lock(
 
@@ -1650,11 +1999,15 @@ class EconomyCog(commands.Cog):
                 "نصف"
             ):
 
-                amount = sender_balance // 2
+                amount = (
+                    sender_balance // 2
+                )
 
             elif amount_text == "ربع":
 
-                amount = sender_balance // 4
+                amount = (
+                    sender_balance // 4
+                )
 
             elif amount_text in (
                 "ثلاث ارباع",
@@ -1704,13 +2057,17 @@ class EconomyCog(commands.Cog):
                 return
 
             await self.update_balance(
+
                 ctx.author.id,
                 -amount
+
             )
 
             await self.update_balance(
+
                 member.id,
                 amount
+
             )
 
         embed = discord.Embed(
@@ -1731,6 +2088,7 @@ class EconomyCog(commands.Cog):
             ),
 
             color=discord.Color.gold()
+
         )
 
         await ctx.send(
@@ -1751,10 +2109,26 @@ class EconomyCog(commands.Cog):
         amount_str: str = None
     ):
 
-        if not self.economy_room(ctx):
+        if not ctx.guild:
             return
 
-        if not self.is_admin(ctx):
+        if not await self.economy_available(
+            ctx
+        ):
+
+            return
+
+        allowed = await self.has_admin_permission(
+
+            ctx.guild.id,
+
+            ctx.author,
+
+            "اعطي"
+
+        )
+
+        if not allowed:
             return
 
         if member is None or not amount_str:
@@ -1769,11 +2143,6 @@ class EconomyCog(commands.Cog):
 
             )
 
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
-        ):
             return
 
         amount = parse_amount(
@@ -1795,8 +2164,10 @@ class EconomyCog(commands.Cog):
             return
 
         await self.update_balance(
+
             member.id,
             amount
+
         )
 
         await ctx.send(
@@ -1821,10 +2192,26 @@ class EconomyCog(commands.Cog):
         amount_str: str = None
     ):
 
-        if not self.economy_room(ctx):
+        if not ctx.guild:
             return
 
-        if not self.is_admin(ctx):
+        if not await self.economy_available(
+            ctx
+        ):
+
+            return
+
+        allowed = await self.has_admin_permission(
+
+            ctx.guild.id,
+
+            ctx.author,
+
+            "سحب"
+
+        )
+
+        if not allowed:
             return
 
         if self.withdraw_is_on_cooldown(
@@ -1862,11 +2249,6 @@ class EconomyCog(commands.Cog):
 
                 return
 
-            if not await self.currency_enabled(
-                ctx.guild.id
-            ):
-                return
-
             if amount_str.strip() == "كل":
 
                 current_bal = (
@@ -1887,8 +2269,10 @@ class EconomyCog(commands.Cog):
                     return
 
                 await self.update_balance(
+
                     member.id,
                     -current_bal
+
                 )
 
                 await ctx.send(
@@ -1942,13 +2326,17 @@ class EconomyCog(commands.Cog):
                 return
 
             final_amount = min(
+
                 amount,
                 current_bal
+
             )
 
             await self.update_balance(
+
                 member.id,
                 -final_amount
+
             )
 
             await ctx.send(
@@ -1962,6 +2350,10 @@ class EconomyCog(commands.Cog):
 
     # =====================================================
     # تصفير
+    #
+    # تنبيه:
+    # هذا الأمر يصفر قاعدة الأرصدة العامة بالكامل،
+    # لأنه لا يوجد فصل للأرصدة حسب السيرفر.
     # =====================================================
 
     @commands.command(name="تصفير")
@@ -1971,10 +2363,26 @@ class EconomyCog(commands.Cog):
         option: str = None
     ):
 
-        if not self.economy_room(ctx):
+        if not ctx.guild:
             return
 
-        if not self.is_admin(ctx):
+        if not await self.economy_available(
+            ctx
+        ):
+
+            return
+
+        allowed = await self.has_admin_permission(
+
+            ctx.guild.id,
+
+            ctx.author,
+
+            "تصفير"
+
+        )
+
+        if not allowed:
             return
 
         if option != "كل":
@@ -1989,11 +2397,6 @@ class EconomyCog(commands.Cog):
 
             )
 
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
-        ):
             return
 
         if self.balances is None:
@@ -2033,29 +2436,41 @@ class EconomyCog(commands.Cog):
     # =====================================================
 
     @commands.command(name="توزيع")
-    async def distribute_cmd(self, ctx):
+    async def distribute_cmd(
+        self,
+        ctx
+    ):
 
-        if not self.economy_room(ctx):
+        if not ctx.guild:
             return
 
-        if not self.is_admin(ctx):
-            return
-
-        if not await self.currency_enabled(
-            ctx.guild.id
+        if not await self.economy_available(
+            ctx
         ):
+
             return
 
-        view = DistributionButtonView(
-            self
+        allowed = await self.has_admin_permission(
+
+            ctx.guild.id,
+
+            ctx.author,
+
+            "توزيع"
+
         )
+
+        if not allowed:
+            return
 
         await ctx.send(
 
             "📋 اضغط الزر التالي "
             "لإدخال المبلغ والسبب:",
 
-            view=view
+            view=DistributionButtonView(
+                self
+            )
 
         )
 
@@ -2071,10 +2486,26 @@ class EconomyCog(commands.Cog):
         member: discord.Member = None
     ):
 
-        if not self.banner_room(ctx):
+        if not ctx.guild:
             return
 
-        if not self.is_admin(ctx):
+        if not await self.economy_available(
+            ctx
+        ):
+
+            return
+
+        allowed = await self.has_admin_permission(
+
+            ctx.guild.id,
+
+            ctx.author,
+
+            "شعار"
+
+        )
+
+        if not allowed:
             return
 
         if member is None:
@@ -2091,11 +2522,6 @@ class EconomyCog(commands.Cog):
 
             return
 
-        if not await self.currency_enabled(
-            ctx.guild.id
-        ):
-            return
-
         await ctx.send(
 
             f"🎁 إعداد مكافأة لـ "
@@ -2105,8 +2531,11 @@ class EconomyCog(commands.Cog):
             f"المبلغ والسبب:",
 
             view=BannerButtonView(
+
                 self,
+
                 member
+
             )
 
         )
@@ -2116,9 +2545,14 @@ class EconomyCog(commands.Cog):
 # تفاعل استلام المكافأة
 # =========================================================
 
-class RewardInteractionCog(commands.Cog):
+class RewardInteractionCog(
+    commands.Cog
+):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
@@ -2164,9 +2598,11 @@ class RewardInteractionCog(commands.Cog):
             interaction.type
             != discord.InteractionType.component
         ):
+
             return
 
         if not interaction.data:
+
             return
 
         custom_id = interaction.data.get(
@@ -2174,11 +2610,13 @@ class RewardInteractionCog(commands.Cog):
         )
 
         if not custom_id:
+
             return
 
         if not custom_id.startswith(
             "claim_reward:"
         ):
+
             return
 
         if self.rewards is None:
@@ -2194,8 +2632,10 @@ class RewardInteractionCog(commands.Cog):
             return
 
         reward_id = custom_id.split(
+
             "claim_reward:",
             1
+
         )[1]
 
         reward = (
@@ -2203,16 +2643,22 @@ class RewardInteractionCog(commands.Cog):
 
                 {
                     "reward_id": reward_id,
+
                     "user_id": interaction.user.id,
+
                     "claimed": False
+
                 },
 
                 {
                     "$set": {
+
                         "claimed": True,
+
                         "claimed_at": datetime.now(
                             timezone.utc
                         )
+
                     }
                 },
 
@@ -2234,7 +2680,9 @@ class RewardInteractionCog(commands.Cog):
 
             return
 
-        reward_amount = reward["amount"]
+        reward_amount = reward[
+            "amount"
+        ]
 
         view = discord.ui.View(
             timeout=None
@@ -2248,7 +2696,9 @@ class RewardInteractionCog(commands.Cog):
 
             emoji="✅",
 
-            custom_id=f"claimed_reward:{reward_id}",
+            custom_id=(
+                f"claimed_reward:{reward_id}"
+            ),
 
             disabled=True
 
