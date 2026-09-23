@@ -18,9 +18,6 @@ from pymongo import ReturnDocument
 # الإعدادات العامة
 # =========================================================
 
-# السيرفر الرئيسي الذي يسمح بأوامر الإدارة
-ADMIN_GUILD_ID = 1544077828151054537
-
 REWARD_MIN = 3000
 REWARD_MAX = 4000
 
@@ -237,7 +234,10 @@ class BannerModal(
             )
             return
 
-        # الرصيد Global - لا يوجد guild_id هنا
+        # =====================================================
+        # الرصيد Global
+        # =====================================================
+
         deduction = await self.cog.balances.update_one(
             {
                 "user_id": interaction.user.id,
@@ -287,8 +287,7 @@ class BannerModal(
 
                 "created_by": interaction.user.id,
 
-                # السيرفر الذي أرسل منه الشعار فقط
-                # وليس له علاقة بالرصيد
+                # السيرفر المصدر فقط
                 "guild_id": interaction.guild.id
 
             })
@@ -701,9 +700,9 @@ class EconomyCog(commands.Cog):
             )
 
             # =================================================
-            # مهم:
-            # هذه المجموعة Global
-            # ولا نستخدم guild_id في الرصيد
+            # الرصيد Global
+            #
+            # لا يوجد guild_id هنا
             # =================================================
 
             self.balances = (
@@ -714,12 +713,20 @@ class EconomyCog(commands.Cog):
                 self.db.economy_rewards
             )
 
-            # هذه الإعدادات لكل سيرفر
+            # =================================================
+            # إعدادات الاقتصاد
+            #
+            # هذه لكل سيرفر
+            # =================================================
+
             self.settings = (
                 self.db.economy_settings
             )
 
-            # Cooldowns الآن Global لكل مستخدم
+            # =================================================
+            # Cooldowns Global لكل مستخدم
+            # =================================================
+
             self.reward_cooldowns = (
                 self.db.economy_reward_cooldowns
             )
@@ -727,6 +734,12 @@ class EconomyCog(commands.Cog):
             self.luck_cooldowns = (
                 self.db.economy_luck_cooldowns
             )
+
+            # =================================================
+            # إعدادات الموقع
+            #
+            # لكل سيرفر + لكل أمر
+            # =================================================
 
             self.website_command_settings = (
                 self.db.website_command_settings
@@ -745,7 +758,33 @@ class EconomyCog(commands.Cog):
 
 
     # =====================================================
-    # إعدادات الموقع
+    # تجهيز معرفات السيرفر
+    #
+    # الموقع قد يخزن guild_id كنص
+    # وديسكورد يعطينا إياه كرقم.
+    # =====================================================
+
+    def guild_id_variants(
+        self,
+        guild_id
+    ):
+
+        variants = [
+            str(guild_id)
+        ]
+
+        try:
+            variants.append(
+                int(guild_id)
+            )
+        except Exception:
+            pass
+
+        return variants
+
+
+    # =====================================================
+    # إعدادات أوامر الموقع
     # =====================================================
 
     async def get_command_setting(
@@ -757,26 +796,27 @@ class EconomyCog(commands.Cog):
         if self.website_command_settings is None:
             return None
 
-        guild_ids = [
-            guild_id,
-            str(guild_id)
-        ]
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
 
+        # الشكل الأساسي المستخدم من الموقع
         setting = await self.website_command_settings.find_one({
             "guild_id": {
                 "$in": guild_ids
             },
-            "command_name": command_name
+            "command_name": str(command_name)
         })
 
         if setting:
             return setting
 
+        # دعم البيانات القديمة إن كانت تستخدم name
         setting = await self.website_command_settings.find_one({
             "guild_id": {
                 "$in": guild_ids
             },
-            "name": command_name
+            "name": str(command_name)
         })
 
         return setting
@@ -785,10 +825,16 @@ class EconomyCog(commands.Cog):
     # =====================================================
     # صلاحيات أوامر الإدارة
     #
-    # السيرفر الرئيسي فقط.
+    # مهم جدًا:
     #
-    # الرتب والرومات تأتي من الموقع.
-    # لا يوجد Role ID ثابت هنا.
+    # لا يوجد ADMIN_GUILD_ID.
+    #
+    # كل سيرفر يحدد من الموقع:
+    # - هل الأمر مفعل؟
+    # - ما الرتب المسموح لها؟
+    # - ما الرومات المسموح فيها؟
+    #
+    # لذلك نفس Economy.py يعمل في أي سيرفر.
     # =====================================================
 
     async def has_admin_permission(
@@ -798,9 +844,6 @@ class EconomyCog(commands.Cog):
         command_name,
         channel_id=None
     ):
-
-        if guild_id != ADMIN_GUILD_ID:
-            return False
 
         if not member:
             return False
@@ -813,11 +856,16 @@ class EconomyCog(commands.Cog):
         if not setting:
             return False
 
+        # الأمر يجب أن يكون مفعل من الموقع
         if not setting.get(
             "enabled",
             False
         ):
             return False
+
+        # =================================================
+        # الرتب من الموقع
+        # =================================================
 
         role_ids = setting.get(
             "role_ids",
@@ -837,11 +885,16 @@ class EconomyCog(commands.Cog):
             for role in member.roles
         }
 
-        if not (
-            allowed_role_ids
-            & user_role_ids
+        # يجب أن يمتلك العضو رتبة واحدة على الأقل
+        # من الرتب التي حددها الموقع
+        if not allowed_role_ids.intersection(
+            user_role_ids
         ):
             return False
+
+        # =================================================
+        # الروم من الموقع
+        # =================================================
 
         if channel_id is not None:
 
@@ -867,7 +920,7 @@ class EconomyCog(commands.Cog):
     # =====================================================
     # روم الاقتصاد
     #
-    # لكل سيرفر روم خاص به.
+    # كل سيرفر له روم مستقل.
     # =====================================================
 
     async def get_economy_room_id(
@@ -878,10 +931,9 @@ class EconomyCog(commands.Cog):
         if self.settings is None:
             return None
 
-        guild_ids = [
-            guild_id,
-            str(guild_id)
-        ]
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
 
         data = await self.settings.find_one({
             "guild_id": {
@@ -925,9 +977,9 @@ class EconomyCog(commands.Cog):
 
 
     # =====================================================
-    # تفعيل الاقتصاد
+    # حالة الاقتصاد
     #
-    # لكل سيرفر بشكل مستقل.
+    # مستقلة لكل سيرفر.
     # =====================================================
 
     async def currency_enabled(
@@ -938,10 +990,9 @@ class EconomyCog(commands.Cog):
         if self.settings is None:
             return False
 
-        guild_ids = [
-            guild_id,
-            str(guild_id)
-        ]
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
 
         data = await self.settings.find_one({
             "guild_id": {
@@ -952,9 +1003,11 @@ class EconomyCog(commands.Cog):
         if not data:
             return False
 
-        return data.get(
-            "currency_enabled",
-            False
+        return bool(
+            data.get(
+                "currency_enabled",
+                False
+            )
         )
 
 
@@ -967,23 +1020,50 @@ class EconomyCog(commands.Cog):
         if self.settings is None:
             return
 
-        # نحفظ guild_id كنص لتوحيد تخزين الموقع
-        await self.settings.update_one(
-            {
-                "guild_id": str(guild_id)
-            },
-            {
-                "$set": {
-                    "guild_id": str(guild_id),
-                    "currency_enabled": bool(enabled)
-                }
-            },
-            upsert=True
+        guild_id_str = str(
+            guild_id
         )
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        # نبحث عن إعداد موجود سواء كان guild_id
+        # محفوظًا كنص أو رقم.
+        existing = await self.settings.find_one({
+            "guild_id": {
+                "$in": guild_ids
+            }
+        })
+
+        if existing:
+
+            # نحافظ على باقي الإعدادات مثل economy_room_id
+            await self.settings.update_one(
+                {
+                    "_id": existing["_id"]
+                },
+                {
+                    "$set": {
+                        "guild_id": guild_id_str,
+                        "currency_enabled": bool(enabled)
+                    }
+                }
+            )
+
+        else:
+
+            await self.settings.insert_one({
+                "guild_id": guild_id_str,
+                "currency_enabled": bool(enabled)
+            })
 
 
     # =====================================================
     # فحص توفر الاقتصاد
+    #
+    # التفعيل + روم الاقتصاد
+    # كلاهما خاص بالسيرفر الحالي.
     # =====================================================
 
     async def economy_available(
@@ -1010,7 +1090,10 @@ class EconomyCog(commands.Cog):
     # =====================================================
     # الرصيد GLOBAL
     #
-    # لا يوجد guild_id إطلاقاً.
+    # مهم:
+    # لا يوجد guild_id.
+    #
+    # نفس user_id = نفس الرصيد في جميع السيرفرات.
     # =====================================================
 
     async def get_balance(
@@ -1058,8 +1141,6 @@ class EconomyCog(commands.Cog):
 
     # =====================================================
     # أقفال المكافأة
-    #
-    # Global لكل مستخدم.
     # =====================================================
 
     def get_reward_lock(
@@ -1166,8 +1247,14 @@ class EconomyCog(commands.Cog):
         if not ctx.guild:
             return
 
-        if ctx.guild.id != ADMIN_GUILD_ID:
-            return
+        # =================================================
+        # لا يوجد فحص لسيرفر محدد.
+        #
+        # الموقع هو الذي يحدد:
+        # - الرتبة
+        # - الروم
+        # - تفعيل الأمر
+        # =================================================
 
         allowed = await self.has_admin_permission(
             ctx.guild.id,
@@ -1455,8 +1542,6 @@ class EconomyCog(commands.Cog):
 
     # =====================================================
     # المكافأة
-    #
-    # Cooldown Global لكل مستخدم
     # =====================================================
 
     @commands.command(name="مكافاة")
@@ -1611,8 +1696,6 @@ class EconomyCog(commands.Cog):
 
     # =====================================================
     # الحظ
-    #
-    # Cooldown Global لكل مستخدم
     # =====================================================
 
     @commands.command(name="حظ")
@@ -1901,7 +1984,6 @@ class EconomyCog(commands.Cog):
 
                 return
 
-            # الخصم والإضافة Global
             await self.update_balance(
                 ctx.author.id,
                 -amount
@@ -1987,7 +2069,6 @@ class EconomyCog(commands.Cog):
 
             return
 
-        # Global
         await self.update_balance(
             member.id,
             amount
@@ -2450,7 +2531,10 @@ class RewardInteractionCog(
             view=view
         )
 
-        # Global
+        # =================================================
+        # الرصيد Global
+        # =================================================
+
         await self.balances.update_one(
             {
                 "user_id": interaction.user.id
