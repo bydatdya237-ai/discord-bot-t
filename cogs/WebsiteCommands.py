@@ -1,7 +1,8 @@
 import os
+import asyncio
+import traceback
 from datetime import datetime, timezone
 
-import discord
 from discord.ext import commands
 from pymongo import MongoClient
 
@@ -30,6 +31,8 @@ commands_collection = db["website_commands"]
 
 def save_bot_commands(bot):
 
+    print("🌐 [WEBSITE] بدء قراءة أوامر البوت...")
+
     commands_data = []
 
     for command in bot.commands:
@@ -52,20 +55,27 @@ def save_bot_commands(bot):
             "aliases": list(command.aliases),
         })
 
+    # ترتيب الأوامر
     commands_data.sort(
         key=lambda x: x["name"].lower()
     )
 
-    # حذف النسخة القديمة
+    print(
+        f"📋 [WEBSITE] تم العثور على "
+        f"{len(commands_data)} أمر"
+    )
+
+    # حذف القائمة القديمة
     commands_collection.delete_many({})
 
-    # حفظ النسخة الجديدة
+    # إضافة القائمة الجديدة
     if commands_data:
+
         commands_collection.insert_many(
             commands_data
         )
 
-    # حفظ وقت آخر تحديث
+    # حفظ معلومات التحديث
     db["website_settings"].update_one(
         {"_id": "commands"},
         {
@@ -80,11 +90,11 @@ def save_bot_commands(bot):
     )
 
     print(
-        "🌐 تم تحديث أوامر الموقع"
+        "✅ [WEBSITE] تم حفظ أوامر البوت في MongoDB"
     )
 
     print(
-        f"📋 عدد الأوامر المحفوظة: "
+        f"📦 [WEBSITE] العدد المحفوظ: "
         f"{len(commands_data)}"
     )
 
@@ -98,22 +108,52 @@ class WebsiteCommands(commands.Cog):
     def __init__(self, bot):
 
         self.bot = bot
+        self.updated = False
 
         print(
-            "🌐 WebsiteCommands تم تحميله"
+            "🌐 [WEBSITE] WebsiteCommands تم تحميله"
         )
 
 
     @commands.Cog.listener()
     async def on_ready(self):
 
-        # ننتظر قليلاً حتى تكون جميع الـ Cogs
-        # قد تم تحميلها بالكامل
-        await self.bot.wait_until_ready()
+        # منع تكرار الحفظ إذا Discord أعاد
+        # اتصال البوت بدون إعادة تشغيل البرنامج
+        if self.updated:
+            return
 
-        save_bot_commands(
-            self.bot
+        self.updated = True
+
+        print(
+            "🌐 [WEBSITE] البوت أصبح جاهزًا"
         )
+
+        # نعطي جميع الـ Cogs وقتًا إضافيًا
+        await asyncio.sleep(5)
+
+        try:
+
+            save_bot_commands(
+                self.bot
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ [WEBSITE] حدث خطأ أثناء حفظ الأوامر"
+            )
+
+            print(
+                f"❌ نوع الخطأ: "
+                f"{type(error).__name__}"
+            )
+
+            print(
+                f"❌ الخطأ: {error}"
+            )
+
+            traceback.print_exc()
 
 
 # =========================================================
@@ -127,5 +167,5 @@ async def setup(bot):
     )
 
     print(
-        "✅ WebsiteCommands جاهز"
+        "✅ [WEBSITE] WebsiteCommands جاهز"
     )
