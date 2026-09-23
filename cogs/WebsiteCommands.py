@@ -30,6 +30,27 @@ settings_collection = db["website_command_settings"]
 
 
 # =========================================================
+# الأوامر اليدوية
+#
+# هذه الأوامر موجودة داخل on_message في بعض الـCogs
+# لذلك Discord.py لا يضعها داخل bot.commands
+# =========================================================
+
+MANUAL_COMMANDS = [
+    {
+        "name": "رتبة",
+        "description": "إنشاء رتبة جديدة بالاسم واللون المحدد.",
+        "aliases": []
+    },
+    {
+        "name": "سوي+روم",
+        "description": "إنشاء روم كتابي جديد.",
+        "aliases": []
+    }
+]
+
+
+# =========================================================
 # أدوات مساعدة
 # =========================================================
 
@@ -40,6 +61,7 @@ def normalize_command_name(name):
     .
     /
     """
+
     if not name:
         return ""
 
@@ -52,12 +74,64 @@ def normalize_command_name(name):
 
 
 # =========================================================
-# حفظ أوامر البوت (مع الحفاظ على الأوامر اليدوية)
+# حفظ الأوامر اليدوية
+# =========================================================
+
+def save_manual_commands():
+
+    print(
+        "🌐 [WEBSITE] بدء تسجيل الأوامر اليدوية..."
+    )
+
+    for command_data in MANUAL_COMMANDS:
+
+        command_name = normalize_command_name(
+            command_data["name"]
+        )
+
+        if not command_name:
+            continue
+
+        commands_collection.update_one(
+            {
+                "name": command_name
+            },
+            {
+                "$set": {
+                    "name": command_name,
+                    "description": command_data["description"],
+                    "aliases": command_data.get(
+                        "aliases",
+                        []
+                    ),
+                    "manual": True,
+                    "updated_at": datetime.now(
+                        timezone.utc
+                    )
+                }
+            },
+            upsert=True
+        )
+
+        print(
+            f"✅ [WEBSITE] تم تسجيل الأمر اليدوي: "
+            f"{command_name}"
+        )
+
+    print(
+        "✅ [WEBSITE] انتهى تسجيل الأوامر اليدوية"
+    )
+
+
+# =========================================================
+# حفظ أوامر البوت
 # =========================================================
 
 def save_bot_commands(bot):
 
-    print("🌐 [WEBSITE] بدء قراءة أوامر البوت...")
+    print(
+        "🌐 [WEBSITE] بدء قراءة أوامر البوت..."
+    )
 
     commands_data = []
 
@@ -89,6 +163,7 @@ def save_bot_commands(bot):
                 normalize_command_name(alias)
                 for alias in command.aliases
             ],
+            "manual": False
         })
 
     print(
@@ -96,27 +171,74 @@ def save_bot_commands(bot):
         f"{len(commands_data)} أمر قياسي"
     )
 
-    # تحديث أو إدراج أوامر البوت القياسية دون حذف الأوامر اليدوية الأخرى
-    for cmd in commands_data:
+    # -----------------------------------------------------
+    # حفظ الأوامر القياسية
+    #
+    # مهم:
+    # لا نحذف الأوامر اليدوية
+    # -----------------------------------------------------
+
+    for command_data in commands_data:
+
         commands_collection.update_one(
-            {"name": cmd["name"]},
-            {"$set": cmd},
+            {
+                "name": command_data["name"]
+            },
+            {
+                "$set": {
+                    "name": command_data["name"],
+                    "description": command_data["description"],
+                    "aliases": command_data["aliases"],
+                    "manual": False,
+                    "updated_at": datetime.now(
+                        timezone.utc
+                    )
+                }
+            },
             upsert=True
         )
 
+    # -----------------------------------------------------
+    # حفظ الأوامر اليدوية
+    # -----------------------------------------------------
+
+    save_manual_commands()
+
+    # -----------------------------------------------------
+    # تحديث إحصائية الأوامر
+    # -----------------------------------------------------
+
     db["website_settings"].update_one(
-        {"_id": "commands"},
+        {
+            "_id": "commands"
+        },
         {
             "$set": {
-                "updated_at": datetime.now(timezone.utc),
-                "commands_count": commands_collection.count_documents({})
+                "updated_at": datetime.now(
+                    timezone.utc
+                ),
+                "commands_count":
+                    commands_collection.count_documents({})
             }
         },
         upsert=True
     )
 
     print(
-        "✅ [WEBSITE] تم حفظ وتحديث أوامر البوت في MongoDB بنجاح"
+        "=================================================="
+    )
+
+    print(
+        "✅ [WEBSITE] تم حفظ جميع أوامر البوت"
+    )
+
+    print(
+        f"📦 إجمالي الأوامر في MongoDB: "
+        f"{commands_collection.count_documents({})}"
+    )
+
+    print(
+        "=================================================="
     )
 
 
@@ -131,7 +253,10 @@ def build_guild_data(guild, installer_id=None):
     })
 
     if installer_id is None and existing:
-        installer_id = existing.get("installer_id")
+
+        installer_id = existing.get(
+            "installer_id"
+        )
 
     channels = []
 
@@ -143,7 +268,11 @@ def build_guild_data(guild, installer_id=None):
             "id": str(channel.id),
             "name": channel.name,
             "type": channel_type,
-            "position": getattr(channel, "position", 0),
+            "position": getattr(
+                channel,
+                "position",
+                0
+            ),
         })
 
     channels.sort(
@@ -157,7 +286,6 @@ def build_guild_data(guild, installer_id=None):
 
     for role in guild.roles:
 
-        # تجاهل @everyone
         if role.is_default():
             continue
 
@@ -189,7 +317,9 @@ def build_guild_data(guild, installer_id=None):
         "channels": channels,
         "roles": roles,
 
-        "updated_at": datetime.now(timezone.utc)
+        "updated_at": datetime.now(
+            timezone.utc
+        )
     }
 
 
@@ -218,16 +348,17 @@ def sync_guild(guild, installer_id=None):
 
         print(
             f"🌐 [WEBSITE] تم تحديث السيرفر: "
-            f"{guild.name} "
-            f"({guild.id})"
+            f"{guild.name} ({guild.id})"
         )
 
         print(
-            f"📁 الرومات: {len(data['channels'])}"
+            f"📁 الرومات: "
+            f"{len(data['channels'])}"
         )
 
         print(
-            f"🎭 الرتب: {len(data['roles'])}"
+            f"🎭 الرتب: "
+            f"{len(data['roles'])}"
         )
 
     except Exception as error:
@@ -287,7 +418,6 @@ async def find_installer(guild):
                 continue
 
             if target.id != self_bot_id(guild):
-
                 continue
 
             user = getattr(
@@ -356,12 +486,11 @@ class WebsiteCommands(commands.Cog):
         )
 
     # =====================================================
-    # التحقق من صلاحيات الموقع للأوامر
+    # التحقق من صلاحيات الموقع للأوامر العادية
     # =====================================================
 
     async def website_permission_check(self, ctx):
 
-        # الرسائل الخاصة
         if ctx.guild is None:
             return True
 
@@ -377,12 +506,13 @@ class WebsiteCommands(commands.Cog):
             "command_name": command_name
         })
 
-        # لا يوجد إعداد من الموقع
         if not setting:
             return True
 
-        # إعداد الموقع غير مفعل
-        if not setting.get("enabled", False):
+        if not setting.get(
+            "enabled",
+            False
+        ):
             return True
 
         allowed_channels = {
@@ -482,12 +612,14 @@ class WebsiteCommands(commands.Cog):
         await asyncio.sleep(5)
 
         # -------------------------------------------------
-        # حفظ الأوامر
+        # حفظ جميع الأوامر
         # -------------------------------------------------
 
         try:
 
-            save_bot_commands(self.bot)
+            save_bot_commands(
+                self.bot
+            )
 
         except Exception as error:
 
@@ -538,7 +670,8 @@ class WebsiteCommands(commands.Cog):
             except Exception as error:
 
                 print(
-                    f"❌ فشل مزامنة: {guild.name}"
+                    f"❌ فشل مزامنة: "
+                    f"{guild.name}"
                 )
 
                 print(
