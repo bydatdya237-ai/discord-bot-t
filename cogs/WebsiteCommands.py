@@ -52,7 +52,7 @@ def normalize_command_name(name):
 
 
 # =========================================================
-# حفظ أوامر البوت
+# حفظ أوامر البوت (مع الحفاظ على الأوامر اليدوية)
 # =========================================================
 
 def save_bot_commands(bot):
@@ -91,20 +91,17 @@ def save_bot_commands(bot):
             ],
         })
 
-    commands_data.sort(
-        key=lambda x: x["name"].lower()
-    )
-
     print(
         f"📋 [WEBSITE] تم العثور على "
-        f"{len(commands_data)} أمر"
+        f"{len(commands_data)} أمر قياسي"
     )
 
-    commands_collection.delete_many({})
-
-    if commands_data:
-        commands_collection.insert_many(
-            commands_data
+    # تحديث أو إدراج أوامر البوت القياسية دون حذف الأوامر اليدوية الأخرى
+    for cmd in commands_data:
+        commands_collection.update_one(
+            {"name": cmd["name"]},
+            {"$set": cmd},
+            upsert=True
         )
 
     db["website_settings"].update_one(
@@ -112,19 +109,14 @@ def save_bot_commands(bot):
         {
             "$set": {
                 "updated_at": datetime.now(timezone.utc),
-                "commands_count": len(commands_data)
+                "commands_count": commands_collection.count_documents({})
             }
         },
         upsert=True
     )
 
     print(
-        "✅ [WEBSITE] تم حفظ أوامر البوت في MongoDB"
-    )
-
-    print(
-        f"📦 [WEBSITE] العدد المحفوظ: "
-        f"{len(commands_data)}"
+        "✅ [WEBSITE] تم حفظ وتحديث أوامر البوت في MongoDB بنجاح"
     )
 
 
