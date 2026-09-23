@@ -3,12 +3,13 @@ import asyncio
 import traceback
 from datetime import datetime, timezone
 
+import discord
 from discord.ext import commands
 from pymongo import MongoClient
 
 
 # =========================================================
-# MongoDB
+# إعدادات MongoDB
 # =========================================================
 
 MONGO_URI = os.getenv("MONGO_URI")
@@ -18,22 +19,45 @@ if not MONGO_URI:
         "❌ MONGO_URI غير موجود في Environment Variables"
     )
 
+
 mongo_client = MongoClient(MONGO_URI)
 
 db = mongo_client["discord_bot_db"]
 
 commands_collection = db["website_commands"]
-settings_collection = db["website_command_settings"]
 guilds_collection = db["website_guilds"]
+settings_collection = db["website_command_settings"]
 
 
 # =========================================================
-# حفظ الأوامر
+# أدوات مساعدة
+# =========================================================
+
+def normalize_command_name(name):
+    """
+    يتأكد أن اسم الأمر محفوظ بدون:
+    -
+    .
+    /
+    """
+    if not name:
+        return ""
+
+    name = str(name).strip()
+
+    while name and name[0] in ("-", ".", "/"):
+        name = name[1:]
+
+    return name.strip()
+
+
+# =========================================================
+# حفظ أوامر البوت
 # =========================================================
 
 def save_bot_commands(bot):
 
-    print("🌐 [WEBSITE] بدء تحديث قائمة الأوامر...")
+    print("🌐 [WEBSITE] بدء قراءة أوامر البوت...")
 
     commands_data = []
 
@@ -45,30 +69,24 @@ def save_bot_commands(bot):
         if command.parent is not None:
             continue
 
-        # -------------------------------------------------
-        # إزالة أي Prefix من اسم الأمر
-        # -------------------------------------------------
+        command_name = normalize_command_name(
+            command.name
+        )
 
-        clean_name = str(command.name)
+        if not command_name:
+            continue
 
-        for prefix in ("-", ".", "/"):
-            if clean_name.startswith(prefix):
-                clean_name = clean_name[1:]
-
-        # -------------------------------------------------
-        # البيانات
-        # -------------------------------------------------
+        description = (
+            command.help
+            or command.description
+            or "لا يوجد وصف لهذا الأمر."
+        )
 
         commands_data.append({
-            "name": clean_name,
-            "real_name": command.name,
-            "description": (
-                command.help
-                or command.description
-                or "لا يوجد وصف لهذا الأمر."
-            ),
+            "name": command_name,
+            "description": description,
             "aliases": [
-                str(alias)
+                normalize_command_name(alias)
                 for alias in command.aliases
             ],
         })
@@ -82,10 +100,6 @@ def save_bot_commands(bot):
         f"{len(commands_data)} أمر"
     )
 
-    # -----------------------------------------------------
-    # استبدال قائمة الأوامر
-    # -----------------------------------------------------
-
     commands_collection.delete_many({})
 
     if commands_data:
@@ -93,17 +107,11 @@ def save_bot_commands(bot):
             commands_data
         )
 
-    # -----------------------------------------------------
-    # الإعدادات العامة
-    # -----------------------------------------------------
-
     db["website_settings"].update_one(
         {"_id": "commands"},
         {
             "$set": {
-                "updated_at": datetime.now(
-                    timezone.utc
-                ),
+                "updated_at": datetime.now(timezone.utc),
                 "commands_count": len(commands_data)
             }
         },
@@ -111,191 +119,228 @@ def save_bot_commands(bot):
     )
 
     print(
-        "✅ [WEBSITE] تم حفظ الأوامر في MongoDB"
+        "✅ [WEBSITE] تم حفظ أوامر البوت في MongoDB"
+    )
+
+    print(
+        f"📦 [WEBSITE] العدد المحفوظ: "
+        f"{len(commands_data)}"
     )
 
 
 # =========================================================
-# حفظ السيرفرات والرومات والرتب
+# تجهيز بيانات السيرفر
 # =========================================================
 
-def save_guild_data(bot):
+def build_guild_data(guild, installer_id=None):
 
-    print("🌐 [WEBSITE] بدء تحديث بيانات السيرفرات...")
+    existing = guilds_collection.find_one({
+        "guild_id": str(guild.id)
+    })
 
-    for guild in bot.guilds:
+    if installer_id is None and existing:
+        installer_id = existing.get("installer_id")
 
-        # -------------------------------------------------
-        # الرومات
-        # -------------------------------------------------
+    channels = []
 
-        channels = []
+    for channel in guild.channels:
 
-        for channel in guild.channels:
+        channel_type = channel.type.name
 
-            # نستبعد بعض الأنواع غير المناسبة للأوامر
-            if hasattr(channel, "name"):
+        channels.append({
+            "id": str(channel.id),
+            "name": channel.name,
+            "type": channel_type,
+            "position": getattr(channel, "position", 0),
+        })
 
-                channels.append({
-                    "id": str(channel.id),
-                    "name": channel.name,
-                    "type": str(channel.type),
-                })
+    channels.sort(
+        key=lambda x: (
+            x.get("position", 0),
+            x.get("name", "").lower()
+        )
+    )
 
-        # -------------------------------------------------
-        # الرتب
-        # -------------------------------------------------
+    roles = []
 
-        roles = []
+    for role in guild.roles:
 
-        for role in guild.roles:
+        # تجاهل @everyone
+        if role.is_default():
+            continue
 
-            # تجاهل @everyone
-            if role.is_default():
-                continue
+        roles.append({
+            "id": str(role.id),
+            "name": role.name,
+            "position": role.position,
+            "managed": role.managed,
+        })
 
-            roles.append({
-                "id": str(role.id),
-                "name": role.name,
-                "position": role.position,
-            })
+    roles.sort(
+        key=lambda x: (
+            -x.get("position", 0),
+            x.get("name", "").lower()
+        )
+    )
 
-        # -------------------------------------------------
-        # حفظ البيانات
-        # -------------------------------------------------
+    return {
+        "guild_id": str(guild.id),
+        "guild_name": guild.name,
+        "owner_id": str(guild.owner_id),
+
+        "installer_id": (
+            str(installer_id)
+            if installer_id
+            else None
+        ),
+
+        "channels": channels,
+        "roles": roles,
+
+        "updated_at": datetime.now(timezone.utc)
+    }
+
+
+# =========================================================
+# حفظ بيانات السيرفر
+# =========================================================
+
+def sync_guild(guild, installer_id=None):
+
+    try:
+
+        data = build_guild_data(
+            guild,
+            installer_id
+        )
 
         guilds_collection.update_one(
             {
                 "guild_id": str(guild.id)
             },
             {
-                "$set": {
-                    "guild_id": str(guild.id),
-                    "guild_name": guild.name,
-                    "owner_id": str(guild.owner_id),
-                    "channels": channels,
-                    "roles": roles,
-                    "updated_at": datetime.now(
-                        timezone.utc
-                    ),
-                }
+                "$set": data
             },
             upsert=True
         )
 
         print(
-            f"✅ [WEBSITE] تم تحديث: "
-            f"{guild.name}"
+            f"🌐 [WEBSITE] تم تحديث السيرفر: "
+            f"{guild.name} "
+            f"({guild.id})"
         )
 
-    print(
-        "🌐 [WEBSITE] تم تحديث بيانات السيرفرات"
-    )
+        print(
+            f"📁 الرومات: {len(data['channels'])}"
+        )
+
+        print(
+            f"🎭 الرتب: {len(data['roles'])}"
+        )
+
+    except Exception as error:
+
+        print(
+            "❌ [WEBSITE] فشل تحديث بيانات السيرفر"
+        )
+
+        print(
+            f"❌ السيرفر: {guild.name}"
+        )
+
+        print(
+            f"❌ الخطأ: "
+            f"{type(error).__name__}: {error}"
+        )
+
+        traceback.print_exc()
 
 
 # =========================================================
-# التحقق من صلاحية الأمر
+# معرفة الشخص الذي أضاف البوت
 # =========================================================
 
-def check_command_permission(ctx):
+async def find_installer(guild):
 
-    # -----------------------------------------------------
-    # الخاص
-    # -----------------------------------------------------
+    if not guild.me:
+        return None
 
-    if ctx.guild is None:
-        return True
+    permissions = guild.me.guild_permissions
 
-    # -----------------------------------------------------
-    # اسم الأمر
-    # -----------------------------------------------------
+    if not permissions.view_audit_log:
 
-    if not ctx.command:
-        return True
+        print(
+            f"⚠️ [WEBSITE] البوت لا يملك "
+            f"View Audit Log في: {guild.name}"
+        )
 
-    command_name = str(ctx.command.name)
+        return None
 
-    # -----------------------------------------------------
-    # إزالة Prefix احتياطيًا
-    # -----------------------------------------------------
+    try:
 
-    for prefix in ("-", ".", "/"):
-        if command_name.startswith(prefix):
-            command_name = command_name[1:]
+        await asyncio.sleep(3)
 
-    # -----------------------------------------------------
-    # البحث عن إعدادات السيرفر + الأمر
-    # -----------------------------------------------------
-
-    setting = settings_collection.find_one({
-        "guild_id": str(ctx.guild.id),
-        "command_name": command_name,
-    })
-
-    # -----------------------------------------------------
-    # إذا ما فيه إعدادات من الموقع
-    # نخلي الأمر يعمل مثل قبل
-    # -----------------------------------------------------
-
-    if not setting:
-        return True
-
-    # -----------------------------------------------------
-    # التحكم غير مفعل
-    # -----------------------------------------------------
-
-    if not setting.get("enabled", False):
-        return True
-
-    # -----------------------------------------------------
-    # الرومات
-    # -----------------------------------------------------
-
-    allowed_channels = setting.get(
-        "channel_ids",
-        []
-    )
-
-    # إذا تم تحديد رومات
-    if allowed_channels:
-
-        if str(ctx.channel.id) not in [
-            str(x)
-            for x in allowed_channels
-        ]:
-            return False
-
-    # -----------------------------------------------------
-    # الرتب
-    # -----------------------------------------------------
-
-    allowed_roles = setting.get(
-        "role_ids",
-        []
-    )
-
-    # إذا تم تحديد رتب
-    if allowed_roles:
-
-        user_roles = {
-            str(role.id)
-            for role in ctx.author.roles
-        }
-
-        if not user_roles.intersection(
-            {
-                str(x)
-                for x in allowed_roles
-            }
+        async for entry in guild.audit_logs(
+            limit=20,
+            action=discord.AuditLogAction.bot_add
         ):
 
-            return False
+            target = getattr(
+                entry,
+                "target",
+                None
+            )
 
-    # -----------------------------------------------------
-    # السماح
-    # -----------------------------------------------------
+            if not target:
+                continue
 
-    return True
+            if target.id != self_bot_id(guild):
+
+                continue
+
+            user = getattr(
+                entry,
+                "user",
+                None
+            )
+
+            if not user:
+                continue
+
+            print(
+                f"👤 [WEBSITE] الشخص الذي أضاف البوت: "
+                f"{user} ({user.id})"
+            )
+
+            return str(user.id)
+
+    except discord.Forbidden:
+
+        print(
+            f"⚠️ [WEBSITE] لا يمكن قراءة Audit Log "
+            f"في: {guild.name}"
+        )
+
+    except Exception as error:
+
+        print(
+            "❌ [WEBSITE] خطأ أثناء البحث عن "
+            "الشخص الذي أضاف البوت"
+        )
+
+        print(
+            f"❌ {type(error).__name__}: {error}"
+        )
+
+    return None
+
+
+def self_bot_id(guild):
+
+    if guild.me:
+        return guild.me.id
+
+    return 0
 
 
 # =========================================================
@@ -310,22 +355,124 @@ class WebsiteCommands(commands.Cog):
 
         self.updated = False
 
+        self.bot.add_check(
+            self.website_permission_check
+        )
+
         print(
             "🌐 [WEBSITE] WebsiteCommands تم تحميله"
         )
 
     # =====================================================
-    # Global Check
+    # التحقق من صلاحيات الموقع للأوامر
     # =====================================================
 
-    @commands.Cog.listener()
-    async def on_command(self, ctx):
+    async def website_permission_check(self, ctx):
 
-        # هذا فقط للتسجيل
-        pass
+        # الرسائل الخاصة
+        if ctx.guild is None:
+            return True
+
+        if ctx.command is None:
+            return True
+
+        command_name = normalize_command_name(
+            ctx.command.qualified_name
+        )
+
+        setting = settings_collection.find_one({
+            "guild_id": str(ctx.guild.id),
+            "command_name": command_name
+        })
+
+        # لا يوجد إعداد من الموقع
+        if not setting:
+            return True
+
+        # إعداد الموقع غير مفعل
+        if not setting.get("enabled", False):
+            return True
+
+        allowed_channels = {
+            str(channel_id)
+            for channel_id in setting.get(
+                "channel_ids",
+                []
+            )
+        }
+
+        allowed_roles = {
+            str(role_id)
+            for role_id in setting.get(
+                "role_ids",
+                []
+            )
+        }
+
+        # =================================================
+        # فحص الروم
+        # =================================================
+
+        if allowed_channels:
+
+            if str(ctx.channel.id) not in allowed_channels:
+
+                print(
+                    "🚫 [WEBSITE] الأمر مرفوض بسبب الروم"
+                )
+
+                print(
+                    f"👤 {ctx.author} "
+                    f"({ctx.author.id})"
+                )
+
+                print(
+                    f"📌 الأمر: {command_name}"
+                )
+
+                print(
+                    f"📁 الروم: "
+                    f"{ctx.channel.name}"
+                )
+
+                return False
+
+        # =================================================
+        # فحص الرتبة
+        # =================================================
+
+        if allowed_roles:
+
+            user_role_ids = {
+                str(role.id)
+                for role in ctx.author.roles
+            }
+
+            if not (
+                user_role_ids
+                & allowed_roles
+            ):
+
+                print(
+                    "🚫 [WEBSITE] الأمر مرفوض "
+                    "بسبب الرتبة"
+                )
+
+                print(
+                    f"👤 {ctx.author} "
+                    f"({ctx.author.id})"
+                )
+
+                print(
+                    f"📌 الأمر: {command_name}"
+                )
+
+                return False
+
+        return True
 
     # =====================================================
-    # تحديث البيانات عند الجاهزية
+    # عند تشغيل البوت
     # =====================================================
 
     @commands.Cog.listener()
@@ -342,24 +489,22 @@ class WebsiteCommands(commands.Cog):
 
         await asyncio.sleep(5)
 
+        # -------------------------------------------------
+        # حفظ الأوامر
+        # -------------------------------------------------
+
         try:
 
-            save_bot_commands(
-                self.bot
-            )
-
-            save_guild_data(
-                self.bot
-            )
+            save_bot_commands(self.bot)
 
         except Exception as error:
 
             print(
-                "❌ [WEBSITE] حدث خطأ أثناء التحديث"
+                "❌ [WEBSITE] حدث خطأ أثناء حفظ الأوامر"
             )
 
             print(
-                f"❌ النوع: "
+                f"❌ نوع الخطأ: "
                 f"{type(error).__name__}"
             )
 
@@ -369,52 +514,176 @@ class WebsiteCommands(commands.Cog):
 
             traceback.print_exc()
 
+        # -------------------------------------------------
+        # تحديث جميع السيرفرات
+        # -------------------------------------------------
+
+        print(
+            "🌐 [WEBSITE] بدء مزامنة السيرفرات..."
+        )
+
+        for guild in self.bot.guilds:
+
+            try:
+
+                existing = guilds_collection.find_one({
+                    "guild_id": str(guild.id)
+                })
+
+                installer_id = None
+
+                if existing:
+
+                    installer_id = existing.get(
+                        "installer_id"
+                    )
+
+                sync_guild(
+                    guild,
+                    installer_id
+                )
+
+            except Exception as error:
+
+                print(
+                    f"❌ فشل مزامنة: {guild.name}"
+                )
+
+                print(
+                    f"❌ {type(error).__name__}: "
+                    f"{error}"
+                )
+
+        print(
+            "✅ [WEBSITE] انتهت مزامنة السيرفرات"
+        )
+
     # =====================================================
-    # تحديث السيرفرات
+    # دخول البوت إلى سيرفر
     # =====================================================
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
 
+        print(
+            "🎉 [WEBSITE] دخل البوت سيرفرًا جديدًا"
+        )
+
+        print(
+            f"🏠 السيرفر: {guild.name}"
+        )
+
+        print(
+            f"🆔 ID: {guild.id}"
+        )
+
+        installer_id = None
+
         try:
-            save_guild_data(self.bot)
+
+            installer_id = await find_installer(
+                guild
+            )
 
         except Exception as error:
 
             print(
-                f"❌ خطأ تحديث السيرفر: {error}"
+                f"⚠️ فشل معرفة المثبت: {error}"
+            )
+
+        sync_guild(
+            guild,
+            installer_id
+        )
+
+    # =====================================================
+    # تحديث الرومات
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(
+        self,
+        channel
+    ):
+
+        if channel.guild:
+
+            sync_guild(
+                channel.guild
+            )
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(
+        self,
+        channel
+    ):
+
+        if channel.guild:
+
+            sync_guild(
+                channel.guild
             )
 
     # =====================================================
-    # Global Check
+    # تحديث الرتب
     # =====================================================
 
-    async def cog_check(self, ctx):
+    @commands.Cog.listener()
+    async def on_guild_role_create(
+        self,
+        role
+    ):
+
+        if role.guild:
+
+            sync_guild(
+                role.guild
+            )
+
+    @commands.Cog.listener()
+    async def on_guild_role_delete(
+        self,
+        role
+    ):
+
+        if role.guild:
+
+            sync_guild(
+                role.guild
+            )
+
+    @commands.Cog.listener()
+    async def on_guild_role_update(
+        self,
+        before,
+        after
+    ):
+
+        if after.guild:
+
+            sync_guild(
+                after.guild
+            )
+
+    # =====================================================
+    # تنظيف عند إزالة الـ Cog
+    # =====================================================
+
+    def cog_unload(self):
 
         try:
 
-            return check_command_permission(
-                ctx
+            self.bot.remove_check(
+                self.website_permission_check
             )
 
-        except Exception as error:
+        except Exception:
 
-            print(
-                "❌ [WEBSITE] خطأ في فحص صلاحيات الأمر"
-            )
-
-            print(
-                f"❌ {type(error).__name__}: {error}"
-            )
-
-            # في حالة الخطأ نخلي الأمر يعمل
-            # حتى لا تتعطل الأوامر القديمة
-
-            return True
+            pass
 
 
 # =========================================================
-# Setup
+# تحميل الـ Cog
 # =========================================================
 
 async def setup(bot):
