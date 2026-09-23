@@ -1,14 +1,22 @@
+import os
 import re
 import discord
 from discord.ext import commands
+from pymongo import MongoClient
 
 
 # =========================================================
-# الإعدادات
+# إعدادات MongoDB (متوافقة مع النظام المركزي)
 # =========================================================
 
-ALLOWED_ROLE_ID = 1545608277159579718
-COMMAND_ROOM_ID = 1545601155952812044
+MONGO_URI = os.getenv("MONGO_URI")
+
+if MONGO_URI:
+    mongo_client = MongoClient(MONGO_URI)
+    db = mongo_client["discord_bot_db"]
+    settings_collection = db["website_command_settings"]
+else:
+    settings_collection = None
 
 
 # =========================================================
@@ -173,21 +181,42 @@ class RoleRoom(commands.Cog):
         self.bot = bot
 
     # =====================================================
-    # التحقق من المستخدم
+    # التحقق من صلاحيات الموقع للأوامر النصية بدون Prefix
     # =====================================================
 
-    def is_allowed(self, message):
-
-        # يجب أن يكون في الروم المحدد
-        if message.channel.id != COMMAND_ROOM_ID:
+    def check_permissions(self, message, command_name):
+        if not message.guild or not settings_collection:
             return False
 
-        # يجب أن يمتلك الرتبة المحددة
-        if not any(
-            role.id == ALLOWED_ROLE_ID
-            for role in message.author.roles
-        ):
+        setting = settings_collection.find_one({
+            "guild_id": str(message.guild.id),
+            "command_name": command_name
+        })
+
+        # إذا لم تقم بإعداد الأمر في الموقع، امنعه للحفاظ على الأمان وعدم فتحه للجميع
+        if not setting:
             return False
+
+        # إذا كان الإعداد غير مفعل من الموقع
+        if not setting.get("enabled", False):
+            return False
+
+        allowed_channels = {
+            str(c_id) for c_id in setting.get("channel_ids", [])
+        }
+        allowed_roles = {
+            str(r_id) for r_id in setting.get("role_ids", [])
+        }
+
+        # فحص الروم إذا كانت محددة في الموقع
+        if allowed_channels and str(message.channel.id) not in allowed_channels:
+            return False
+
+        # فحص الرتبة إذا كانت محددة في الموقع
+        if allowed_roles:
+            user_role_ids = {str(role.id) for role in message.author.roles}
+            if not (user_role_ids & allowed_roles):
+                return False
 
         return True
 
@@ -202,23 +231,6 @@ class RoleRoom(commands.Cog):
         if message.author.bot:
             return
 
-        # =================================================
-        # التحقق من الروم
-        # =================================================
-
-        if message.channel.id != COMMAND_ROOM_ID:
-            return
-
-        # =================================================
-        # التحقق من الرتبة
-        # =================================================
-
-        if not any(
-            role.id == ALLOWED_ROLE_ID
-            for role in message.author.roles
-        ):
-            return
-
         content = message.content.strip()
 
         # =================================================
@@ -228,6 +240,10 @@ class RoleRoom(commands.Cog):
         # =================================================
 
         if content.startswith("رتبة"):
+
+            # التحقق من صلاحيات الموقع للأمر "رتبة"
+            if not self.check_permissions(message, "رتبة"):
+                return
 
             parts = [
                 x.strip()
@@ -355,6 +371,10 @@ class RoleRoom(commands.Cog):
         # =================================================
 
         if content.startswith("سوي+روم"):
+
+            # التحقق من صلاحيات الموقع للأمر "سوي+روم"
+            if not self.check_permissions(message, "سوي+روم"):
+                return
 
             # =================================================
             # أخذ كل شيء بعد الأمر
