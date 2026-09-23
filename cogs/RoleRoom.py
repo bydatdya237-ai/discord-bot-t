@@ -15,8 +15,10 @@ if MONGO_URI:
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client["discord_bot_db"]
     settings_collection = db["website_command_settings"]
+    commands_collection = db["website_commands"]
 else:
     settings_collection = None
+    commands_collection = None
 
 
 # =========================================================
@@ -179,6 +181,26 @@ class RoleRoom(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._register_website_commands()
+
+    # =====================================================
+    # تسجيل الأوامر اليدوية لتظهر في الموقع
+    # =====================================================
+    def _register_website_commands(self):
+        if not commands_collection:
+            return
+        
+        manual_cmds = [
+            {"name": "رتبة", "description": "أمر إنشاء رتبة جديدة باللون المحدد", "aliases": []},
+            {"name": "سوي+روم", "description": "أمر إنشاء روم كتابي جديد", "aliases": []}
+        ]
+        
+        for cmd in manual_cmds:
+            commands_collection.update_one(
+                {"name": cmd["name"]},
+                {"$set": cmd},
+                upsert=True
+            )
 
     # =====================================================
     # التحقق من صلاحيات الموقع للأوامر النصية بدون Prefix
