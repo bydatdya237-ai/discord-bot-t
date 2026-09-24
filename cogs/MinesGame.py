@@ -35,9 +35,10 @@ STARTING_GOLD = 1000
 WIN_GOLD = 50
 LOSS_GOLD = 35
 
-# ---------------------------------------------------------
+
+# =========================================================
 # أمر ذهبي
-# ---------------------------------------------------------
+# =========================================================
 
 GOLDEN_MIN = 100
 GOLDEN_MAX = 200
@@ -140,8 +141,13 @@ class MinesView(discord.ui.View):
 
     def remove_active_game(self):
 
+        active_key = (
+            self.guild_id,
+            self.user_id
+        )
+
         self.cog.active_games.pop(
-            self.user_id,
+            active_key,
             None
         )
 
@@ -342,7 +348,7 @@ class MinesView(discord.ui.View):
                 child.label = "؟"
 
     # =====================================================
-    # إظهار الألغام عند الخسارة فقط
+    # إظهار الألغام عند الخسارة
     # =====================================================
 
     def reveal_all_mines(self):
@@ -468,7 +474,7 @@ class MinesView(discord.ui.View):
         try:
 
             # =================================================
-            # قراءة رقم الخانة
+            # قراءة الخانة
             # =================================================
 
             try:
@@ -518,10 +524,6 @@ class MinesView(discord.ui.View):
                 self.remove_active_game()
 
                 self.reveal_all_mines()
-
-                # -----------------------------------------
-                # خصم الذهب وحفظه
-                # -----------------------------------------
 
                 new_gold = await self.cog.change_gold(
                     self.guild_id,
@@ -590,10 +592,6 @@ class MinesView(discord.ui.View):
                 for child in self.children:
                     child.disabled = True
 
-                # -----------------------------------------
-                # إضافة الذهب وحفظه
-                # -----------------------------------------
-
                 new_gold = await self.cog.change_gold(
                     self.guild_id,
                     self.user_id,
@@ -618,12 +616,35 @@ class MinesView(discord.ui.View):
                 return
 
             # =================================================
-            # تحديث اللعبة
+            # استمرار اللعبة
             # =================================================
 
             await interaction.response.edit_message(
                 view=self
             )
+
+        except discord.HTTPException:
+
+            pass
+
+        except Exception as error:
+
+            print(
+                f"[MinesGame] Button Error: {error}"
+            )
+
+            try:
+
+                if not interaction.response.is_done():
+
+                    await interaction.response.send_message(
+                        "❌ حدث خطأ غير متوقع.",
+                        ephemeral=True
+                    )
+
+            except Exception:
+
+                pass
 
         finally:
 
@@ -733,11 +754,11 @@ class MinesGame(commands.Cog):
             }
         )
 
-        if setting:
+        if setting is not None:
             return setting
 
         # =================================================
-        # دعم البيانات القديمة
+        # دعم النظام القديم
         # =================================================
 
         setting = await self.website_command_settings.find_one(
@@ -777,7 +798,7 @@ class MinesGame(commands.Cog):
         )
 
         # =================================================
-        # إذا لم يوجد إعداد للأمر
+        # لا يوجد إعداد للموقع
         # =================================================
 
         if setting is None:
@@ -785,7 +806,7 @@ class MinesGame(commands.Cog):
             return True
 
         # =================================================
-        # الأمر متوقف
+        # الأمر معطل
         # =================================================
 
         if not setting.get(
@@ -837,8 +858,8 @@ class MinesGame(commands.Cog):
                 return False
 
             allowed_channel_ids = {
-                str(channel_id)
-                for channel_id in channel_ids
+                str(cid)
+                for cid in channel_ids
             }
 
             if str(channel_id) not in allowed_channel_ids:
@@ -873,7 +894,11 @@ class MinesGame(commands.Cog):
                         application.owner.id
                     )
 
-            except Exception:
+            except Exception as error:
+
+                print(
+                    f"[MinesGame] Owner Error: {error}"
+                )
 
                 return None
 
@@ -926,7 +951,7 @@ class MinesGame(commands.Cog):
             return document
 
         # =================================================
-        # إنشاء اللاعب لأول مرة
+        # إنشاء اللاعب
         # =================================================
 
         document = {
@@ -1129,7 +1154,7 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # وقت الانتظار للعبة
+    # حساب وقت انتظار اللعبة
     # =====================================================
 
     async def get_game_cooldown_remaining(
@@ -1195,26 +1220,29 @@ class MinesGame(commands.Cog):
         # تحكم الموقع
         # =================================================
 
-        allowed = await self.has_command_permission(
+        if not await self.has_command_permission(
             ctx.author,
             COMMAND_MINES,
             ctx.channel.id
-        )
+        ):
 
-        if not allowed:
             return
 
-        user_id = ctx.author.id
         guild_id = ctx.guild.id
+        user_id = ctx.author.id
 
         # =================================================
-        # منع أكثر من لعبة
+        # مفتاح اللعبة
         # =================================================
 
         active_key = (
             guild_id,
             user_id
         )
+
+        # =================================================
+        # منع لعبة ثانية
+        # =================================================
 
         if active_key in self.active_games:
 
@@ -1244,19 +1272,19 @@ class MinesGame(commands.Cog):
             return
 
         # =================================================
-        # تسجيل وقت اللعبة
+        # إنشاء بيانات اللاعب
         # =================================================
 
-        await self.set_last_game_time(
+        await self.get_user_data(
             guild_id,
             user_id
         )
 
         # =================================================
-        # إنشاء بيانات اللاعب
+        # تسجيل بداية اللعبة
         # =================================================
 
-        await self.get_balance(
+        await self.set_last_game_time(
             guild_id,
             user_id
         )
@@ -1335,17 +1363,12 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # =================================================
-        # تحكم الموقع
-        # =================================================
-
-        allowed = await self.has_command_permission(
+        if not await self.has_command_permission(
             ctx.author,
             COMMAND_WALLET,
             ctx.channel.id
-        )
+        ):
 
-        if not allowed:
             return
 
         gold = await self.get_balance(
@@ -1383,17 +1406,12 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # =================================================
-        # تحكم الموقع
-        # =================================================
-
-        allowed = await self.has_command_permission(
+        if not await self.has_command_permission(
             ctx.author,
             COMMAND_ADD,
             ctx.channel.id
-        )
+        ):
 
-        if not allowed:
             return
 
         # =================================================
@@ -1484,10 +1502,6 @@ class MinesGame(commands.Cog):
             gold_amount
         )
 
-        # =================================================
-        # النتيجة
-        # =================================================
-
         embed = discord.Embed(
             title="💰 تمت إضافة الذهب",
             description=(
@@ -1504,64 +1518,3 @@ class MinesGame(commands.Cog):
 
     # =====================================================
     # أمر ذهبي
-    # =====================================================
-
-    @commands.command(
-        name=COMMAND_GOLDEN
-    )
-    async def golden(
-        self,
-        ctx
-    ):
-
-        if ctx.guild is None:
-            return
-
-        # =================================================
-        # تحكم الموقع
-        # =================================================
-
-        allowed = await self.has_command_permission(
-            ctx.author,
-            COMMAND_GOLDEN,
-            ctx.channel.id
-        )
-
-        if not allowed:
-            return
-
-        guild_id = ctx.guild.id
-        user_id = ctx.author.id
-
-        # =================================================
-        # إنشاء بيانات اللاعب
-        # =================================================
-
-        await self.get_user_data(
-            guild_id,
-            user_id
-        )
-
-        guild_ids = self.guild_id_variants(
-            guild_id
-        )
-
-        now = datetime.now(
-            timezone.utc
-        )
-
-        cooldown_before = (
-            now
-            - timedelta(
-                seconds=GOLDEN_COOLDOWN
-            )
-        )
-
-        # =================================================
-        # محاولة حجز الاستخدام بشكل Atomic
-        # =================================================
-
-        document = await self.game_data.find_one_and_update(
-            {
-                "guild_id": {
-                    "$in": guild_ids
