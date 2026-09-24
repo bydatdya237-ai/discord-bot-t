@@ -1,33 +1,222 @@
+import os
+
 import discord
 from discord.ext import commands
 from discord import ui
+from pymongo import MongoClient
 
 
 # =========================================================
-# الإعدادات
+# MongoDB
 # =========================================================
 
-# الروم الوحيد الذي يعمل فيه أمر -طلب
-COMMAND_ROOM_ID = 1547686881116950698
+MONGO_URI = os.getenv("MONGO_URI")
 
-# الروم الذي تصل إليه الطلبات
-LOG_CHANNEL_ID = 1545187326093693038
+mongo = MongoClient(MONGO_URI)
+db = mongo["discord_bot_db"]
 
-# الرتب المسموح لها باستخدام الأمر والتحكم بالطلبات
-ALLOWED_ROLE_IDS = {
-    1544078469657530578,
-    1545851911121666108,
-    1544349016043692103,
-    1544426415766896690
-}
+command_settings_collection = db["website_command_settings"]
+
+
+# =========================================================
+# أسماء الإعدادات في الموقع
+# =========================================================
+
+COMMAND_NAME = "طلب"
+
+LOG_COMMAND_NAME = "طلب-سجل"
+
+
+# =========================================================
+# جلب إعدادات أمر معين
+# =========================================================
+
+def get_command_settings(guild_id, command_name):
+
+    settings = command_settings_collection.find_one({
+        "guild_id": str(guild_id),
+        "command_name": command_name
+    })
+
+    return settings
+
+
+# =========================================================
+# جلب إعدادات الطلب
+# =========================================================
+
+def get_order_settings(guild_id):
+
+    return get_command_settings(
+        guild_id,
+        COMMAND_NAME
+    )
+
+
+# =========================================================
+# جلب إعدادات سجل الطلبات
+# =========================================================
+
+def get_log_settings(guild_id):
+
+    return get_command_settings(
+        guild_id,
+        LOG_COMMAND_NAME
+    )
+
+
+# =========================================================
+# التحقق من أن الأمر مفعل
+# =========================================================
+
+def is_order_enabled(guild_id):
+
+    settings = get_order_settings(guild_id)
+
+    if not settings:
+        return False
+
+    return settings.get("enabled", True)
+
+
+# =========================================================
+# التحقق من روم استخدام الأمر
+# =========================================================
+
+def is_allowed_order_channel(ctx):
+
+    if ctx.guild is None:
+        return False
+
+    settings = get_order_settings(
+        ctx.guild.id
+    )
+
+    if not settings:
+        return False
+
+    if not settings.get("enabled", True):
+        return False
+
+    channel_ids = settings.get(
+        "channel_ids",
+        []
+    )
+
+    allowed_channels = {
+        str(channel_id)
+        for channel_id in channel_ids
+    }
+
+    return str(ctx.channel.id) in allowed_channels
 
 
 # =========================================================
 # التحقق من الرتبة
 # =========================================================
 
-def has_allowed_role(member: discord.Member) -> bool:
-    return any(role.id in ALLOWED_ROLE_IDS for role in member.roles)
+def has_allowed_role(member):
+
+    if not isinstance(member, discord.Member):
+        return False
+
+    settings = get_order_settings(
+        member.guild.id
+    )
+
+    if not settings:
+        return False
+
+    if not settings.get("enabled", True):
+        return False
+
+    role_ids = settings.get(
+        "role_ids",
+        []
+    )
+
+    allowed_roles = {
+        str(role_id)
+        for role_id in role_ids
+    }
+
+    return any(
+        str(role.id) in allowed_roles
+        for role in member.roles
+    )
+
+
+# =========================================================
+# جلب روم سجل الطلبات
+# =========================================================
+
+def get_log_channel_id(guild_id):
+
+    settings = get_log_settings(
+        guild_id
+    )
+
+    if not settings:
+        return None
+
+    if not settings.get("enabled", True):
+        return None
+
+    channel_ids = settings.get(
+        "channel_ids",
+        []
+    )
+
+    if not channel_ids:
+        return None
+
+    # أول روم يتم تحديده من الموقع
+    try:
+        return int(
+            str(channel_ids[0])
+        )
+    except (ValueError, TypeError):
+        return None
+
+
+# =========================================================
+# جلب روم سجل الطلبات
+# =========================================================
+
+async def get_log_channel(bot, guild):
+
+    channel_id = get_log_channel_id(
+        guild.id
+    )
+
+    if channel_id is None:
+        return None
+
+    channel = bot.get_channel(
+        channel_id
+    )
+
+    if channel is None:
+
+        try:
+            channel = await bot.fetch_channel(
+                channel_id
+            )
+
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException
+        ):
+            return None
+
+    # التأكد أن الروم داخل نفس السيرفر
+    if getattr(channel, "guild", None):
+
+        if channel.guild.id != guild.id:
+            return None
+
+    return channel
 
 
 # =========================================================
@@ -36,25 +225,33 @@ def has_allowed_role(member: discord.Member) -> bool:
 
 class OrderSelect(ui.Select):
 
-    def __init__(self, target_user: discord.Member):
+    def __init__(
+        self,
+        target_user
+    ):
+
         self.target_user = target_user
 
         options = [
+
             discord.SelectOption(
                 label="رفع طلب عملة",
                 description="رفع طلب خاص بالعملة",
                 emoji="💰"
             ),
+
             discord.SelectOption(
                 label="رفع طلب رتبة",
                 description="رفع طلب خاص بالرتبة",
                 emoji="👑"
             ),
+
             discord.SelectOption(
                 label="رفع طلب بنك",
                 description="رفع طلب خاص بالبنك",
                 emoji="🏦"
             ),
+
         ]
 
         super().__init__(
@@ -64,35 +261,97 @@ class OrderSelect(ui.Select):
             options=options
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction
+    ):
+
+        # =================================================
+        # التأكد من أن الإعدادات ما زالت مفعلة
+        # =================================================
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        if not is_order_enabled(
+            interaction.guild.id
+        ):
+
+            await interaction.response.send_message(
+                "❌ نظام الطلبات غير مفعل حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        if not has_allowed_role(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام نظام الطلبات.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # فتح نافذة السبب
+        # =================================================
 
         modal = OrderModal(
             order_type=self.values[0],
             target_user=self.target_user
         )
 
-        await interaction.response.send_modal(modal)
+        await interaction.response.send_modal(
+            modal
+        )
 
+
+# =========================================================
+# View اختيار نوع الطلب
+# =========================================================
 
 class OrderSelectView(ui.View):
 
-    def __init__(self, target_user: discord.Member):
-        super().__init__(timeout=300)
+    def __init__(
+        self,
+        target_user
+    ):
 
-        self.add_item(OrderSelect(target_user))
+        super().__init__(
+            timeout=300
+        )
+
+        self.add_item(
+            OrderSelect(
+                target_user
+            )
+        )
 
 
 # =========================================================
 # نافذة كتابة السبب
 # =========================================================
 
-class OrderModal(ui.Modal, title="تقديم طلب جديد"):
+class OrderModal(
+    ui.Modal,
+    title="تقديم طلب جديد"
+):
 
     def __init__(
         self,
-        order_type: str,
-        target_user: discord.Member
+        order_type,
+        target_user
     ):
+
         super().__init__()
 
         self.order_type = order_type
@@ -106,17 +365,74 @@ class OrderModal(ui.Modal, title="تقديم طلب جديد"):
             max_length=1000
         )
 
-        self.add_item(self.reason_input)
+        self.add_item(
+            self.reason_input
+        )
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(
+        self,
+        interaction
+    ):
 
-        log_channel = interaction.guild.get_channel(LOG_CHANNEL_ID)
+        # =================================================
+        # التأكد من السيرفر
+        # =================================================
 
-        if not log_channel:
+        if interaction.guild is None:
+
             await interaction.response.send_message(
-                "❌ عذراً، روم سجل الطلبات غير موجود.",
+                "❌ تعذر تحديد السيرفر.",
                 ephemeral=True
             )
+
+            return
+
+        # =================================================
+        # التأكد من تفعيل النظام
+        # =================================================
+
+        if not is_order_enabled(
+            interaction.guild.id
+        ):
+
+            await interaction.response.send_message(
+                "❌ نظام الطلبات غير مفعل حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # التأكد من صلاحية مقدم الطلب
+        # =================================================
+
+        if not has_allowed_role(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام نظام الطلبات.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # جلب روم السجل من الموقع
+        # =================================================
+
+        log_channel = await get_log_channel(
+            self._get_bot(interaction),
+            interaction.guild
+        )
+
+        if not log_channel:
+
+            await interaction.response.send_message(
+                "❌ لم يتم تحديد روم سجل الطلبات من الموقع.",
+                ephemeral=True
+            )
+
             return
 
         # =================================================
@@ -164,15 +480,48 @@ class OrderModal(ui.Modal, title="تقديم طلب جديد"):
             inline=False
         )
 
-        await log_channel.send(
-            embed=embed,
-            view=OrderActionView()
-        )
+        # =================================================
+        # إرسال الطلب
+        # =================================================
+
+        try:
+
+            await log_channel.send(
+                embed=embed,
+                view=OrderActionView()
+            )
+
+        except discord.Forbidden:
+
+            await interaction.response.send_message(
+                "❌ البوت لا يملك صلاحية إرسال الرسائل في روم سجل الطلبات.",
+                ephemeral=True
+            )
+
+            return
+
+        except discord.HTTPException:
+
+            await interaction.response.send_message(
+                "❌ حدث خطأ أثناء إرسال الطلب.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # نجاح
+        # =================================================
 
         await interaction.response.send_message(
-            f"✅ تم إرسال الطلب بنجاح للعضو {self.target_user.mention}",
+            f"✅ تم إرسال الطلب بنجاح للعضو "
+            f"{self.target_user.mention}",
             ephemeral=True
         )
+
+    def _get_bot(self, interaction):
+
+        return interaction.client
 
 
 # =========================================================
@@ -182,7 +531,10 @@ class OrderModal(ui.Modal, title="تقديم طلب جديد"):
 class OrderActionView(ui.View):
 
     def __init__(self):
-        super().__init__(timeout=None)
+
+        super().__init__(
+            timeout=None
+        )
 
     # =====================================================
     # تم التسليم
@@ -195,42 +547,83 @@ class OrderActionView(ui.View):
     )
     async def accept_order(
         self,
-        interaction: discord.Interaction,
-        button: ui.Button
+        interaction,
+        button
     ):
 
-        if not isinstance(interaction.user, discord.Member):
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ):
             return
 
-        if not has_allowed_role(interaction.user):
+        # =================================================
+        # التحقق من رتبة التحكم من الموقع
+        # =================================================
+
+        if not has_allowed_role(
+            interaction.user
+        ):
+
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية للتحكم بالطلبات!",
                 ephemeral=True
             )
+
+            return
+
+        # =================================================
+        # التأكد من وجود Embed
+        # =================================================
+
+        if not interaction.message.embeds:
+
+            await interaction.response.send_message(
+                "❌ تعذر قراءة بيانات الطلب.",
+                ephemeral=True
+            )
+
             return
 
         embed = interaction.message.embeds[0]
 
         embed.color = discord.Color.green()
 
-        for i, field in enumerate(embed.fields):
+        for i, field in enumerate(
+            embed.fields
+        ):
 
             if field.name == "حالة الطلب":
 
                 embed.set_field_at(
                     i,
                     name="حالة الطلب",
-                    value="✅ تم التسليم",
+                    value=(
+                        f"✅ تم التسليم\n"
+                        f"بواسطة: {interaction.user.mention}"
+                    ),
                     inline=False
                 )
 
-        await interaction.message.edit(
-            embed=embed,
-            view=None
-        )
+        try:
+
+            await interaction.message.edit(
+                embed=embed,
+                view=None
+            )
+
+        except discord.HTTPException:
+
+            await interaction.response.send_message(
+                "❌ حدث خطأ أثناء تحديث الطلب.",
+                ephemeral=True
+            )
+
+            return
 
         await interaction.response.send_message(
-            f"✅ تم قبول الطلب بواسطة {interaction.user.mention}",
+            f"✅ تم قبول الطلب بواسطة "
+            f"{interaction.user.mention}",
             ephemeral=True
         )
 
@@ -245,42 +638,83 @@ class OrderActionView(ui.View):
     )
     async def reject_order(
         self,
-        interaction: discord.Interaction,
-        button: ui.Button
+        interaction,
+        button
     ):
 
-        if not isinstance(interaction.user, discord.Member):
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ):
             return
 
-        if not has_allowed_role(interaction.user):
+        # =================================================
+        # التحقق من رتبة التحكم من الموقع
+        # =================================================
+
+        if not has_allowed_role(
+            interaction.user
+        ):
+
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية للتحكم بالطلبات!",
                 ephemeral=True
             )
+
+            return
+
+        # =================================================
+        # التأكد من وجود Embed
+        # =================================================
+
+        if not interaction.message.embeds:
+
+            await interaction.response.send_message(
+                "❌ تعذر قراءة بيانات الطلب.",
+                ephemeral=True
+            )
+
             return
 
         embed = interaction.message.embeds[0]
 
         embed.color = discord.Color.red()
 
-        for i, field in enumerate(embed.fields):
+        for i, field in enumerate(
+            embed.fields
+        ):
 
             if field.name == "حالة الطلب":
 
                 embed.set_field_at(
                     i,
                     name="حالة الطلب",
-                    value="❌ لم يتم التسليم",
+                    value=(
+                        f"❌ لم يتم التسليم\n"
+                        f"بواسطة: {interaction.user.mention}"
+                    ),
                     inline=False
                 )
 
-        await interaction.message.edit(
-            embed=embed,
-            view=None
-        )
+        try:
+
+            await interaction.message.edit(
+                embed=embed,
+                view=None
+            )
+
+        except discord.HTTPException:
+
+            await interaction.response.send_message(
+                "❌ حدث خطأ أثناء تحديث الطلب.",
+                ephemeral=True
+            )
+
+            return
 
         await interaction.response.send_message(
-            f"❌ تم رفض الطلب بواسطة {interaction.user.mention}",
+            f"❌ تم رفض الطلب بواسطة "
+            f"{interaction.user.mention}",
             ephemeral=True
         )
 
@@ -292,39 +726,68 @@ class OrderActionView(ui.View):
 class OrdersCog(commands.Cog):
 
     def __init__(self, bot):
+
         self.bot = bot
 
     # =====================================================
     # أمر -طلب
     # =====================================================
 
-    @commands.command(name="طلب")
+    @commands.command(
+        name="طلب"
+    )
     async def order_cmd(
         self,
         ctx,
         member: discord.Member = None
     ):
 
-        # -------------------------------------------------
-        # الروم المسموح فقط
-        # -------------------------------------------------
+        # =================================================
+        # يجب أن يكون داخل سيرفر
+        # =================================================
 
-        if ctx.channel.id != COMMAND_ROOM_ID:
+        if ctx.guild is None:
             return
 
-        # -------------------------------------------------
+        # =================================================
+        # التحقق من إعدادات الموقع
+        # =================================================
+
+        settings = get_order_settings(
+            ctx.guild.id
+        )
+
+        if not settings:
+            return
+
+        if not settings.get(
+            "enabled",
+            True
+        ):
+            return
+
+        # =================================================
+        # التحقق من الروم
+        # =================================================
+
+        if not is_allowed_order_channel(
+            ctx
+        ):
+            return
+
+        # =================================================
         # التحقق من الرتبة
-        # -------------------------------------------------
+        # =================================================
 
-        if not isinstance(ctx.author, discord.Member):
+        if not has_allowed_role(
+            ctx.author
+        ):
+
             return
 
-        if not has_allowed_role(ctx.author):
-            return
-
-        # -------------------------------------------------
+        # =================================================
         # إذا لم يتم تحديد شخص
-        # -------------------------------------------------
+        # =================================================
 
         if member is None:
 
@@ -336,17 +799,38 @@ class OrdersCog(commands.Cog):
                 delete_after=10
             )
 
-            # حذف رسالة الأمر
             try:
+
                 await ctx.message.delete()
+
             except discord.HTTPException:
                 pass
 
             return
 
-        # -------------------------------------------------
+        # =================================================
+        # منع البوتات
+        # =================================================
+
+        if member.bot:
+
+            await ctx.send(
+                "❌ لا يمكن تقديم طلبات للبوتات.",
+                delete_after=10
+            )
+
+            try:
+
+                await ctx.message.delete()
+
+            except discord.HTTPException:
+                pass
+
+            return
+
+        # =================================================
         # رسالة اختيار نوع الطلب
-        # -------------------------------------------------
+        # =================================================
 
         embed = discord.Embed(
             title="📄 رفع طلب",
@@ -359,15 +843,19 @@ class OrdersCog(commands.Cog):
 
         await ctx.send(
             embed=embed,
-            view=OrderSelectView(member)
+            view=OrderSelectView(
+                member
+            )
         )
 
-        # -------------------------------------------------
-        # حذف أمر -طلب @الشخص
-        # -------------------------------------------------
+        # =================================================
+        # حذف أمر -طلب
+        # =================================================
 
         try:
+
             await ctx.message.delete()
+
         except discord.HTTPException:
             pass
 
@@ -377,4 +865,34 @@ class OrdersCog(commands.Cog):
 # =========================================================
 
 async def setup(bot):
-    await bot.add_cog(OrdersCog(bot))
+
+    await bot.add_cog(
+        OrdersCog(bot)
+    )
+
+[/writing]
+
+ملاحظة مهمة جدًا
+
+في النسخة الأصلية كان عندك روم واحد فقط:
+
+COMMAND_ROOM_ID
+
+و:
+
+LOG_CHANNEL_ID
+
+الآن صار التحكم من الموقع، لذلك تحتاج في الموقع إعدادين:
+
+1. أمر "طلب"
+
+- "channel_ids" = الروم الذي يسمح باستخدام "-طلب"
+- "role_ids" = الرتب المسموح لها باستخدامه
+- "enabled" = تشغيل/إيقاف
+
+2. أمر "طلب-سجل"
+
+- "channel_ids" = روم استقبال الطلبات
+- "enabled" = تشغيل/إيقاف
+
+وبكذا كل سيرفر يقدر يختار الروم والرتب بنفسه، وما فيه IDs ثابتة مرتبطة بسيرفرك أنت.
