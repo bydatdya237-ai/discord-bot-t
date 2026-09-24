@@ -43,7 +43,7 @@ LUCK_COOLDOWN = 12 * 60 * 60
 COMMAND_MINES = "الغام"
 COMMAND_WALLET = "محفظتي"
 COMMAND_ADD = "ضيف"
-COMMAND_LUCK = "حظ"
+COMMAND_LUCK = "ذهبي"
 
 
 # =========================================================
