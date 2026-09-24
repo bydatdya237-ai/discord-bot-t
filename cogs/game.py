@@ -1,23 +1,41 @@
+import os
 import asyncio
+
 import discord
 from discord.ext import commands
 from discord import ui
 
+from motor.motor_asyncio import AsyncIOMotorClient
+
 
 # =========================================================
-# الإعدادات
+# الإعدادات العامة
 # =========================================================
 
 GAME_NAME = "خمن الماركة من الصورة"
 
-SETUP_ROOM_ID = 1548289588211097710
-GAME_ROOM_ID = 1545143660469813250
+MONGO_URI = os.getenv("MONGO_URI")
 
-ALLOWED_ROLE_IDS = {
-    1544078469657530578,
-    1545851911121666108,
-    1544426415766896690,
-}
+mongo_client = None
+db = None
+website_command_settings = None
+
+if MONGO_URI:
+    mongo_client = AsyncIOMotorClient(MONGO_URI)
+    db = mongo_client["discord_bot_db"]
+    website_command_settings = db["website_command_settings"]
+
+
+# =========================================================
+# أسماء الأوامر في الموقع
+# =========================================================
+
+COMMAND_CREATE = "انشاء-لعبة"
+COMMAND_EDIT = "تعديل"
+COMMAND_START = "ابدا"
+COMMAND_LEADERBOARD = "ط"
+COMMAND_RESET = "دن"
+COMMAND_FINISH = "انهي"
 
 
 # =========================================================
@@ -42,7 +60,6 @@ class GameSession:
 
         self.game_name = GAME_NAME
 
-        # رسالة لوحة التحكم الأصلية
         self.control_message = None
 
 
@@ -62,39 +79,217 @@ class GameCog(commands.Cog):
 
 
     # =====================================================
-    # التحقق من الروم
+    # Mongo - اختلاف نوع guild_id
     # =====================================================
 
-    def is_setup_room(self, ctx):
+    def guild_id_variants(self, guild_id):
 
-        return ctx.channel.id == SETUP_ROOM_ID
+        variants = [str(guild_id)]
 
+        try:
+            variants.append(int(guild_id))
+        except Exception:
+            pass
 
-    def is_game_room(self, ctx):
-
-        return ctx.channel.id == GAME_ROOM_ID
+        return variants
 
 
     # =====================================================
-    # التحقق من الرتب
+    # جلب إعداد الأمر من الموقع
     # =====================================================
 
-    def has_allowed_role(self, member):
+    async def get_command_setting(
+        self,
+        guild_id,
+        command_name
+    ):
 
-        if not isinstance(member, discord.Member):
+        if website_command_settings is None:
+            return None
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        # النظام الجديد
+        setting = await website_command_settings.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "command_name": str(
+                    command_name
+                )
+            }
+        )
+
+        if setting:
+            return setting
+
+        # دعم البيانات القديمة
+        setting = await website_command_settings.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "name": str(
+                    command_name
+                )
+            }
+        )
+
+        return setting
+
+
+    # =====================================================
+    # فحص صلاحية الأمر من الموقع
+    #
+    # إذا لا يوجد إعداد:
+    # الأمر متاح لأي عضو في السيرفر
+    #
+    # إذا يوجد إعداد:
+    # يتم تطبيق enabled + roles + channels
+    # =====================================================
+
+    async def has_command_permission(
+        self,
+        member,
+        command_name,
+        channel_id=None
+    ):
+
+        if not isinstance(
+            member,
+            discord.Member
+        ):
+
             return False
 
-        return any(
-            role.id in ALLOWED_ROLE_IDS
-            for role in member.roles
+
+        # السيرفر
+        guild = member.guild
+
+        setting = await self.get_command_setting(
+            guild.id,
+            command_name
         )
+
+
+        # =================================================
+        # لا يوجد إعداد في الموقع
+        #
+        # يعني الأمر مفتوح لأي عضو
+        # =================================================
+
+        if setting is None:
+
+            return True
+
+
+        # =================================================
+        # الأمر مغلق من الموقع
+        # =================================================
+
+        if not setting.get(
+            "enabled",
+            False
+        ):
+
+            return False
+
+
+        # =================================================
+        # الرتب
+        # =================================================
+
+        role_ids = setting.get(
+            "role_ids",
+            []
+        )
+
+
+        # إذا الموقع حدد رتب
+        if role_ids:
+
+            allowed_role_ids = {
+                str(role_id)
+                for role_id in role_ids
+            }
+
+            user_role_ids = {
+                str(role.id)
+                for role in member.roles
+            }
+
+            if not allowed_role_ids.intersection(
+                user_role_ids
+            ):
+
+                return False
+
+
+        # =================================================
+        # الرومات
+        # =================================================
+
+        channel_ids = setting.get(
+            "channel_ids",
+            []
+        )
+
+
+        # إذا الموقع حدد رومات
+        if channel_ids and channel_id is not None:
+
+            allowed_channel_ids = {
+                str(channel)
+                for channel in channel_ids
+            }
+
+            if str(channel_id) not in allowed_channel_ids:
+
+                return False
+
+
+        return True
+
+
+    # =====================================================
+    # صلاحية زر مرتبط بأمر
+    # =====================================================
+
+    async def check_button_permission(
+        self,
+        interaction,
+        command_name
+    ):
+
+        allowed = await self.has_command_permission(
+            interaction.user,
+            command_name,
+            interaction.channel_id
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام هذا الأمر.",
+                ephemeral=True
+            )
+
+            return False
+
+        return True
 
 
     # =====================================================
     # قفل العمليات
     # =====================================================
 
-    def get_lock(self, channel_id):
+    def get_lock(
+        self,
+        channel_id
+    ):
 
         if channel_id not in self.game_locks:
 
@@ -104,7 +299,7 @@ class GameCog(commands.Cog):
 
 
     # =====================================================
-    # إنشاء Embed لوحة التحكم
+    # Embed لوحة التحكم
     # =====================================================
 
     def create_control_embed(
@@ -119,8 +314,8 @@ class GameCog(commands.Cog):
                 "تم تجهيز فعالية جديدة بنجاح! 🔥\n\n"
 
                 "🖼️ **إضافة سؤال**\n"
-                "اضغط الزر، ثم أرسل صورة الماركة في هذا الروم، "
-                "وبعدها يتم حفظ الإجابة والصورة.\n\n"
+                "اضغط الزر، ثم أرسل صورة الماركة في الروم "
+                "المسموح من الموقع، وبعدها يتم حفظ الإجابة والصورة.\n\n"
 
                 "يمكنك إضافة عدد غير محدود من الصور.\n\n"
 
@@ -133,8 +328,7 @@ class GameCog(commands.Cog):
                 "`تعديل`\n\n"
 
                 "▶️ **بدء اللعبة**\n"
-                "بعد الانتهاء من إضافة جميع الصور، "
-                "اذهب إلى روم اللعبة واستخدم:\n"
+                "استخدم:\n"
                 "`ابدا`\n\n"
 
                 "🏆 **ترتيب النقاط**\n"
@@ -160,7 +354,7 @@ class GameCog(commands.Cog):
 
 
     # =====================================================
-    # تحديث رسالة لوحة التحكم بعد تعديل الاسم
+    # تحديث لوحة التحكم
     # =====================================================
 
     async def update_control_message(
@@ -205,26 +399,40 @@ class GameCog(commands.Cog):
     # إنشاء اللعبة
     # =====================================================
 
-    @commands.command(name="انشاء-لعبة")
-    async def create_game(self, ctx):
+    @commands.command(
+        name=COMMAND_CREATE
+    )
+    async def create_game(
+        self,
+        ctx
+    ):
 
-        if not self.is_setup_room(ctx):
+        if ctx.guild is None:
             return
 
-        if not self.has_allowed_role(ctx.author):
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_CREATE,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
+
 
         lock = self.get_lock(
-            SETUP_ROOM_ID
+            ctx.channel.id
         )
 
         if lock.locked():
             return
 
+
         async with lock:
 
+            # منع وجود أكثر من فعالية
             old_session = self.active_games.get(
-                GAME_ROOM_ID
+                ctx.guild.id
             )
 
             if old_session:
@@ -240,38 +448,42 @@ class GameCog(commands.Cog):
 
                 await ctx.send(
                     "⚠️ توجد فعالية محفوظة حالياً.\n"
-                    "استخدم `انهي` من روم اللعبة "
-                    "لحذفها ثم أنشئ فعالية جديدة.",
+                    "استخدم `انهي` لحذفها ثم أنشئ فعالية جديدة.",
                     delete_after=7
                 )
 
                 return
+
 
             session = GameSession(
                 ctx.author.id
             )
 
             self.active_games[
-                GAME_ROOM_ID
+                ctx.guild.id
             ] = session
+
 
             embed = self.create_control_embed(
                 session,
                 ctx.author.display_name
             )
 
+
             view = GameControlView(
                 self,
-                GAME_ROOM_ID
+                ctx.guild.id
             )
+
 
             message = await ctx.send(
                 embed=embed,
                 view=view
             )
 
-            # حفظ رسالة لوحة التحكم
+
             session.control_message = message
+
 
             try:
 
@@ -284,18 +496,10 @@ class GameCog(commands.Cog):
 
     # =====================================================
     # تعديل اسم اللعبة
-    #
-    # يدعم:
-    #
-    # تعديل
-    #
-    # أو:
-    #
-    # تعديل اسم اللعبة الجديد
     # =====================================================
 
     @commands.command(
-        name="تعديل",
+        name=COMMAND_EDIT,
         aliases=["تعديل-اسم"]
     )
     async def edit_game_name(
@@ -305,15 +509,24 @@ class GameCog(commands.Cog):
         new_name: str = None
     ):
 
-        if not self.is_setup_room(ctx):
+        if ctx.guild is None:
             return
 
-        if not self.has_allowed_role(ctx.author):
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_EDIT,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
+
 
         session = self.active_games.get(
-            GAME_ROOM_ID
+            ctx.guild.id
         )
+
 
         if not session:
 
@@ -325,6 +538,7 @@ class GameCog(commands.Cog):
 
             return
 
+
         if session.is_running:
 
             await ctx.send(
@@ -334,17 +548,11 @@ class GameCog(commands.Cog):
 
             return
 
-        # =================================================
-        # إذا كتب:
-        #
-        # تعديل اسم جديد
-        #
-        # يتم التعديل مباشرة
-        # =================================================
 
         if new_name:
 
             new_name = new_name.strip()
+
 
             if not new_name:
 
@@ -354,6 +562,7 @@ class GameCog(commands.Cog):
                 )
 
                 return
+
 
             if len(new_name) > 100:
 
@@ -365,14 +574,17 @@ class GameCog(commands.Cog):
 
                 return
 
+
             old_name = session.game_name
 
             session.game_name = new_name
+
 
             await self.update_control_message(
                 session,
                 ctx.guild
             )
+
 
             await ctx.send(
                 "✅ **تم تعديل اسم اللعبة بنجاح!**\n\n"
@@ -382,6 +594,7 @@ class GameCog(commands.Cog):
                 f"**{new_name}**",
                 delete_after=8
             )
+
 
             try:
 
@@ -393,11 +606,6 @@ class GameCog(commands.Cog):
 
             return
 
-        # =================================================
-        # إذا كتب فقط "تعديل"
-        #
-        # نرسل زر يفتح Modal
-        # =================================================
 
         embed = discord.Embed(
             title="✏️ تعديل اسم اللعبة",
@@ -409,16 +617,19 @@ class GameCog(commands.Cog):
             color=discord.Color.orange()
         )
 
+
         view = EditNameView(
             self,
             session
         )
+
 
         await ctx.send(
             embed=embed,
             view=view,
             delete_after=30
         )
+
 
         try:
 
@@ -433,27 +644,42 @@ class GameCog(commands.Cog):
     # بدء اللعبة
     # =====================================================
 
-    @commands.command(name="ابدا")
-    async def start_game_command(self, ctx):
+    @commands.command(
+        name=COMMAND_START
+    )
+    async def start_game_command(
+        self,
+        ctx
+    ):
 
-        if not self.is_game_room(ctx):
+        if ctx.guild is None:
             return
 
-        if not self.has_allowed_role(ctx.author):
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_START,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
+
 
         lock = self.get_lock(
-            GAME_ROOM_ID
+            ctx.channel.id
         )
 
         if lock.locked():
             return
 
+
         async with lock:
 
             session = self.active_games.get(
-                GAME_ROOM_ID
+                ctx.guild.id
             )
+
 
             if not session:
 
@@ -464,11 +690,14 @@ class GameCog(commands.Cog):
 
                 return
 
+
             if session.is_running:
                 return
 
+
             if session.starting:
                 return
+
 
             if not session.questions:
 
@@ -479,16 +708,19 @@ class GameCog(commands.Cog):
 
                 return
 
+
             session.starting = True
             session.is_running = True
             session.current_question_index = 0
             session.starting = False
+
 
             await ctx.send(
                 f"🚀 **بدأت لعبة {session.game_name}!**\n\n"
                 f"📚 عدد الصور: **{len(session.questions)}**\n"
                 "🔥 استعدوا للصورة الأولى..."
             )
+
 
         await self.run_game_loop(
             ctx.channel
@@ -499,18 +731,32 @@ class GameCog(commands.Cog):
     # ترتيب النقاط
     # =====================================================
 
-    @commands.command(name="ط")
-    async def leaderboard(self, ctx):
+    @commands.command(
+        name=COMMAND_LEADERBOARD
+    )
+    async def leaderboard(
+        self,
+        ctx
+    ):
 
-        if not self.is_game_room(ctx):
+        if ctx.guild is None:
             return
 
-        if not self.has_allowed_role(ctx.author):
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_LEADERBOARD,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
+
 
         session = self.active_games.get(
-            GAME_ROOM_ID
+            ctx.guild.id
         )
+
 
         if not session:
 
@@ -521,6 +767,7 @@ class GameCog(commands.Cog):
 
             return
 
+
         if not session.scores:
 
             await ctx.send(
@@ -530,11 +777,13 @@ class GameCog(commands.Cog):
 
             return
 
+
         sorted_scores = sorted(
             session.scores.items(),
             key=lambda item: item[1],
             reverse=True
         )
+
 
         medals = [
             "🥇",
@@ -542,7 +791,9 @@ class GameCog(commands.Cog):
             "🥉"
         ]
 
+
         description = []
+
 
         for index, (
             user_id,
@@ -555,6 +806,7 @@ class GameCog(commands.Cog):
                 user_id
             )
 
+
             if member:
 
                 name = member.mention
@@ -563,15 +815,18 @@ class GameCog(commands.Cog):
 
                 name = f"<@{user_id}>"
 
+
             medal = (
                 medals[index]
                 if index < 3
                 else "🔹"
             )
 
+
             description.append(
                 f"{medal} {name} — **{points} نقطة**"
             )
+
 
         embed = discord.Embed(
             title="🏆 ترتيب اللاعبين الحالي",
@@ -579,9 +834,11 @@ class GameCog(commands.Cog):
             color=discord.Color.gold()
         )
 
+
         embed.set_footer(
             text=f"عدد اللاعبين: {len(sorted_scores)}"
         )
+
 
         await ctx.send(
             embed=embed
@@ -589,30 +846,46 @@ class GameCog(commands.Cog):
 
 
     # =====================================================
-    # تصفير النقاط فقط
+    # تصفير النقاط
     # =====================================================
 
-    @commands.command(name="دن")
-    async def reset_scores(self, ctx):
+    @commands.command(
+        name=COMMAND_RESET
+    )
+    async def reset_scores(
+        self,
+        ctx
+    ):
 
-        if not self.is_game_room(ctx):
+        if ctx.guild is None:
             return
 
-        if not self.has_allowed_role(ctx.author):
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_RESET,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
+
 
         lock = self.get_lock(
-            GAME_ROOM_ID
+            ctx.channel.id
         )
+
 
         if lock.locked():
             return
 
+
         async with lock:
 
             session = self.active_games.get(
-                GAME_ROOM_ID
+                ctx.guild.id
             )
+
 
             if not session:
 
@@ -623,11 +896,14 @@ class GameCog(commands.Cog):
 
                 return
 
+
             players_count = len(
                 session.scores
             )
 
+
             session.scores.clear()
+
 
             await ctx.send(
                 "🔄 **تم تصفير النقاط بنجاح!**\n\n"
@@ -635,6 +911,7 @@ class GameCog(commands.Cog):
                 "🖼️ الصور والأسئلة **لم يتم حذفها**.\n\n"
                 "✅ يمكنك بدء اللعبة من جديد باستخدام `ابدا`."
             )
+
 
             try:
 
@@ -646,30 +923,46 @@ class GameCog(commands.Cog):
 
 
     # =====================================================
-    # إنهاء اللعبة بالكامل
+    # إنهاء اللعبة
     # =====================================================
 
-    @commands.command(name="انهي")
-    async def finish_game_command(self, ctx):
+    @commands.command(
+        name=COMMAND_FINISH
+    )
+    async def finish_game_command(
+        self,
+        ctx
+    ):
 
-        if not self.is_game_room(ctx):
+        if ctx.guild is None:
             return
 
-        if not self.has_allowed_role(ctx):
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_FINISH,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
+
 
         lock = self.get_lock(
-            GAME_ROOM_ID
+            ctx.channel.id
         )
+
 
         if lock.locked():
             return
 
+
         async with lock:
 
             session = self.active_games.get(
-                GAME_ROOM_ID
+                ctx.guild.id
             )
+
 
             if not session:
 
@@ -680,8 +973,10 @@ class GameCog(commands.Cog):
 
                 return
 
+
             session.is_running = False
             session.starting = False
+
 
             questions_count = len(
                 session.questions
@@ -691,16 +986,19 @@ class GameCog(commands.Cog):
                 session.scores
             )
 
+
             session.questions.clear()
             session.scores.clear()
 
+
             if self.active_games.get(
-                GAME_ROOM_ID
+                ctx.guild.id
             ) is session:
 
                 del self.active_games[
-                    GAME_ROOM_ID
+                    ctx.guild.id
                 ]
+
 
             await ctx.send(
                 "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
@@ -708,6 +1006,7 @@ class GameCog(commands.Cog):
                 f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n\n"
                 "✅ أصبح بإمكانك إنشاء فعالية جديدة."
             )
+
 
             try:
 
@@ -719,7 +1018,7 @@ class GameCog(commands.Cog):
 
 
     # =====================================================
-    # تشغيل الأسئلة
+    # تشغيل اللعبة
     # =====================================================
 
     async def run_game_loop(
@@ -727,12 +1026,16 @@ class GameCog(commands.Cog):
         channel
     ):
 
+        guild = channel.guild
+
         session = self.active_games.get(
-            GAME_ROOM_ID
+            guild.id
         )
+
 
         if not session:
             return
+
 
         for index, question in enumerate(
             session.questions
@@ -741,7 +1044,9 @@ class GameCog(commands.Cog):
             if not session.is_running:
                 break
 
+
             session.current_question_index = index
+
 
             question_number = index + 1
 
@@ -749,9 +1054,11 @@ class GameCog(commands.Cog):
                 session.questions
             )
 
+
             question_start_time = (
                 asyncio.get_running_loop().time()
             )
+
 
             embed = discord.Embed(
                 title=(
@@ -767,19 +1074,23 @@ class GameCog(commands.Cog):
                 color=discord.Color.gold()
             )
 
+
             embed.set_image(
                 url=question["image"]
             )
 
+
             await channel.send(
                 embed=embed
             )
+
 
             correct_answer = (
                 question["answer"]
                 .strip()
                 .casefold()
             )
+
 
             def check(message):
 
@@ -790,6 +1101,7 @@ class GameCog(commands.Cog):
                     == correct_answer
                 )
 
+
             try:
 
                 message = await self.bot.wait_for(
@@ -798,12 +1110,15 @@ class GameCog(commands.Cog):
                     check=check
                 )
 
+
                 elapsed = (
                     asyncio.get_running_loop().time()
                     - question_start_time
                 )
 
+
                 user_id = message.author.id
+
 
                 session.scores[user_id] = (
                     session.scores.get(
@@ -811,6 +1126,7 @@ class GameCog(commands.Cog):
                         0
                     ) + 1
                 )
+
 
                 await channel.send(
                     f"🎉 كفو {message.author.mention}!\n"
@@ -820,16 +1136,19 @@ class GameCog(commands.Cog):
                     f"**{session.scores[user_id]}**"
                 )
 
+
                 remaining_time = max(
                     0,
                     15.0 - elapsed
                 )
+
 
                 if remaining_time > 0:
 
                     await asyncio.sleep(
                         remaining_time
                     )
+
 
             except asyncio.TimeoutError:
 
@@ -840,21 +1159,25 @@ class GameCog(commands.Cog):
                     f"`{question['answer']}`"
                 )
 
+
             total_elapsed = (
                 asyncio.get_running_loop().time()
                 - question_start_time
             )
+
 
             remaining_after_processing = max(
                 0,
                 15.0 - total_elapsed
             )
 
+
             if remaining_after_processing > 0:
 
                 await asyncio.sleep(
                     remaining_after_processing
                 )
+
 
         if session.is_running:
 
@@ -865,6 +1188,7 @@ class GameCog(commands.Cog):
                 "📊 استخدموا `ط` لعرض الترتيب.\n"
                 "🔄 استخدموا `دن` لتصفير النقاط وإعادة اللعب."
             )
+
 
         session.is_running = False
         session.starting = False
@@ -888,11 +1212,13 @@ class GameCog(commands.Cog):
 
             return
 
+
         sorted_scores = sorted(
             session.scores.items(),
             key=lambda item: item[1],
             reverse=True
         )
+
 
         medals = [
             "🥇",
@@ -900,7 +1226,9 @@ class GameCog(commands.Cog):
             "🥉"
         ]
 
+
         description = []
+
 
         for index, (
             user_id,
@@ -913,6 +1241,7 @@ class GameCog(commands.Cog):
                 user_id
             )
 
+
             if member:
 
                 name = member.mention
@@ -921,15 +1250,18 @@ class GameCog(commands.Cog):
 
                 name = f"<@{user_id}>"
 
+
             medal = (
                 medals[index]
                 if index < 3
                 else "🔹"
             )
 
+
             description.append(
                 f"{medal} {name} — **{points} نقطة**"
             )
+
 
         embed = discord.Embed(
             title=(
@@ -939,6 +1271,7 @@ class GameCog(commands.Cog):
             description="\n".join(description),
             color=discord.Color.gold()
         )
+
 
         await channel.send(
             embed=embed
@@ -954,7 +1287,7 @@ class GameControlView(ui.View):
     def __init__(
         self,
         cog,
-        channel_id
+        guild_id
     ):
 
         super().__init__(
@@ -962,58 +1295,13 @@ class GameControlView(ui.View):
         )
 
         self.cog = cog
-        self.channel_id = channel_id
-
-
-    # =====================================================
-    # التحقق من الصلاحية
-    # =====================================================
-
-    async def check_permission(
-        self,
-        interaction
-    ):
-
-        if interaction.channel_id == SETUP_ROOM_ID:
-
-            if not self.cog.has_allowed_role(
-                interaction.user
-            ):
-
-                await interaction.response.send_message(
-                    "❌ ليس لديك صلاحية استخدام لوحة الألعاب.",
-                    ephemeral=True
-                )
-
-                return False
-
-            return True
-
-        if interaction.channel_id == GAME_ROOM_ID:
-
-            if not self.cog.has_allowed_role(
-                interaction.user
-            ):
-
-                await interaction.response.send_message(
-                    "❌ ليس لديك صلاحية استخدام لوحة الألعاب.",
-                    ephemeral=True
-                )
-
-                return False
-
-            return True
-
-        await interaction.response.send_message(
-            "❌ هذا الزر غير متاح هنا.",
-            ephemeral=True
-        )
-
-        return False
+        self.guild_id = guild_id
 
 
     # =====================================================
     # إضافة سؤال
+    #
+    # الصلاحية من أمر انشاء-لعبة
     # =====================================================
 
     @ui.button(
@@ -1026,34 +1314,28 @@ class GameControlView(ui.View):
         button
     ):
 
-        if interaction.channel_id != SETUP_ROOM_ID:
-
-            await interaction.response.send_message(
-                "❌ إضافة الأسئلة متاحة فقط في روم التجهيز.",
-                ephemeral=True
-            )
-
-            return
-
-        if not await self.check_permission(
-            interaction
+        if not await self.cog.check_button_permission(
+            interaction,
+            COMMAND_CREATE
         ):
 
             return
 
+
         session = self.cog.active_games.get(
-            GAME_ROOM_ID
+            self.guild_id
         )
+
 
         if not session:
 
             await interaction.response.send_message(
-                "❌ لا توجد جلسة لعبة حالياً.\n"
-                "استخدم `انشاء-لعبة` أولاً.",
+                "❌ لا توجد جلسة لعبة حالياً.",
                 ephemeral=True
             )
 
             return
+
 
         if session.is_running:
 
@@ -1064,11 +1346,13 @@ class GameControlView(ui.View):
 
             return
 
+
         modal = QuestionAnswerModal(
             self.cog,
             session,
             interaction.user.id
         )
+
 
         await interaction.response.send_modal(
             modal
@@ -1089,33 +1373,29 @@ class GameControlView(ui.View):
         button
     ):
 
-        if interaction.channel_id != GAME_ROOM_ID:
-
-            await interaction.response.send_message(
-                "❌ بدء اللعبة متاح فقط في روم اللعبة.",
-                ephemeral=True
-            )
-
-            return
-
-        if not await self.check_permission(
-            interaction
+        if not await self.cog.check_button_permission(
+            interaction,
+            COMMAND_START
         ):
 
             return
 
+
         lock = self.cog.get_lock(
-            GAME_ROOM_ID
+            interaction.channel.id
         )
+
 
         if lock.locked():
             return
 
+
         async with lock:
 
             session = self.cog.active_games.get(
-                GAME_ROOM_ID
+                self.guild_id
             )
+
 
             if not session:
 
@@ -1126,32 +1406,37 @@ class GameControlView(ui.View):
 
                 return
 
+
             if session.is_running:
                 return
+
 
             if session.starting:
                 return
 
+
             if not session.questions:
 
                 await interaction.response.send_message(
-                    "⚠️ أضف سؤالاً واحداً على الأقل "
-                    "من روم التجهيز.",
+                    "⚠️ أضف سؤالاً واحداً على الأقل.",
                     ephemeral=True
                 )
 
                 return
+
 
             session.starting = True
             session.is_running = True
             session.current_question_index = 0
             session.starting = False
 
+
             await interaction.response.send_message(
                 f"🚀 **بدأت لعبة {session.game_name}!**\n\n"
                 f"📚 عدد الصور: **{len(session.questions)}**\n"
                 "🔥 استعدوا للصورة الأولى..."
             )
+
 
         await self.cog.run_game_loop(
             interaction.channel
@@ -1172,24 +1457,18 @@ class GameControlView(ui.View):
         button
     ):
 
-        if interaction.channel_id != GAME_ROOM_ID:
-
-            await interaction.response.send_message(
-                "❌ إنهاء اللعبة متاح فقط في روم اللعبة.",
-                ephemeral=True
-            )
-
-            return
-
-        if not await self.check_permission(
-            interaction
+        if not await self.cog.check_button_permission(
+            interaction,
+            COMMAND_FINISH
         ):
 
             return
 
+
         session = self.cog.active_games.get(
-            GAME_ROOM_ID
+            self.guild_id
         )
+
 
         if not session:
 
@@ -1200,8 +1479,10 @@ class GameControlView(ui.View):
 
             return
 
+
         session.is_running = False
         session.starting = False
+
 
         questions_count = len(
             session.questions
@@ -1211,14 +1492,17 @@ class GameControlView(ui.View):
             session.scores
         )
 
+
         session.questions.clear()
         session.scores.clear()
 
-        if GAME_ROOM_ID in self.cog.active_games:
+
+        if self.guild_id in self.cog.active_games:
 
             del self.cog.active_games[
-                GAME_ROOM_ID
+                self.guild_id
             ]
+
 
         await interaction.response.send_message(
             "🗑️ **تم إنهاء الفعالية بنجاح!**\n\n"
@@ -1226,6 +1510,7 @@ class GameControlView(ui.View):
             f"🏆 تم تصفير نقاط **{players_count}** لاعب.\n\n"
             "✅ أصبح بالإمكان إنشاء فعالية جديدة."
         )
+
 
         try:
 
@@ -1266,29 +1551,18 @@ class EditNameView(ui.View):
         button
     ):
 
-        if interaction.channel_id != SETUP_ROOM_ID:
-
-            await interaction.response.send_message(
-                "❌ تعديل اسم اللعبة متاح فقط في روم التجهيز.",
-                ephemeral=True
-            )
-
-            return
-
-        if not self.cog.has_allowed_role(
-            interaction.user
+        if not await self.cog.check_button_permission(
+            interaction,
+            COMMAND_EDIT
         ):
 
-            await interaction.response.send_message(
-                "❌ ليس لديك صلاحية تعديل اسم اللعبة.",
-                ephemeral=True
-            )
-
             return
 
+
         session = self.cog.active_games.get(
-            GAME_ROOM_ID
+            interaction.guild.id
         )
+
 
         if not session:
 
@@ -1299,6 +1573,7 @@ class EditNameView(ui.View):
 
             return
 
+
         if session.is_running:
 
             await interaction.response.send_message(
@@ -1308,10 +1583,12 @@ class EditNameView(ui.View):
 
             return
 
+
         modal = EditGameNameModal(
             self.cog,
             session
         )
+
 
         await interaction.response.send_modal(
             modal
@@ -1338,6 +1615,7 @@ class EditGameNameModal(
         self.cog = cog
         self.session = session
 
+
         self.name_input = ui.TextInput(
             label="اسم اللعبة الجديد",
             placeholder="اكتب اسم اللعبة الجديد...",
@@ -1347,6 +1625,7 @@ class EditGameNameModal(
             max_length=100,
             style=discord.TextStyle.short
         )
+
 
         self.add_item(
             self.name_input
@@ -1358,7 +1637,26 @@ class EditGameNameModal(
         interaction
     ):
 
+        # إعادة فحص الصلاحية قبل تنفيذ التعديل
+        allowed = await self.cog.has_command_permission(
+            interaction.user,
+            COMMAND_EDIT,
+            interaction.channel_id
+        )
+
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ ليس لديك صلاحية استخدام هذا الأمر.",
+                ephemeral=True
+            )
+
+            return
+
+
         new_name = self.name_input.value.strip()
+
 
         if not new_name:
 
@@ -1369,15 +1667,17 @@ class EditGameNameModal(
 
             return
 
+
         old_name = self.session.game_name
 
         self.session.game_name = new_name
 
-        # تحديث رسالة لوحة التحكم الأصلية
+
         await self.cog.update_control_message(
             self.session,
             interaction.guild
         )
+
 
         await interaction.response.send_message(
             "✅ **تم تعديل اسم اللعبة بنجاح!**\n\n"
@@ -1413,6 +1713,7 @@ class QuestionAnswerModal(
 
         self.user_id = user_id
 
+
         self.answer_input = ui.TextInput(
             label="الماركة الصحيحة",
             placeholder="اكتب اسم الماركة صاحبة الصورة...",
@@ -1420,6 +1721,7 @@ class QuestionAnswerModal(
             max_length=200,
             style=discord.TextStyle.short
         )
+
 
         self.add_item(
             self.answer_input
@@ -1431,16 +1733,26 @@ class QuestionAnswerModal(
         interaction
     ):
 
-        if interaction.channel_id != SETUP_ROOM_ID:
+        # إعادة فحص الصلاحية قبل متابعة العملية
+        allowed = await self.cog.has_command_permission(
+            interaction.user,
+            COMMAND_CREATE,
+            interaction.channel_id
+        )
+
+
+        if not allowed:
 
             await interaction.response.send_message(
-                "❌ إضافة الأسئلة متاحة فقط في روم التجهيز.",
+                "❌ ليس لديك صلاحية إضافة أسئلة.",
                 ephemeral=True
             )
 
             return
 
+
         answer = self.answer_input.value.strip()
+
 
         if not answer:
 
@@ -1451,6 +1763,7 @@ class QuestionAnswerModal(
 
             return
 
+
         await interaction.response.send_message(
             "🖼️ **تم تجهيز السؤال!**\n\n"
             "الآن أرسل صورة الماركة في هذا الروم.\n"
@@ -1460,14 +1773,18 @@ class QuestionAnswerModal(
             ephemeral=True
         )
 
+
         def image_check(message):
 
             return (
-                message.channel.id == SETUP_ROOM_ID
+                message.guild is not None
+                and message.guild.id == interaction.guild.id
+                and message.channel.id == interaction.channel_id
                 and message.author.id == self.user_id
                 and not message.author.bot
                 and len(message.attachments) > 0
             )
+
 
         try:
 
@@ -1480,7 +1797,27 @@ class QuestionAnswerModal(
 
             return
 
+
+        # إعادة فحص الصلاحية بعد إرسال الصورة
+        allowed = await self.cog.has_command_permission(
+            interaction.user,
+            COMMAND_CREATE,
+            interaction.channel_id
+        )
+
+
+        if not allowed:
+
+            await interaction.followup.send(
+                "❌ لم تعد لديك صلاحية إضافة الأسئلة.",
+                ephemeral=True
+            )
+
+            return
+
+
         attachment = message.attachments[0]
+
 
         if not attachment.content_type:
 
@@ -1491,6 +1828,7 @@ class QuestionAnswerModal(
             )
 
             return
+
 
         if not attachment.content_type.startswith(
             "image/"
@@ -1504,6 +1842,7 @@ class QuestionAnswerModal(
 
             return
 
+
         self.session.questions.append(
             {
                 "image": attachment.url,
@@ -1511,9 +1850,11 @@ class QuestionAnswerModal(
             }
         )
 
+
         question_number = len(
             self.session.questions
         )
+
 
         await interaction.followup.send(
             "✅ **تم حفظ الصورة بنجاح!**\n"
