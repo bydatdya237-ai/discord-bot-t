@@ -204,9 +204,14 @@ def get_command_setting(
     return None
 
 
+# =========================================================
+# فحص صلاحية أمر الموقع
+# =========================================================
+
 def website_command_allowed(
     member: discord.Member,
-    command_names
+    command_names,
+    channel=None
 ) -> bool:
 
     """
@@ -229,6 +234,11 @@ def website_command_allowed(
 
     6. إذا تم تحديد رومات + رتب:
        ✅ يجب توفر الاثنين.
+
+    ملاحظة:
+    لا نستخدم member.channel لأن Member لا يحتوي على channel.
+    يتم تمرير الروم من ctx.channel أو interaction.channel
+    أو message.channel.
     """
 
     if not isinstance(member, discord.Member):
@@ -239,18 +249,13 @@ def website_command_allowed(
     # =====================================================
 
     setting = get_command_setting(
-
         member.guild.id,
-
         command_names
-
     )
 
     # =====================================================
     # لا يوجد إعداد في الموقع
-    #
-    # مهم:
-    # الأمر ممنوع من الأساس.
+    # الأمر ممنوع من الأساس
     # =====================================================
 
     if not setting:
@@ -298,7 +303,7 @@ def website_command_allowed(
     ]
 
     # =====================================================
-    # الأمر مفعّل ولكن لا توجد قيود
+    # الأمر مفعّل ولا توجد أي قيود
     # =====================================================
 
     if not channel_ids and not role_ids:
@@ -313,12 +318,13 @@ def website_command_allowed(
 
     if channel_ids:
 
+        # إذا تم تحديد رومات في الموقع
+        # يجب أن يكون لدينا channel لفحصه
+        if channel is None:
+            return False
+
         channel_allowed = (
-
-            str(member.channel.id)
-
-            in channel_ids
-
+            str(channel.id) in channel_ids
         )
 
     # =====================================================
@@ -344,13 +350,9 @@ def website_command_allowed(
     if channel_ids and role_ids:
 
         return (
-
             channel_allowed
-
             and
-
             role_allowed
-
         )
 
     # =====================================================
@@ -369,7 +371,7 @@ def website_command_allowed(
 
         return role_allowed
 
-    return True
+    return False
 
 
 # =========================================================
@@ -431,15 +433,13 @@ class IdeaModal(
             user,
             [
                 "ساهم"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
-
                 "❌ أمر المساهمات غير مفعّل حاليًا.",
-
                 ephemeral=True
-
             )
 
             return
@@ -538,14 +538,11 @@ class IdeaModal(
         if last_idea:
 
             idea_number = (
-
                 last_idea.get(
                     "idea_number",
                     0
                 )
-
                 + 1
-
             )
 
         else:
@@ -730,7 +727,7 @@ class IdeaDMView(ui.View):
     ):
 
         # =====================================================
-        # التحقق من تفعيل المساهمات
+        # التحقق من السيرفر
         # =====================================================
 
         if not interaction.guild:
@@ -745,11 +742,16 @@ class IdeaDMView(ui.View):
 
             return
 
+        # =====================================================
+        # التحقق من إعدادات الموقع
+        # =====================================================
+
         if not website_command_allowed(
             interaction.user,
             [
                 "ساهم"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
@@ -1144,7 +1146,8 @@ class IdeaReviewView(ui.View):
                 "ساهم",
                 "المساهمات",
                 "مراجعة المساهمات"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
@@ -1310,7 +1313,8 @@ class IdeaReviewView(ui.View):
                 "ساهم",
                 "المساهمات",
                 "مراجعة المساهمات"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
@@ -1380,7 +1384,8 @@ class IdeaReviewView(ui.View):
                 "ساهم",
                 "المساهمات",
                 "مراجعة المساهمات"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
@@ -1468,7 +1473,8 @@ class BroadcastConfirmView(ui.View):
             interaction.user,
             [
                 "ساهم"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
@@ -1565,7 +1571,8 @@ class BroadcastConfirmView(ui.View):
             interaction.user,
             [
                 "ساهم"
-            ]
+            ],
+            interaction.channel
         ):
 
             await interaction.response.send_message(
@@ -1642,7 +1649,8 @@ class IdeasCog(commands.Cog):
                 "تحديد لوق المساهمات",
                 "حدد-لوق-المساهمات",
                 "تحديد-لوق-المساهمات"
-            ]
+            ],
+            message.channel
         ):
 
             return
@@ -1676,7 +1684,6 @@ class IdeasCog(commands.Cog):
             print(
                 f"❌ خطأ أثناء تأكيد لوق المساهمات: {e}"
             )
-
 
     # =====================================================
     # استقبال أمر تحديد اللوق بدون بادئة
@@ -1728,7 +1735,6 @@ class IdeasCog(commands.Cog):
             message
         )
 
-
     # =====================================================
     # الأمر مع إمكانية تحديد روم
     # =====================================================
@@ -1755,7 +1761,8 @@ class IdeasCog(commands.Cog):
                 "تحديد لوق المساهمات",
                 "حدد-لوق-المساهمات",
                 "تحديد-لوق-المساهمات"
-            ]
+            ],
+            ctx.channel
         ):
 
             return
@@ -1791,7 +1798,6 @@ class IdeasCog(commands.Cog):
 
         )
 
-
     # =====================================================
     # عرض لوق المساهمات
     # =====================================================
@@ -1812,7 +1818,8 @@ class IdeasCog(commands.Cog):
             [
                 "لوق-المساهمات",
                 "لوق المساهمات"
-            ]
+            ],
+            ctx.channel
         ):
 
             return
@@ -1868,7 +1875,6 @@ class IdeasCog(commands.Cog):
 
         )
 
-
     # =====================================================
     # أمر ساهم
     # =====================================================
@@ -1893,7 +1899,8 @@ class IdeasCog(commands.Cog):
             ctx.author,
             [
                 "ساهم"
-            ]
+            ],
+            ctx.channel
         ):
 
             return
@@ -2047,7 +2054,6 @@ class IdeasCog(commands.Cog):
 
         )
 
-
     # =====================================================
     # إرسال DM لشخص
     # =====================================================
@@ -2144,7 +2150,6 @@ class IdeasCog(commands.Cog):
 
             return False
 
-
     # =====================================================
     # إرسال للجميع
     # =====================================================
@@ -2188,7 +2193,6 @@ class IdeasCog(commands.Cog):
 
         return sent, failed
 
-
     # =====================================================
     # إحصائيات المساهمات
     # =====================================================
@@ -2209,7 +2213,8 @@ class IdeasCog(commands.Cog):
             [
                 "حالة-المساهمات",
                 "حالة المساهمات"
-            ]
+            ],
+            ctx.channel
         ):
 
             return
