@@ -1,6 +1,9 @@
 import os
 import asyncio
 import traceback
+import inspect
+import re
+
 from datetime import datetime, timezone
 
 import discord
@@ -30,36 +33,20 @@ settings_collection = db["website_command_settings"]
 
 
 # =========================================================
-# الأوامر اليدوية
-#
-# هذه الأوامر موجودة داخل on_message في بعض الـCogs
-# لذلك Discord.py لا يضعها داخل bot.commands
-# =========================================================
-
-MANUAL_COMMANDS = [
-    {
-        "name": "رتبة",
-        "description": "إنشاء رتبة جديدة بالاسم واللون المحدد.",
-        "aliases": []
-    },
-    {
-        "name": "سوي+روم",
-        "description": "إنشاء روم كتابي جديد.",
-        "aliases": []
-    }
-]
-
-
-# =========================================================
-# أدوات مساعدة
+# أدوات عامة
 # =========================================================
 
 def normalize_command_name(name):
     """
-    يتأكد أن اسم الأمر محفوظ بدون:
+    إزالة بادئة الأمر:
     -
     .
     /
+
+    مثال:
+    -رصيد  -> رصيد
+    .رصيد  -> رصيد
+    /رصيد  -> رصيد
     """
 
     if not name:
@@ -74,139 +61,489 @@ def normalize_command_name(name):
 
 
 # =========================================================
-# حفظ الأوامر اليدوية
+# استخراج أمر من نص
 # =========================================================
 
-def save_manual_commands():
+def clean_detected_command(value):
 
-    print(
-        "🌐 [WEBSITE] بدء تسجيل الأوامر اليدوية..."
+    if not value:
+        return ""
+
+    value = str(value).strip()
+
+    value = normalize_command_name(value)
+
+    # إزالة أي شيء بعد مسافة
+    value = value.split()[0] if value else ""
+
+    # إزالة علامات شائعة
+    value = value.strip(
+        "\"'`()[]{}:;,"
     )
 
-    for command_data in MANUAL_COMMANDS:
+    return normalize_command_name(value)
 
-        command_name = normalize_command_name(
-            command_data["name"]
-        )
 
-        if not command_name:
-            continue
+# =========================================================
+# اكتشاف الأوامر اليدوية من on_message
+# =========================================================
 
-        commands_collection.update_one(
-            {
-                "name": command_name
-            },
-            {
-                "$set": {
-                    "name": command_name,
-                    "description": command_data["description"],
-                    "aliases": command_data.get(
-                        "aliases",
-                        []
-                    ),
-                    "manual": True,
-                    "updated_at": datetime.now(
-                        timezone.utc
+def detect_manual_commands(bot):
+
+    detected = {}
+
+    print(
+        "🔎 [WEBSITE] بدء اكتشاف الأوامر اليدوية..."
+    )
+
+    for cog_name, cog in bot.cogs.items():
+
+        try:
+
+            method = getattr(
+                cog,
+                "on_message",
+                None
+            )
+
+            if method is None:
+                continue
+
+            try:
+
+                source = inspect.getsource(
+                    method
+                )
+
+            except (
+                OSError,
+                TypeError
+            ):
+
+                continue
+
+            # -------------------------------------------------
+            # أنماط مثل:
+            #
+            # message.content.startswith("-رتبة")
+            # message.content.startswith(".رتبة")
+            # message.content.startswith("/رتبة")
+            # -------------------------------------------------
+
+            patterns = [
+
+                r'\.content\.startswith\(\s*["\']([\-\.\/][^"\']+)["\']',
+
+                r'\.content\s*==\s*["\']([\-\.\/][^"\']+)["\']',
+
+                r'\.content\.startswith\(\s*f?["\']([\-\.\/][^"\']+)["\']',
+
+            ]
+
+            for pattern in patterns:
+
+                matches = re.findall(
+                    pattern,
+                    source
+                )
+
+                for match in matches:
+
+                    command_name = clean_detected_command(
+                        match
                     )
-                }
-            },
-            upsert=True
-        )
 
-        print(
-            f"✅ [WEBSITE] تم تسجيل الأمر اليدوي: "
-            f"{command_name}"
-        )
+                    if not command_name:
+                        continue
+
+                    # -------------------------------------------------
+                    # استبعاد الأشياء التي ليست أوامر
+                    # -------------------------------------------------
+
+                    if command_name.lower() in {
+                        "http",
+                        "https",
+                    }:
+                        continue
+
+                    detected[command_name] = {
+                        "name": command_name,
+                        "description": (
+                            f"أمر يدوي من {cog_name}"
+                        ),
+                        "aliases": [],
+                        "manual": True,
+                        "auto_detected": True,
+                        "source_cog": cog_name
+                    }
+
+        except Exception as error:
+
+            print(
+                f"⚠️ [WEBSITE] فشل فحص Cog: "
+                f"{cog_name}"
+            )
+
+            print(
+                f"⚠️ {type(error).__name__}: "
+                f"{error}"
+            )
 
     print(
-        "✅ [WEBSITE] انتهى تسجيل الأوامر اليدوية"
+        f"🔎 [WEBSITE] تم اكتشاف "
+        f"{len(detected)} أمر يدوي تلقائيًا"
+    )
+
+    return list(
+        detected.values()
     )
 
 
 # =========================================================
-# حفظ أوامر البوت
+# اكتشاف أسماء إعدادات الأوامر من الـCogs
+#
+# مثال:
+#
+# COMMAND_NAME = "طلب"
+# LOG_COMMAND_NAME = "طلب-سجل"
+#
+# سيتم اكتشاف الاثنين تلقائيًا.
+# =========================================================
+
+def detect_command_setting_names(bot):
+
+    detected = {}
+
+    print(
+        "🔎 [WEBSITE] فحص إعدادات الأوامر داخل الـCogs..."
+    )
+
+    for cog_name, cog in bot.cogs.items():
+
+        try:
+
+            module = inspect.getmodule(
+                cog.__class__
+            )
+
+            if module is None:
+                continue
+
+            module_dict = vars(module)
+
+            for variable_name, value in module_dict.items():
+
+                if not isinstance(
+                    value,
+                    str
+                ):
+                    continue
+
+                variable_upper = str(
+                    variable_name
+                ).upper()
+
+                # -------------------------------------------------
+                # أي متغير اسمه يحتوي COMMAND_NAME
+                #
+                # مثل:
+                #
+                # COMMAND_NAME
+                # LOG_COMMAND_NAME
+                # TEST_COMMAND_NAME
+                # ADMIN_COMMAND_NAME
+                # -------------------------------------------------
+
+                if "COMMAND_NAME" not in variable_upper:
+                    continue
+
+                command_name = clean_detected_command(
+                    value
+                )
+
+                if not command_name:
+                    continue
+
+                detected[command_name] = {
+                    "name": command_name,
+                    "description": (
+                        f"إعداد مرتبط بالأوامر - {cog_name}"
+                    ),
+                    "aliases": [],
+                    "manual": True,
+                    "auto_detected": True,
+                    "setting_only": True,
+                    "source_cog": cog_name
+                }
+
+        except Exception as error:
+
+            print(
+                f"⚠️ [WEBSITE] فشل فحص إعدادات "
+                f"{cog_name}: {error}"
+            )
+
+    print(
+        f"🔎 [WEBSITE] تم اكتشاف "
+        f"{len(detected)} إعداد أمر تلقائيًا"
+    )
+
+    return list(
+        detected.values()
+    )
+
+
+# =========================================================
+# حفظ أمر في MongoDB
+# =========================================================
+
+def save_command(command_data):
+
+    command_name = normalize_command_name(
+        command_data.get("name")
+    )
+
+    if not command_name:
+        return
+
+    description = (
+        command_data.get("description")
+        or "لا يوجد وصف لهذا الأمر."
+    )
+
+    aliases = []
+
+    for alias in command_data.get(
+        "aliases",
+        []
+    ):
+
+        normalized = normalize_command_name(
+            alias
+        )
+
+        if normalized:
+            aliases.append(
+                normalized
+            )
+
+    update_data = {
+        "name": command_name,
+        "description": description,
+        "aliases": aliases,
+        "manual": bool(
+            command_data.get(
+                "manual",
+                False
+            )
+        ),
+        "updated_at": datetime.now(
+            timezone.utc
+        )
+    }
+
+    # -----------------------------------------------------
+    # بيانات إضافية للأوامر المكتشفة تلقائيًا
+    # -----------------------------------------------------
+
+    if command_data.get(
+        "auto_detected",
+        False
+    ):
+
+        update_data["auto_detected"] = True
+
+    if command_data.get(
+        "setting_only",
+        False
+    ):
+
+        update_data["setting_only"] = True
+
+    if command_data.get(
+        "source_cog"
+    ):
+
+        update_data["source_cog"] = (
+            command_data["source_cog"]
+        )
+
+    commands_collection.update_one(
+        {
+            "name": command_name
+        },
+        {
+            "$set": update_data
+        },
+        upsert=True
+    )
+
+
+# =========================================================
+# حفظ جميع أوامر البوت
 # =========================================================
 
 def save_bot_commands(bot):
 
     print(
-        "🌐 [WEBSITE] بدء قراءة أوامر البوت..."
+        "=================================================="
     )
 
-    commands_data = []
+    print(
+        "🌐 [WEBSITE] بدء مزامنة أوامر البوت..."
+    )
+
+    all_commands = {}
+
+    # =====================================================
+    # 1 - أوامر commands.py / @commands.command
+    # =====================================================
 
     for command in bot.commands:
 
-        if command.hidden:
-            continue
+        try:
 
-        if command.parent is not None:
-            continue
+            if command.hidden:
+                continue
+
+            if command.parent is not None:
+                continue
+
+            command_name = normalize_command_name(
+                command.name
+            )
+
+            if not command_name:
+                continue
+
+            description = (
+                command.help
+                or command.description
+                or "لا يوجد وصف لهذا الأمر."
+            )
+
+            aliases = [
+                normalize_command_name(alias)
+                for alias in command.aliases
+            ]
+
+            aliases = [
+                alias
+                for alias in aliases
+                if alias
+            ]
+
+            all_commands[command_name] = {
+                "name": command_name,
+                "description": description,
+                "aliases": aliases,
+                "manual": False,
+                "auto_detected": True,
+                "source_cog": (
+                    command.cog_name
+                    if getattr(
+                        command,
+                        "cog_name",
+                        None
+                    )
+                    else None
+                )
+            }
+
+        except Exception as error:
+
+            print(
+                f"⚠️ [WEBSITE] خطأ في قراءة أمر: "
+                f"{error}"
+            )
+
+    print(
+        f"📋 [WEBSITE] أوامر Discord المسجلة: "
+        f"{len(all_commands)}"
+    )
+
+    # =====================================================
+    # 2 - الأوامر اليدوية داخل on_message
+    # =====================================================
+
+    manual_commands = detect_manual_commands(
+        bot
+    )
+
+    for command_data in manual_commands:
 
         command_name = normalize_command_name(
-            command.name
+            command_data.get("name")
         )
 
         if not command_name:
             continue
 
-        description = (
-            command.help
-            or command.description
-            or "لا يوجد وصف لهذا الأمر."
-        )
+        # الأمر اليدوي لا يستبدل أمر Discord الحقيقي
+        if command_name not in all_commands:
 
-        commands_data.append({
-            "name": command_name,
-            "description": description,
-            "aliases": [
-                normalize_command_name(alias)
-                for alias in command.aliases
-            ],
-            "manual": False
-        })
+            all_commands[
+                command_name
+            ] = command_data
 
-    print(
-        f"📋 [WEBSITE] تم العثور على "
-        f"{len(commands_data)} أمر قياسي"
+    # =====================================================
+    # 3 - إعدادات الأوامر الخاصة بالـCogs
+    #
+    # مثال:
+    #
+    # LOG_COMMAND_NAME = "طلب-سجل"
+    # =====================================================
+
+    setting_commands = detect_command_setting_names(
+        bot
     )
 
-    # -----------------------------------------------------
-    # حفظ الأوامر القياسية
-    #
-    # مهم:
-    # لا نحذف الأوامر اليدوية
-    # -----------------------------------------------------
+    for command_data in setting_commands:
 
-    for command_data in commands_data:
-
-        commands_collection.update_one(
-            {
-                "name": command_data["name"]
-            },
-            {
-                "$set": {
-                    "name": command_data["name"],
-                    "description": command_data["description"],
-                    "aliases": command_data["aliases"],
-                    "manual": False,
-                    "updated_at": datetime.now(
-                        timezone.utc
-                    )
-                }
-            },
-            upsert=True
+        command_name = normalize_command_name(
+            command_data.get("name")
         )
 
-    # -----------------------------------------------------
-    # حفظ الأوامر اليدوية
-    # -----------------------------------------------------
+        if not command_name:
+            continue
 
-    save_manual_commands()
+        if command_name not in all_commands:
 
-    # -----------------------------------------------------
-    # تحديث إحصائية الأوامر
-    # -----------------------------------------------------
+            all_commands[
+                command_name
+            ] = command_data
+
+    # =====================================================
+    # حفظ كل شيء
+    # =====================================================
+
+    for command_data in all_commands.values():
+
+        try:
+
+            save_command(
+                command_data
+            )
+
+        except Exception as error:
+
+            print(
+                f"❌ [WEBSITE] فشل حفظ الأمر "
+                f"{command_data.get('name')}"
+            )
+
+            print(
+                f"❌ {type(error).__name__}: "
+                f"{error}"
+            )
+
+    # =====================================================
+    # إحصائيات
+    # =====================================================
+
+    total_commands = (
+        commands_collection.count_documents({})
+    )
 
     db["website_settings"].update_one(
         {
@@ -217,8 +554,7 @@ def save_bot_commands(bot):
                 "updated_at": datetime.now(
                     timezone.utc
                 ),
-                "commands_count":
-                    commands_collection.count_documents({})
+                "commands_count": total_commands
             }
         },
         upsert=True
@@ -234,7 +570,7 @@ def save_bot_commands(bot):
 
     print(
         f"📦 إجمالي الأوامر في MongoDB: "
-        f"{commands_collection.count_documents({})}"
+        f"{total_commands}"
     )
 
     print(
@@ -246,11 +582,16 @@ def save_bot_commands(bot):
 # تجهيز بيانات السيرفر
 # =========================================================
 
-def build_guild_data(guild, installer_id=None):
+def build_guild_data(
+    guild,
+    installer_id=None
+):
 
-    existing = guilds_collection.find_one({
-        "guild_id": str(guild.id)
-    })
+    existing = guilds_collection.find_one(
+        {
+            "guild_id": str(guild.id)
+        }
+    )
 
     if installer_id is None and existing:
 
@@ -277,8 +618,14 @@ def build_guild_data(guild, installer_id=None):
 
     channels.sort(
         key=lambda x: (
-            x.get("position", 0),
-            x.get("name", "").lower()
+            x.get(
+                "position",
+                0
+            ),
+            x.get(
+                "name",
+                ""
+            ).lower()
         )
     )
 
@@ -298,15 +645,25 @@ def build_guild_data(guild, installer_id=None):
 
     roles.sort(
         key=lambda x: (
-            -x.get("position", 0),
-            x.get("name", "").lower()
+            -x.get(
+                "position",
+                0
+            ),
+            x.get(
+                "name",
+                ""
+            ).lower()
         )
     )
 
     return {
         "guild_id": str(guild.id),
+
         "guild_name": guild.name,
-        "owner_id": str(guild.owner_id),
+
+        "owner_id": str(
+            guild.owner_id
+        ),
 
         "installer_id": (
             str(installer_id)
@@ -315,6 +672,7 @@ def build_guild_data(guild, installer_id=None):
         ),
 
         "channels": channels,
+
         "roles": roles,
 
         "updated_at": datetime.now(
@@ -327,7 +685,10 @@ def build_guild_data(guild, installer_id=None):
 # حفظ بيانات السيرفر
 # =========================================================
 
-def sync_guild(guild, installer_id=None):
+def sync_guild(
+    guild,
+    installer_id=None
+):
 
     try:
 
@@ -417,7 +778,9 @@ async def find_installer(guild):
             if not target:
                 continue
 
-            if target.id != self_bot_id(guild):
+            if target.id != self_bot_id(
+                guild
+            ):
                 continue
 
             user = getattr(
@@ -434,7 +797,9 @@ async def find_installer(guild):
                 f"{user} ({user.id})"
             )
 
-            return str(user.id)
+            return str(
+                user.id
+            )
 
     except discord.Forbidden:
 
@@ -469,9 +834,14 @@ def self_bot_id(guild):
 # Cog
 # =========================================================
 
-class WebsiteCommands(commands.Cog):
+class WebsiteCommands(
+    commands.Cog
+):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
@@ -486,10 +856,13 @@ class WebsiteCommands(commands.Cog):
         )
 
     # =====================================================
-    # التحقق من صلاحيات الموقع للأوامر العادية
+    # التحقق من صلاحيات الموقع
     # =====================================================
 
-    async def website_permission_check(self, ctx):
+    async def website_permission_check(
+        self,
+        ctx
+    ):
 
         if ctx.guild is None:
             return True
@@ -501,18 +874,47 @@ class WebsiteCommands(commands.Cog):
             ctx.command.qualified_name
         )
 
-        setting = settings_collection.find_one({
-            "guild_id": str(ctx.guild.id),
-            "command_name": command_name
-        })
+        # =================================================
+        # دعم command_name و name
+        # =================================================
+
+        setting = settings_collection.find_one(
+            {
+                "guild_id": str(
+                    ctx.guild.id
+                ),
+                "command_name": command_name
+            }
+        )
+
+        if not setting:
+
+            setting = settings_collection.find_one(
+                {
+                    "guild_id": str(
+                        ctx.guild.id
+                    ),
+                    "name": command_name
+                }
+            )
+
+        # =================================================
+        # إذا لا يوجد إعداد للموقع
+        # نخلي الأمر يعمل طبيعي
+        # =================================================
 
         if not setting:
             return True
+
+        # =================================================
+        # إذا الأمر معطل
+        # =================================================
 
         if not setting.get(
             "enabled",
             False
         ):
+
             return True
 
         allowed_channels = {
@@ -537,7 +939,9 @@ class WebsiteCommands(commands.Cog):
 
         if allowed_channels:
 
-            if str(ctx.channel.id) not in allowed_channels:
+            if str(
+                ctx.channel.id
+            ) not in allowed_channels:
 
                 print(
                     "🚫 [WEBSITE] الأمر مرفوض بسبب الروم"
@@ -549,7 +953,8 @@ class WebsiteCommands(commands.Cog):
                 )
 
                 print(
-                    f"📌 الأمر: {command_name}"
+                    f"📌 الأمر: "
+                    f"{command_name}"
                 )
 
                 print(
@@ -586,7 +991,8 @@ class WebsiteCommands(commands.Cog):
                 )
 
                 print(
-                    f"📌 الأمر: {command_name}"
+                    f"📌 الأمر: "
+                    f"{command_name}"
                 )
 
                 return False
@@ -598,7 +1004,9 @@ class WebsiteCommands(commands.Cog):
     # =====================================================
 
     @commands.Cog.listener()
-    async def on_ready(self):
+    async def on_ready(
+        self
+    ):
 
         if self.updated:
             return
@@ -611,9 +1019,9 @@ class WebsiteCommands(commands.Cog):
 
         await asyncio.sleep(5)
 
-        # -------------------------------------------------
-        # حفظ جميع الأوامر
-        # -------------------------------------------------
+        # =================================================
+        # مزامنة جميع الأوامر
+        # =================================================
 
         try:
 
@@ -638,9 +1046,9 @@ class WebsiteCommands(commands.Cog):
 
             traceback.print_exc()
 
-        # -------------------------------------------------
+        # =================================================
         # تحديث جميع السيرفرات
-        # -------------------------------------------------
+        # =================================================
 
         print(
             "🌐 [WEBSITE] بدء مزامنة السيرفرات..."
@@ -650,9 +1058,13 @@ class WebsiteCommands(commands.Cog):
 
             try:
 
-                existing = guilds_collection.find_one({
-                    "guild_id": str(guild.id)
-                })
+                existing = guilds_collection.find_one(
+                    {
+                        "guild_id": str(
+                            guild.id
+                        )
+                    }
+                )
 
                 installer_id = None
 
@@ -688,7 +1100,10 @@ class WebsiteCommands(commands.Cog):
     # =====================================================
 
     @commands.Cog.listener()
-    async def on_guild_join(self, guild):
+    async def on_guild_join(
+        self,
+        guild
+    ):
 
         print(
             "🎉 [WEBSITE] دخل البوت سيرفرًا جديدًا"
@@ -713,7 +1128,8 @@ class WebsiteCommands(commands.Cog):
         except Exception as error:
 
             print(
-                f"⚠️ فشل معرفة المثبت: {error}"
+                f"⚠️ فشل معرفة المثبت: "
+                f"{error}"
             )
 
         sync_guild(
@@ -791,10 +1207,12 @@ class WebsiteCommands(commands.Cog):
             )
 
     # =====================================================
-    # تنظيف عند إزالة الـ Cog
+    # تنظيف عند إزالة Cog
     # =====================================================
 
-    def cog_unload(self):
+    def cog_unload(
+        self
+    ):
 
         try:
 
@@ -808,10 +1226,12 @@ class WebsiteCommands(commands.Cog):
 
 
 # =========================================================
-# تحميل الـ Cog
+# Setup
 # =========================================================
 
-async def setup(bot):
+async def setup(
+    bot
+):
 
     await bot.add_cog(
         WebsiteCommands(bot)
