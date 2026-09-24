@@ -1,16 +1,28 @@
 import asyncio
 import random
 
+from datetime import datetime, timezone, timedelta
+
 import discord
 from discord.ext import commands
 
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
+
 
 # =========================================================
-# الاعدادات
+# إعدادات MongoDB
 # =========================================================
 
-GAME_ROOM_ID = 1547418557032308830
-GOLD_ROLE_ID = 1545608277159579718
+MONGO_URI = __import__("os").getenv("MONGO_URI")
+
+if not MONGO_URI:
+    raise RuntimeError("❌ MONGO_URI غير موجود في Environment Variables.")
+
+
+# =========================================================
+# إعدادات اللعبة
+# =========================================================
 
 GAME_COOLDOWN = 30
 GAME_TIMEOUT = 120
@@ -19,17 +31,41 @@ STARTING_GOLD = 1000
 WIN_GOLD = 50
 LOSS_GOLD = 35
 
+LUCK_MIN_GOLD = 100
+LUCK_MAX_GOLD = 200
+LUCK_COOLDOWN = 12 * 60 * 60
+
 
 # =========================================================
-# لعبة الالغام
+# أسماء الأوامر
+# =========================================================
+
+COMMAND_MINES = "الغام"
+COMMAND_WALLET = "محفظتي"
+COMMAND_ADD = "ضيف"
+COMMAND_LUCK = "حظ"
+
+
+# =========================================================
+# Mines View
 # =========================================================
 
 class MinesView(discord.ui.View):
 
-    def __init__(self, cog, user_id):
-        super().__init__(timeout=GAME_TIMEOUT)
+    def __init__(
+        self,
+        cog,
+        guild_id,
+        user_id
+    ):
+
+        super().__init__(
+            timeout=GAME_TIMEOUT
+        )
 
         self.cog = cog
+
+        self.guild_id = guild_id
         self.user_id = user_id
 
         self.total_cells = 25
@@ -38,6 +74,7 @@ class MinesView(discord.ui.View):
         self.game_over = False
         self.revealed = set()
         self.processing = False
+
         self.message = None
 
         self.mines = set()
@@ -47,7 +84,10 @@ class MinesView(discord.ui.View):
                 random.randint(0, 24)
             )
 
-        # انشاء شبكة 5x5
+        # =================================================
+        # إنشاء شبكة 5x5
+        # =================================================
+
         for index in range(25):
 
             button = discord.ui.Button(
@@ -77,7 +117,7 @@ class MinesView(discord.ui.View):
         return discord.ButtonStyle.danger
 
     # =====================================================
-    # حذف اللعبة من الالعاب النشطة
+    # حذف اللعبة من الألعاب النشطة
     # =====================================================
 
     def remove_active_game(self):
@@ -88,7 +128,7 @@ class MinesView(discord.ui.View):
         )
 
     # =====================================================
-    # حساب عدد الالغام حول خانة
+    # حساب الألغام حول الخانة
     # =====================================================
 
     def get_nearby_mines(self, index):
@@ -116,7 +156,6 @@ class MinesView(discord.ui.View):
                 )
 
                 if nearby_index in self.mines:
-
                     nearby_mines += 1
 
         return nearby_mines
@@ -191,8 +230,6 @@ class MinesView(discord.ui.View):
                 current_index
             )
 
-            # اذا كانت الخانة 0
-            # نفتح المنطقة الآمنة المتصلة بها
             if nearby_mines == 0:
 
                 for neighbor in self.get_neighbors(
@@ -212,7 +249,7 @@ class MinesView(discord.ui.View):
         return revealed_now
 
     # =====================================================
-    # تحديث شكل الازرار
+    # تحديث الأزرار
     # =====================================================
 
     def update_buttons(self):
@@ -228,11 +265,13 @@ class MinesView(discord.ui.View):
                     child.custom_id.split("_")[1]
                 )
 
-            except (ValueError, IndexError):
+            except (
+                ValueError,
+                IndexError
+            ):
 
                 continue
 
-            # خانة تم كشفها
             if index in self.revealed:
 
                 child.disabled = True
@@ -272,7 +311,7 @@ class MinesView(discord.ui.View):
                 child.label = "؟"
 
     # =====================================================
-    # اظهار الالغام عند الخسارة فقط
+    # إظهار الألغام عند الخسارة
     # =====================================================
 
     def reveal_all_mines(self):
@@ -290,7 +329,10 @@ class MinesView(discord.ui.View):
                     child.custom_id.split("_")[1]
                 )
 
-            except (ValueError, IndexError):
+            except (
+                ValueError,
+                IndexError
+            ):
 
                 continue
 
@@ -315,7 +357,6 @@ class MinesView(discord.ui.View):
 
         self.remove_active_game()
 
-        # عند انتهاء الوقت لا نكشف الالغام
         for child in self.children:
             child.disabled = True
 
@@ -325,7 +366,7 @@ class MinesView(discord.ui.View):
         embed = discord.Embed(
             title="💣 لعبة الألغام",
             description=(
-                "⏰ انتهى الوقت!\n\n"
+                "⏰ **انتهى الوقت!**\n\n"
                 "انتهت اللعبة بسبب انتهاء الوقت.\n"
                 "لم يتم إضافة أو خصم أي ذهب."
             ),
@@ -340,16 +381,21 @@ class MinesView(discord.ui.View):
             )
 
         except discord.HTTPException:
-
             pass
 
     # =====================================================
     # الضغط على الخانة
     # =====================================================
 
-    async def button_callback(self, interaction):
+    async def button_callback(
+        self,
+        interaction
+    ):
 
-        # التأكد من صاحب اللعبة
+        # =================================================
+        # التأكد من اللاعب
+        # =================================================
+
         if interaction.user.id != self.user_id:
 
             await interaction.response.send_message(
@@ -359,7 +405,10 @@ class MinesView(discord.ui.View):
 
             return
 
+        # =================================================
         # اللعبة منتهية
+        # =================================================
+
         if self.game_over:
 
             await interaction.response.send_message(
@@ -369,7 +418,10 @@ class MinesView(discord.ui.View):
 
             return
 
+        # =================================================
         # منع الضغط المتزامن
+        # =================================================
+
         if self.processing:
 
             await interaction.response.send_message(
@@ -384,7 +436,7 @@ class MinesView(discord.ui.View):
         try:
 
             # =================================================
-            # قراءة رقم الخانة
+            # قراءة الخانة
             # =================================================
 
             try:
@@ -410,7 +462,10 @@ class MinesView(discord.ui.View):
 
                 return
 
-            # الخانة مفتوحة مسبقا
+            # =================================================
+            # الخانة مفتوحة
+            # =================================================
+
             if index in self.revealed:
 
                 await interaction.response.send_message(
@@ -421,7 +476,7 @@ class MinesView(discord.ui.View):
                 return
 
             # =================================================
-            # اذا كانت لغم
+            # لغم
             # =================================================
 
             if index in self.mines:
@@ -430,28 +485,24 @@ class MinesView(discord.ui.View):
 
                 self.remove_active_game()
 
-                # عند الخسارة فقط تظهر الالغام
                 self.reveal_all_mines()
 
-                current_gold = self.cog.get_balance(
-                    self.user_id
-                )
+                # -----------------------------------------
+                # خصم الذهب وحفظه في MongoDB
+                # -----------------------------------------
 
-                new_gold = max(
-                    0,
-                    current_gold - LOSS_GOLD
+                new_gold = await self.cog.change_gold(
+                    self.guild_id,
+                    self.user_id,
+                    -LOSS_GOLD
                 )
-
-                self.cog.user_balances[
-                    self.user_id
-                ] = new_gold
 
                 embed = discord.Embed(
                     title="💥 انفجر اللغم!",
                     description=(
                         "💣 للأسف اخترت لغماً.\n\n"
-                        f"💰 الذهب المخصوم: -{LOSS_GOLD:,}\n"
-                        f"💳 رصيدك الحالي: {new_gold:,}"
+                        f"💰 الذهب المخصوم: **-{LOSS_GOLD:,}**\n"
+                        f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
                     ),
                     color=0xE74C3C
                 )
@@ -471,7 +522,6 @@ class MinesView(discord.ui.View):
                 index
             )
 
-            # اذا كانت 0 نفتح المنطقة تلقائيا
             if nearby_mines == 0:
 
                 self.reveal_safe_area(
@@ -480,12 +530,14 @@ class MinesView(discord.ui.View):
 
             else:
 
-                # اذا كانت 1 او اكثر نفتح الخانة فقط
                 self.revealed.add(
                     index
                 )
 
-            # تحديث الواجهة
+            # =================================================
+            # تحديث الأزرار
+            # =================================================
+
             self.update_buttons()
 
             # =================================================
@@ -503,29 +555,25 @@ class MinesView(discord.ui.View):
 
                 self.remove_active_game()
 
-                # عند الفوز لا نكشف مواقع الالغام
                 for child in self.children:
                     child.disabled = True
 
-                current_gold = self.cog.get_balance(
-                    self.user_id
-                )
+                # -----------------------------------------
+                # إضافة الذهب وحفظه
+                # -----------------------------------------
 
-                new_gold = (
-                    current_gold
-                    + WIN_GOLD
+                new_gold = await self.cog.change_gold(
+                    self.guild_id,
+                    self.user_id,
+                    WIN_GOLD
                 )
-
-                self.cog.user_balances[
-                    self.user_id
-                ] = new_gold
 
                 embed = discord.Embed(
                     title="🏆 فوز!",
                     description=(
-                        "🎉 مبروك! لقد فتحت جميع الخانات الآمنة.\n\n"
-                        f"💰 الجائزة: +{WIN_GOLD:,}\n"
-                        f"💳 رصيدك الحالي: {new_gold:,}"
+                        "🎉 **مبروك! لقد فتحت جميع الخانات الآمنة.**\n\n"
+                        f"💰 الجائزة: **+{WIN_GOLD:,} ذهب**\n"
+                        f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
                     ),
                     color=0x2ECC71
                 )
@@ -560,52 +608,574 @@ class MinesGame(commands.Cog):
 
         self.bot = bot
 
-        self.user_balances = {}
+        # ================================================
+        # MongoDB
+        # ================================================
+
+        self.mongo_client = AsyncIOMotorClient(
+            MONGO_URI
+        )
+
+        self.db = self.mongo_client[
+            "discord_bot_db"
+        ]
+
+        self.game_data = self.db[
+            "mines_game_data"
+        ]
+
+        self.website_command_settings = self.db[
+            "website_command_settings"
+        ]
+
+        # ================================================
+        # الألعاب النشطة
+        # ================================================
 
         self.active_games = {}
 
-        self.last_game_time = {}
+        # ================================================
+        # كاش صاحب البوت
+        # ================================================
+
+        self.bot_owner_id = None
+
+        self.owner_lock = asyncio.Lock()
 
     # =====================================================
-    # جلب الرصيد
+    # Guild ID variants
     # =====================================================
 
-    def get_balance(self, user_id):
+    def guild_id_variants(
+        self,
+        guild_id
+    ):
 
-        if user_id not in self.user_balances:
-
-            self.user_balances[
-                user_id
-            ] = STARTING_GOLD
-
-        return self.user_balances[
-            user_id
+        variants = [
+            str(guild_id)
         ]
 
+        try:
+
+            variants.append(
+                int(guild_id)
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
+
+            pass
+
+        return variants
+
     # =====================================================
-    # التأكد من الروم
+    # جلب إعداد الأمر من الموقع
     # =====================================================
 
-    def is_game_channel(self, ctx):
+    async def get_command_setting(
+        self,
+        guild_id,
+        command_name
+    ):
 
-        return (
-            ctx.channel.id
-            == GAME_ROOM_ID
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        # -----------------------------------------------
+        # النظام الجديد
+        # -----------------------------------------------
+
+        setting = await self.website_command_settings.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "command_name": str(
+                    command_name
+                )
+            }
+        )
+
+        if setting:
+            return setting
+
+        # -----------------------------------------------
+        # دعم النظام القديم
+        # -----------------------------------------------
+
+        setting = await self.website_command_settings.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "name": str(
+                    command_name
+                )
+            }
+        )
+
+        return setting
+
+    # =====================================================
+    # صلاحية الأمر من الموقع
+    # =====================================================
+
+    async def has_command_permission(
+        self,
+        member,
+        command_name,
+        channel_id=None
+    ):
+
+        if not isinstance(
+            member,
+            discord.Member
+        ):
+
+            return False
+
+        setting = await self.get_command_setting(
+            member.guild.id,
+            command_name
+        )
+
+        # -----------------------------------------------
+        # لا يوجد إعداد للموقع
+        # -----------------------------------------------
+
+        if setting is None:
+
+            return True
+
+        # -----------------------------------------------
+        # الأمر متوقف
+        # -----------------------------------------------
+
+        if not setting.get(
+            "enabled",
+            False
+        ):
+
+            return False
+
+        # -----------------------------------------------
+        # الرتب
+        # -----------------------------------------------
+
+        role_ids = setting.get(
+            "role_ids",
+            []
+        )
+
+        if role_ids:
+
+            allowed_role_ids = {
+                str(role_id)
+                for role_id in role_ids
+            }
+
+            user_role_ids = {
+                str(role.id)
+                for role in member.roles
+            }
+
+            if not allowed_role_ids.intersection(
+                user_role_ids
+            ):
+
+                return False
+
+        # -----------------------------------------------
+        # الرومات
+        # -----------------------------------------------
+
+        channel_ids = setting.get(
+            "channel_ids",
+            []
+        )
+
+        if channel_ids and channel_id is not None:
+
+            allowed_channel_ids = {
+                str(channel)
+                for channel in channel_ids
+            }
+
+            if str(channel_id) not in allowed_channel_ids:
+
+                return False
+
+        return True
+
+    # =====================================================
+    # الحصول على صاحب البوت
+    # =====================================================
+
+    async def get_bot_owner_id(self):
+
+        if self.bot_owner_id is not None:
+            return self.bot_owner_id
+
+        async with self.owner_lock:
+
+            if self.bot_owner_id is not None:
+                return self.bot_owner_id
+
+            try:
+
+                application = (
+                    await self.bot.application_info()
+                )
+
+                if application.owner:
+
+                    self.bot_owner_id = (
+                        application.owner.id
+                    )
+
+            except Exception:
+
+                return None
+
+        return self.bot_owner_id
+
+    # =====================================================
+    # التأكد أن الشخص صاحب البوت
+    # =====================================================
+
+    async def is_bot_owner(
+        self,
+        user_id
+    ):
+
+        owner_id = await self.get_bot_owner_id()
+
+        if owner_id is None:
+            return False
+
+        return int(user_id) == int(
+            owner_id
         )
 
     # =====================================================
-    # امر الغام
+    # الحصول على بيانات اللاعب
     # =====================================================
 
-    @commands.command(name="الغام")
-    async def mines_game(self, ctx):
+    async def get_user_data(
+        self,
+        guild_id,
+        user_id
+    ):
 
-        if not self.is_game_channel(ctx):
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        document = await self.game_data.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                )
+            }
+        )
+
+        if document is not None:
+            return document
+
+        # -----------------------------------------------
+        # إنشاء اللاعب لأول مرة
+        # -----------------------------------------------
+
+        document = {
+            "guild_id": str(
+                guild_id
+            ),
+            "user_id": str(
+                user_id
+            ),
+            "gold": STARTING_GOLD,
+            "last_game_at": None,
+            "last_luck_at": None,
+            "created_at": datetime.now(
+                timezone.utc
+            )
+        }
+
+        try:
+
+            await self.game_data.insert_one(
+                document
+            )
+
+        except Exception:
+
+            # لو صار إنشاء متزامن
+            document = await self.game_data.find_one(
+                {
+                    "guild_id": {
+                        "$in": guild_ids
+                    },
+                    "user_id": str(
+                        user_id
+                    )
+                }
+            )
+
+            if document is not None:
+                return document
+
+        return document
+
+    # =====================================================
+    # الحصول على الرصيد
+    # =====================================================
+
+    async def get_balance(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        document = await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        return int(
+            document.get(
+                "gold",
+                STARTING_GOLD
+            )
+        )
+
+    # =====================================================
+    # تغيير الرصيد
+    # =====================================================
+
+    async def change_gold(
+        self,
+        guild_id,
+        user_id,
+        amount
+    ):
+
+        await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        # -----------------------------------------------
+        # إذا خصم
+        # -----------------------------------------------
+
+        if amount < 0:
+
+            document = await self.game_data.find_one_and_update(
+                {
+                    "guild_id": {
+                        "$in": guild_ids
+                    },
+                    "user_id": str(
+                        user_id
+                    ),
+                    "gold": {
+                        "$gte": abs(
+                            amount
+                        )
+                    }
+                },
+                {
+                    "$inc": {
+                        "gold": amount
+                    }
+                },
+                return_document=ReturnDocument.AFTER
+            )
+
+            if document is None:
+
+                # الرصيد لا يكفي
+                await self.game_data.update_one(
+                    {
+                        "guild_id": {
+                            "$in": guild_ids
+                        },
+                        "user_id": str(
+                            user_id
+                        )
+                    },
+                    {
+                        "$set": {
+                            "gold": 0
+                        }
+                    }
+                )
+
+                return 0
+
+            return int(
+                document.get(
+                    "gold",
+                    0
+                )
+            )
+
+        # -----------------------------------------------
+        # إذا إضافة
+        # -----------------------------------------------
+
+        document = await self.game_data.find_one_and_update(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                )
+            },
+            {
+                "$inc": {
+                    "gold": amount
+                }
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        if document is None:
+            return 0
+
+        return int(
+            document.get(
+                "gold",
+                0
+            )
+        )
+
+    # =====================================================
+    # تسجيل وقت آخر لعبة
+    # =====================================================
+
+    async def set_last_game_time(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        now = datetime.now(
+            timezone.utc
+        )
+
+        await self.game_data.update_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                )
+            },
+            {
+                "$set": {
+                    "last_game_at": now
+                }
+            }
+        )
+
+    # =====================================================
+    # فحص كول داون اللعبة
+    # =====================================================
+
+    async def get_game_cooldown_remaining(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        document = await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        last_game_at = document.get(
+            "last_game_at"
+        )
+
+        if not last_game_at:
+            return 0
+
+        if last_game_at.tzinfo is None:
+
+            last_game_at = last_game_at.replace(
+                tzinfo=timezone.utc
+            )
+
+        elapsed = (
+            datetime.now(timezone.utc)
+            - last_game_at
+        ).total_seconds()
+
+        remaining = (
+            GAME_COOLDOWN
+            - elapsed
+        )
+
+        if remaining <= 0:
+            return 0
+
+        return max(
+            1,
+            int(remaining)
+        )
+
+    # =====================================================
+    # أمر الألغام
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_MINES
+    )
+    async def mines_game(
+        self,
+        ctx
+    ):
+
+        if ctx.guild is None:
+            return
+
+        # -----------------------------------------------
+        # صلاحية الموقع
+        # -----------------------------------------------
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_MINES,
+            ctx.channel.id
+        )
+
+        if not allowed:
             return
 
         user_id = ctx.author.id
+        guild_id = ctx.guild.id
 
-        # منع اكثر من لعبة
+        # -----------------------------------------------
+        # منع أكثر من لعبة
+        # -----------------------------------------------
+
         if user_id in self.active_games:
 
             await ctx.send(
@@ -615,54 +1185,49 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # الكول داون - 30 ثانية
-        # =================================================
+        # -----------------------------------------------
+        # الكول داون
+        # -----------------------------------------------
 
-        current_time = (
-            asyncio.get_running_loop().time()
-        )
-
-        last_time = self.last_game_time.get(
+        remaining = await self.get_game_cooldown_remaining(
+            guild_id,
             user_id
         )
 
-        if last_time is not None:
+        if remaining > 0:
 
-            elapsed = (
-                current_time
-                - last_time
+            await ctx.send(
+                f"{ctx.author.mention}\n"
+                f"⏳ انتظر **{remaining} ثانية** قبل بدء لعبة جديدة."
             )
 
-            if elapsed < GAME_COOLDOWN:
+            return
 
-                remaining = max(
-                    1,
-                    int(
-                        GAME_COOLDOWN
-                        - elapsed
-                    )
-                )
+        # -----------------------------------------------
+        # تسجيل وقت اللعبة في MongoDB
+        # -----------------------------------------------
 
-                await ctx.send(
-                    f"{ctx.author.mention}\n"
-                    f"⏳ انتظر {remaining} ثانية قبل بدء لعبة جديدة."
-                )
-
-                return
-
-        self.last_game_time[
-            user_id
-        ] = current_time
-
-        # انشاء الرصيد
-        self.get_balance(
+        await self.set_last_game_time(
+            guild_id,
             user_id
         )
 
-        # انشاء اللعبة
+        # -----------------------------------------------
+        # التأكد من وجود الرصيد
+        # -----------------------------------------------
+
+        await self.get_balance(
+            guild_id,
+            user_id
+        )
+
+        # -----------------------------------------------
+        # إنشاء اللعبة
+        # -----------------------------------------------
+
         view = MinesView(
             self,
+            guild_id,
             user_id
         )
 
@@ -670,9 +1235,9 @@ class MinesGame(commands.Cog):
             user_id
         ] = view
 
-        # =================================================
+        # -----------------------------------------------
         # واجهة اللعبة
-        # =================================================
+        # -----------------------------------------------
 
         embed = discord.Embed(
             title="💣 لعبة الألغام",
@@ -689,8 +1254,8 @@ class MinesGame(commands.Cog):
                 "الآمنة المتصلة بها تلقائياً.\n\n"
 
                 "💰 **المكافآت**\n"
-                f"🏆 الفوز: +{WIN_GOLD:,} ذهب\n"
-                f"💥 الخسارة: -{LOSS_GOLD:,} ذهب\n\n"
+                f"🏆 الفوز: **+{WIN_GOLD:,} ذهب**\n"
+                f"💥 الخسارة: **-{LOSS_GOLD:,} ذهب**\n\n"
 
                 "⏱️ **الوقت:** دقيقتان\n"
                 "💣 **عدد الألغام:** 5\n"
@@ -716,19 +1281,36 @@ class MinesGame(commands.Cog):
             )
 
     # =====================================================
-    # امر محفظتي
+    # أمر محفظتي
     # =====================================================
 
-    @commands.command(name="محفظتي")
-    async def my_wallet(self, ctx):
+    @commands.command(
+        name=COMMAND_WALLET
+    )
+    async def my_wallet(
+        self,
+        ctx
+    ):
 
-        if not self.is_game_channel(ctx):
+        if ctx.guild is None:
             return
 
-        user_id = ctx.author.id
+        # -----------------------------------------------
+        # صلاحية الموقع
+        # -----------------------------------------------
 
-        gold = self.get_balance(
-            user_id
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_WALLET,
+            ctx.channel.id
+        )
+
+        if not allowed:
+            return
+
+        gold = await self.get_balance(
+            ctx.guild.id,
+            ctx.author.id
         )
 
         embed = discord.Embed(
@@ -745,10 +1327,12 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # امر ضيف
+    # أمر ضيف
     # =====================================================
 
-    @commands.command(name="ضيف")
+    @commands.command(
+        name=COMMAND_ADD
+    )
     async def add_gold(
         self,
         ctx,
@@ -756,35 +1340,42 @@ class MinesGame(commands.Cog):
         amount: str = None
     ):
 
-        if not self.is_game_channel(ctx):
-            return
-
         if ctx.guild is None:
             return
 
-        # البحث عن الرتبة
-        role = ctx.guild.get_role(
-            GOLD_ROLE_ID
+        # -----------------------------------------------
+        # صلاحية الموقع أولاً
+        # -----------------------------------------------
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_ADD,
+            ctx.channel.id
         )
 
-        if role is None:
+        if not allowed:
+            return
+
+        # -----------------------------------------------
+        # صاحب البوت فقط
+        # -----------------------------------------------
+
+        is_owner = await self.is_bot_owner(
+            ctx.author.id
+        )
+
+        if not is_owner:
 
             await ctx.send(
-                "❌ لم يتم العثور على الرتبة المطلوبة."
+                "❌ هذا الأمر متاح لصاحب البوت فقط."
             )
 
             return
 
-        # التأكد من امتلاك الرتبة
-        if role not in ctx.author.roles:
+        # -----------------------------------------------
+        # الشخص
+        # -----------------------------------------------
 
-            await ctx.send(
-                "❌ ليس لديك صلاحية استخدام هذا الأمر."
-            )
-
-            return
-
-        # عدم وجود شخص
         if member is None:
 
             await ctx.send(
@@ -794,7 +1385,10 @@ class MinesGame(commands.Cog):
 
             return
 
-        # عدم وجود مبلغ
+        # -----------------------------------------------
+        # المبلغ
+        # -----------------------------------------------
+
         if amount is None:
 
             await ctx.send(
@@ -804,7 +1398,10 @@ class MinesGame(commands.Cog):
 
             return
 
+        # -----------------------------------------------
         # تنظيف الرقم
+        # -----------------------------------------------
+
         clean_amount = (
             amount
             .replace(",", "")
@@ -827,7 +1424,10 @@ class MinesGame(commands.Cog):
 
             return
 
-        # منع المبلغ صفر او السالب
+        # -----------------------------------------------
+        # منع الصفر والسالب
+        # -----------------------------------------------
+
         if gold_amount <= 0:
 
             await ctx.send(
@@ -836,22 +1436,20 @@ class MinesGame(commands.Cog):
 
             return
 
-        # الرصيد الحالي
-        current_gold = self.get_balance(
-            member.id
+        # -----------------------------------------------
+        # إضافة الذهب
+        # -----------------------------------------------
+
+        new_gold = await self.change_gold(
+            ctx.guild.id,
+            member.id,
+            gold_amount
         )
 
-        # الرصيد الجديد
-        new_gold = (
-            current_gold
-            + gold_amount
-        )
-
-        self.user_balances[
-            member.id
-        ] = new_gold
-
+        # -----------------------------------------------
         # رسالة النجاح
+        # -----------------------------------------------
+
         embed = discord.Embed(
             title="💰 تمت إضافة الذهب",
             description=(
@@ -860,6 +1458,226 @@ class MinesGame(commands.Cog):
                 f"💳 الرصيد الجديد: **{new_gold:,} ذهب**"
             ),
             color=0xF1C40F
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # أمر حظ
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_LUCK
+    )
+    async def luck(
+        self,
+        ctx
+    ):
+
+        if ctx.guild is None:
+            return
+
+        # -----------------------------------------------
+        # صلاحية الموقع
+        # -----------------------------------------------
+
+        allowed = await self.has_command_permission(
+            ctx.author,
+            COMMAND_LUCK,
+            ctx.channel.id
+        )
+
+        if not allowed:
+            return
+
+        guild_id = ctx.guild.id
+        user_id = ctx.author.id
+
+        # -----------------------------------------------
+        # إنشاء بيانات اللاعب إذا لم تكن موجودة
+        # -----------------------------------------------
+
+        await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        now = datetime.now(
+            timezone.utc
+        )
+
+        cooldown_before = (
+            now
+            - timedelta(
+                seconds=LUCK_COOLDOWN
+            )
+        )
+
+        # -----------------------------------------------
+        # محاولة حجز استخدام الحظ
+        #
+        # العملية Atomic في MongoDB
+        # حتى لا يستطيع اللاعب استخدامه مرتين
+        # في نفس اللحظة.
+        # -----------------------------------------------
+
+        document = await self.game_data.find_one_and_update(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                },
+                "$or": [
+                    {
+                        "last_luck_at": {
+                            "$exists": False
+                        }
+                    },
+                    {
+                        "last_luck_at": {
+                            "$lte": cooldown_before
+                        }
+                    },
+                    {
+                        "last_luck_at": None
+                    }
+                ]
+            },
+            {
+                "$set": {
+                    "last_luck_at": now
+                }
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        # -----------------------------------------------
+        # لم يسمح باستخدام الأمر
+        # -----------------------------------------------
+
+        if document is None:
+
+            current_document = await self.game_data.find_one(
+                {
+                    "guild_id": {
+                        "$in": guild_ids
+                    },
+                    "user_id": str(
+                        user_id
+                    )
+                }
+            )
+
+            last_luck_at = None
+
+            if current_document:
+
+                last_luck_at = current_document.get(
+                    "last_luck_at"
+                )
+
+            if last_luck_at is None:
+
+                await ctx.send(
+                    "⏳ لا يمكنك استخدام الحظ الآن."
+                )
+
+                return
+
+            if last_luck_at.tzinfo is None:
+
+                last_luck_at = last_luck_at.replace(
+                    tzinfo=timezone.utc
+                )
+
+            elapsed = (
+                now
+                - last_luck_at
+            ).total_seconds()
+
+            remaining_seconds = max(
+                1,
+                int(
+                    LUCK_COOLDOWN
+                    - elapsed
+                )
+            )
+
+            hours = remaining_seconds // 3600
+            minutes = (
+                remaining_seconds % 3600
+            ) // 60
+            seconds = (
+                remaining_seconds % 60
+            )
+
+            if hours > 0:
+
+                time_text = (
+                    f"{hours} ساعة و "
+                    f"{minutes} دقيقة"
+                )
+
+            elif minutes > 0:
+
+                time_text = (
+                    f"{minutes} دقيقة و "
+                    f"{seconds} ثانية"
+                )
+
+            else:
+
+                time_text = (
+                    f"{seconds} ثانية"
+                )
+
+            await ctx.send(
+                f"{ctx.author.mention}\n"
+                f"🍀 حظك مستخدم بالفعل، ارجع بعد **{time_text}**."
+            )
+
+            return
+
+        # -----------------------------------------------
+        # حساب جائزة الحظ
+        # -----------------------------------------------
+
+        reward = random.randint(
+            LUCK_MIN_GOLD,
+            LUCK_MAX_GOLD
+        )
+
+        # -----------------------------------------------
+        # إضافة الجائزة
+        # -----------------------------------------------
+
+        new_gold = await self.change_gold(
+            guild_id,
+            user_id,
+            reward
+        )
+
+        # -----------------------------------------------
+        # رسالة الحظ
+        # -----------------------------------------------
+
+        embed = discord.Embed(
+            title="🍀 حظك اليوم",
+            description=(
+                f"🎉 مبروك {ctx.author.mention}!\n\n"
+                f"🍀 حصلت على **+{reward:,} ذهب**\n\n"
+                f"💰 رصيدك الحالي: **{new_gold:,} ذهب**\n\n"
+                "⏰ يمكنك استخدام الحظ مرة أخرى بعد **12 ساعة**."
+            ),
+            color=0x2ECC71
         )
 
         await ctx.send(
