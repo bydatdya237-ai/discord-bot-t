@@ -6,6 +6,7 @@ import discord
 from discord.ext import commands
 from discord import ui
 from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 
 
 # =========================================================
@@ -20,8 +21,28 @@ db = mongo_client["discord_bot_db"]
 moderation_reasons_collection = db["moderation_reasons"]
 moderation_warnings_collection = db["moderation_warnings"]
 
-# نفس مجموعة نظام الموقع
-website_command_settings = db["website_command_settings"]
+
+# =========================================================
+# MongoDB Async لنظام الموقع
+# =========================================================
+
+if MONGO_URI:
+
+    website_mongo_client = AsyncIOMotorClient(
+        MONGO_URI
+    )
+
+    website_db = website_mongo_client.discord_bot_db
+
+    website_command_settings = (
+        website_db.website_command_settings
+    )
+
+else:
+
+    website_mongo_client = None
+    website_db = None
+    website_command_settings = None
 
 
 # =========================================================
@@ -53,43 +74,84 @@ COMMAND_CLEAR_WARNS = "مسح-تحذيرات"
 
 
 # =========================================================
-# تنظيف اسم الأمر
+# دعم guild_id كـ String أو Integer
 # =========================================================
 
-def normalize_command_name(name: str):
-    if not name:
-        return ""
+def guild_id_variants(guild_id):
 
-    name = str(name).strip().lower()
+    variants = [
+        str(guild_id)
+    ]
 
-    return (
-        name
-        .replace("-", "")
-        .replace("_", "")
-        .replace(" ", "")
+    try:
+
+        variants.append(
+            int(guild_id)
+        )
+
+    except Exception:
+        pass
+
+    return variants
+
+
+# =========================================================
+# جلب إعدادات أمر من الموقع
+# =========================================================
+
+async def get_command_setting(
+    guild_id,
+    command_name
+):
+
+    if website_command_settings is None:
+        return None
+
+    guild_ids = guild_id_variants(
+        guild_id
     )
+
+    # =====================================================
+    # البيانات الجديدة
+    # =====================================================
+
+    setting = await website_command_settings.find_one(
+        {
+            "guild_id": {
+                "$in": guild_ids
+            },
+            "command_name": str(command_name)
+        }
+    )
+
+    if setting:
+        return setting
+
+    # =====================================================
+    # دعم البيانات القديمة
+    # =====================================================
+
+    setting = await website_command_settings.find_one(
+        {
+            "guild_id": {
+                "$in": guild_ids
+            },
+            "name": str(command_name)
+        }
+    )
+
+    return setting
 
 
 # =========================================================
 # نظام صلاحيات الموقع
 # =========================================================
 
-def website_permission_allowed(
+async def website_permission_allowed(
     member: discord.Member,
     command_name: str,
     channel_id: int
 ):
-    """
-    النظام هنا مقفّل افتراضيًا:
-
-    1. إذا الأمر غير موجود في الموقع = ممنوع.
-    2. إذا الأمر موجود لكنه غير مفعّل = ممنوع.
-    3. إذا محدد رتب = لازم العضو يملك رتبة مسموحة.
-    4. إذا محدد رومات = لازم يكون الأمر في روم مسموح.
-    5. إذا محدد الاثنين = لازم يحقق الاثنين.
-    6. إذا لا توجد رتب ولا رومات = الأمر يعمل لأي عضو
-       فقط لأن الأمر مفعّل من الموقع.
-    """
 
     if member is None:
         return False
@@ -97,115 +159,86 @@ def website_permission_allowed(
     if member.guild is None:
         return False
 
-    wanted_name = normalize_command_name(command_name)
+    # =====================================================
+    # جلب إعداد الأمر من الموقع
+    # =====================================================
 
-    settings = list(
-        website_command_settings.find(
-            {
-                "guild_id": member.guild.id
-            }
-        )
+    setting = await get_command_setting(
+        member.guild.id,
+        command_name
     )
-
-    found_setting = None
-
-    for setting in settings:
-
-        possible_names = []
-
-        if setting.get("command_name"):
-            possible_names.append(
-                setting.get("command_name")
-            )
-
-        if setting.get("name"):
-            possible_names.append(
-                setting.get("name")
-            )
-
-        if setting.get("command"):
-            possible_names.append(
-                setting.get("command")
-            )
-
-        aliases = setting.get("aliases", [])
-
-        if isinstance(aliases, list):
-            possible_names.extend(aliases)
-
-        for name in possible_names:
-
-            if normalize_command_name(str(name)) == wanted_name:
-                found_setting = setting
-                break
-
-        if found_setting:
-            break
 
     # =====================================================
     # الأمر غير موجود في الموقع
     # =====================================================
 
-    if found_setting is None:
+    if not setting:
         return False
 
     # =====================================================
     # الأمر غير مفعّل
     # =====================================================
 
-    if found_setting.get("enabled") is not True:
+    if not setting.get(
+        "enabled",
+        False
+    ):
         return False
 
     # =====================================================
-    # فحص الرتب
+    # الرتب
     # =====================================================
 
-    role_ids = found_setting.get("role_ids", [])
+    role_ids = setting.get(
+        "role_ids",
+        []
+    )
 
-    if role_ids is None:
-        role_ids = []
+    # لازم يتم تحديد رتبة من الموقع
+    if not role_ids:
+        return False
 
-    allowed_role_ids = set()
+    allowed_role_ids = {
+        str(role_id)
+        for role_id in role_ids
+    }
 
-    for role_id in role_ids:
+    user_role_ids = {
+        str(role.id)
+        for role in member.roles
+    }
 
-        try:
-            allowed_role_ids.add(int(role_id))
-        except (TypeError, ValueError):
-            continue
-
-    if allowed_role_ids:
-
-        member_role_ids = {
-            role.id
-            for role in member.roles
-        }
-
-        if not allowed_role_ids.intersection(member_role_ids):
-            return False
+    # يجب أن يملك العضو واحدة على الأقل من الرتب
+    if not allowed_role_ids.intersection(
+        user_role_ids
+    ):
+        return False
 
     # =====================================================
-    # فحص الرومات
+    # الرومات
     # =====================================================
 
-    channel_ids = found_setting.get("channel_ids", [])
+    channel_ids = setting.get(
+        "channel_ids",
+        []
+    )
 
-    if channel_ids is None:
-        channel_ids = []
+    # لازم يتم تحديد روم من الموقع
+    if not channel_ids:
+        return False
 
-    allowed_channel_ids = set()
+    allowed_channel_ids = {
+        str(channel_id)
+        for channel_id in channel_ids
+    }
 
-    for channel in channel_ids:
+    # يجب أن يكون الأمر في روم مسموح
+    if str(channel_id) not in allowed_channel_ids:
+        return False
 
-        try:
-            allowed_channel_ids.add(int(channel))
-        except (TypeError, ValueError):
-            continue
-
-    if allowed_channel_ids:
-
-        if channel_id not in allowed_channel_ids:
-            return False
+    # =====================================================
+    # كل الشروط صحيحة
+    # =====================================================
 
     return True
 
@@ -235,7 +268,10 @@ def get_reasons(guild_id: int):
 
         return reasons
 
-    reasons = data.get("reasons", [])
+    reasons = data.get(
+        "reasons",
+        []
+    )
 
     if not reasons:
         return DEFAULT_REASONS.copy()
@@ -243,14 +279,19 @@ def get_reasons(guild_id: int):
     return reasons
 
 
-def add_reason(guild_id: int, reason: str):
+def add_reason(
+    guild_id: int,
+    reason: str
+):
 
     reason = reason.strip()
 
     if not reason:
         return False
 
-    reasons = get_reasons(guild_id)
+    reasons = get_reasons(
+        guild_id
+    )
 
     normalized_existing = {
         str(item).strip().lower()
@@ -297,7 +338,10 @@ def parse_duration(value: str):
     if not match:
         return None
 
-    amount = float(match.group(1))
+    amount = float(
+        match.group(1)
+    )
+
     unit = match.group(2)
 
     if amount <= 0:
@@ -310,6 +354,7 @@ def parse_duration(value: str):
         "second",
         "seconds"
     }:
+
         seconds = amount
 
     elif unit in {
@@ -319,6 +364,7 @@ def parse_duration(value: str):
         "minute",
         "minutes"
     }:
+
         seconds = amount * 60
 
     elif unit in {
@@ -328,6 +374,7 @@ def parse_duration(value: str):
         "hour",
         "hours"
     }:
+
         seconds = amount * 60 * 60
 
     elif unit in {
@@ -335,6 +382,7 @@ def parse_duration(value: str):
         "day",
         "days"
     }:
+
         seconds = amount * 60 * 60 * 24
 
     elif unit in {
@@ -342,52 +390,76 @@ def parse_duration(value: str):
         "week",
         "weeks"
     }:
+
         seconds = amount * 60 * 60 * 24 * 7
 
     else:
+
         return None
 
     # Discord timeout maximum = 28 days
+
     max_seconds = 28 * 24 * 60 * 60
 
     if seconds > max_seconds:
         return None
 
-    return timedelta(seconds=seconds)
+    return timedelta(
+        seconds=seconds
+    )
 
 
 # =========================================================
 # عرض المدة
 # =========================================================
 
-def format_duration(duration: timedelta):
+def format_duration(
+    duration: timedelta
+):
 
-    total_seconds = int(duration.total_seconds())
+    total_seconds = int(
+        duration.total_seconds()
+    )
 
     days = total_seconds // 86400
+
     total_seconds %= 86400
 
     hours = total_seconds // 3600
+
     total_seconds %= 3600
 
     minutes = total_seconds // 60
+
     seconds = total_seconds % 60
 
     parts = []
 
     if days:
-        parts.append(f"{days} يوم")
+        parts.append(
+            f"{days} يوم"
+        )
 
     if hours:
-        parts.append(f"{hours} ساعة")
+        parts.append(
+            f"{hours} ساعة"
+        )
 
     if minutes:
-        parts.append(f"{minutes} دقيقة")
+        parts.append(
+            f"{minutes} دقيقة"
+        )
 
     if seconds:
-        parts.append(f"{seconds} ثانية")
+        parts.append(
+            f"{seconds} ثانية"
+        )
 
-    return " و ".join(parts) if parts else "0 ثانية"
+    return (
+        " و ".join(parts)
+        if parts
+        else "0 ثانية"
+    )
 
 
 # =========================================================
@@ -400,23 +472,43 @@ def can_moderate(
 ):
 
     if target.id == moderator.id:
-        return False, "❌ ما تقدر تستخدم الأمر على نفسك."
+
+        return (
+            False,
+            "❌ ما تقدر تستخدم الأمر على نفسك."
+        )
 
     if target.id == moderator.guild.owner_id:
-        return False, "❌ ما تقدر تستخدم الأمر على صاحب السيرفر."
+
+        return (
+            False,
+            "❌ ما تقدر تستخدم الأمر على صاحب السيرفر."
+        )
 
     if moderator.id != moderator.guild.owner_id:
 
         if target.top_role >= moderator.top_role:
-            return False, "❌ ما تقدر تستخدم الأمر على شخص رتبته مساوية أو أعلى من رتبتك."
+
+            return (
+                False,
+                "❌ ما تقدر تستخدم الأمر على شخص رتبته مساوية أو أعلى من رتبتك."
+            )
 
     bot_member = moderator.guild.me
 
     if bot_member is None:
-        return False, "❌ ما قدرت أحدد رتبة البوت."
+
+        return (
+            False,
+            "❌ ما قدرت أحدد رتبة البوت."
+        )
 
     if target.top_role >= bot_member.top_role:
-        return False, "❌ رتبة الشخص أعلى من رتبة البوت أو مساوية لها."
+
+        return (
+            False,
+            "❌ رتبة الشخص أعلى من رتبة البوت أو مساوية لها."
+        )
 
     return True, None
 
@@ -468,7 +560,10 @@ def get_warnings(
 
 class AddReasonModal(ui.Modal):
 
-    def __init__(self, target: discord.Member):
+    def __init__(
+        self,
+        target: discord.Member
+    ):
 
         super().__init__(
             title="إضافة سبب إسكات"
@@ -483,7 +578,9 @@ class AddReasonModal(ui.Modal):
             required=True
         )
 
-        self.add_item(self.reason_input)
+        self.add_item(
+            self.reason_input
+        )
 
     async def on_submit(
         self,
@@ -491,29 +588,46 @@ class AddReasonModal(ui.Modal):
     ):
 
         # =================================================
+        # التأكد من السيرفر
+        # =================================================
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
         # صلاحية الموقع
         # =================================================
 
-        allowed = website_permission_allowed(
+        allowed = await website_permission_allowed(
             interaction.user,
             COMMAND_MUTE,
             interaction.channel.id
         )
 
         if not allowed:
+
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام إضافة أسباب الإسكات.",
                 ephemeral=True
             )
+
             return
 
         reason = self.reason_input.value.strip()
 
         if not reason:
+
             await interaction.response.send_message(
                 "❌ اكتب سبب صحيح.",
                 ephemeral=True
             )
+
             return
 
         added = add_reason(
@@ -522,10 +636,12 @@ class AddReasonModal(ui.Modal):
         )
 
         if not added:
+
             await interaction.response.send_message(
                 "❌ هذا السبب موجود مسبقًا.",
                 ephemeral=True
             )
+
             return
 
         await interaction.response.send_message(
@@ -533,7 +649,10 @@ class AddReasonModal(ui.Modal):
             ephemeral=True
         )
 
+        # =================================================
         # إرسال قائمة المدة
+        # =================================================
+
         try:
 
             await interaction.followup.send(
@@ -578,25 +697,45 @@ class CustomDurationModal(ui.Modal):
             required=True
         )
 
-        self.add_item(self.duration_input)
+        self.add_item(
+            self.duration_input
+        )
 
     async def on_submit(
         self,
         interaction: discord.Interaction
     ):
 
-        # صلاحية الموقع مرة ثانية
-        allowed = website_permission_allowed(
+        # =================================================
+        # التأكد من السيرفر
+        # =================================================
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # صلاحية الموقع
+        # =================================================
+
+        allowed = await website_permission_allowed(
             interaction.user,
             COMMAND_MUTE,
             interaction.channel.id
         )
 
         if not allowed:
+
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام أمر الإسكات.",
                 ephemeral=True
             )
+
             return
 
         duration = parse_duration(
@@ -615,6 +754,7 @@ class CustomDurationModal(ui.Modal):
                 "الحد الأقصى 28 يوم.",
                 ephemeral=True
             )
+
             return
 
         cog = interaction.client.get_cog(
@@ -622,10 +762,12 @@ class CustomDurationModal(ui.Modal):
         )
 
         if cog is None:
+
             await interaction.response.send_message(
                 "❌ تعذر الوصول لنظام الحماية.",
                 ephemeral=True
             )
+
             return
 
         await cog.apply_timeout(
@@ -649,7 +791,9 @@ class DurationView(ui.View):
         reason
     ):
 
-        super().__init__(timeout=120)
+        super().__init__(
+            timeout=120
+        )
 
         self.moderator = moderator
         self.target = target
@@ -669,7 +813,7 @@ class DurationView(ui.View):
 
             return False
 
-        allowed = website_permission_allowed(
+        allowed = await website_permission_allowed(
             interaction.user,
             COMMAND_MUTE,
             interaction.channel.id
@@ -788,7 +932,7 @@ class DurationView(ui.View):
     async def one_day(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         await self.apply(
@@ -805,7 +949,7 @@ class DurationView(ui.View):
     async def custom_duration(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         await interaction.response.send_modal(
@@ -836,7 +980,9 @@ class ReasonSelect(ui.Select):
 
         options = []
 
-        for index, reason in enumerate(reasons[:24]):
+        for index, reason in enumerate(
+            reasons[:24]
+        ):
 
             options.append(
                 discord.SelectOption(
@@ -857,7 +1003,16 @@ class ReasonSelect(ui.Select):
         interaction: discord.Interaction
     ):
 
-        allowed = website_permission_allowed(
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        allowed = await website_permission_allowed(
             interaction.user,
             COMMAND_MUTE,
             interaction.channel.id
@@ -876,7 +1031,9 @@ class ReasonSelect(ui.Select):
             self.target.guild.id
         )
 
-        index = int(self.values[0])
+        index = int(
+            self.values[0]
+        )
 
         if index >= len(reasons):
 
@@ -925,7 +1082,16 @@ class AddReasonButton(ui.Button):
         interaction: discord.Interaction
     ):
 
-        allowed = website_permission_allowed(
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        allowed = await website_permission_allowed(
             interaction.user,
             COMMAND_MUTE,
             interaction.channel.id
@@ -958,7 +1124,9 @@ class ReasonView(ui.View):
         target: discord.Member
     ):
 
-        super().__init__(timeout=120)
+        super().__init__(
+            timeout=120
+        )
 
         self.add_item(
             ReasonSelect(target)
@@ -975,7 +1143,10 @@ class ReasonView(ui.View):
 
 class ModerationCog(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
@@ -1053,15 +1224,12 @@ class ModerationCog(commands.Cog):
         duration_text: str = None
     ):
 
-        # =================================================
-        # صلاحية الموقع
-        # =================================================
-
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_MUTE,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
@@ -1080,7 +1248,9 @@ class ModerationCog(commands.Cog):
 
         if not allowed:
 
-            await ctx.send(error)
+            await ctx.send(
+                error
+            )
 
             return
 
@@ -1163,11 +1333,12 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_UNMUTE,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
@@ -1186,7 +1357,9 @@ class ModerationCog(commands.Cog):
 
         if not allowed:
 
-            await ctx.send(error)
+            await ctx.send(
+                error
+            )
 
             return
 
@@ -1232,11 +1405,12 @@ class ModerationCog(commands.Cog):
         reason: str = "لا يوجد سبب"
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_BAN,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
@@ -1255,7 +1429,9 @@ class ModerationCog(commands.Cog):
 
         if not allowed:
 
-            await ctx.send(error)
+            await ctx.send(
+                error
+            )
 
             return
 
@@ -1304,11 +1480,12 @@ class ModerationCog(commands.Cog):
         user_input: str = None
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_UNBAN,
             ctx.channel.id
         ):
+
             return
 
         if not user_input:
@@ -1320,7 +1497,10 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # إزالة المنشن إذا أرسل المستخدم ID على شكل منشن
+        # =================================================
+        # استخراج ID
+        # =================================================
+
         user_id_match = re.search(
             r"\d{15,25}",
             user_input
@@ -1410,11 +1590,12 @@ class ModerationCog(commands.Cog):
         reason: str = "لا يوجد سبب"
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_KICK,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
@@ -1433,7 +1614,9 @@ class ModerationCog(commands.Cog):
 
         if not allowed:
 
-            await ctx.send(error)
+            await ctx.send(
+                error
+            )
 
             return
 
@@ -1479,11 +1662,12 @@ class ModerationCog(commands.Cog):
         reason: str = "لا يوجد سبب"
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_WARN,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
@@ -1502,7 +1686,9 @@ class ModerationCog(commands.Cog):
 
         if not allowed:
 
-            await ctx.send(error)
+            await ctx.send(
+                error
+            )
 
             return
 
@@ -1521,6 +1707,7 @@ class ModerationCog(commands.Cog):
             )
 
         except discord.HTTPException:
+
             pass
 
         warnings = get_warnings(
@@ -1547,11 +1734,12 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_WARNS,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
@@ -1578,7 +1766,9 @@ class ModerationCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"⚠️ تحذيرات {member}",
-            description=f"عدد التحذيرات: **{len(warnings)}**",
+            description=(
+                f"عدد التحذيرات: **{len(warnings)}**"
+            ),
             color=discord.Color.orange()
         )
 
@@ -1644,11 +1834,12 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None
     ):
 
-        if not website_permission_allowed(
+        if not await website_permission_allowed(
             ctx.author,
             COMMAND_CLEAR_WARNS,
             ctx.channel.id
         ):
+
             return
 
         if member is None:
