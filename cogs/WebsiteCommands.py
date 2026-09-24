@@ -53,6 +53,7 @@ def normalize_command_name(name):
     -رصيد  -> رصيد
     .رصيد  -> رصيد
     /رصيد  -> رصيد
+    رصيد   -> رصيد
     """
 
     if not name:
@@ -67,104 +68,90 @@ def normalize_command_name(name):
 
 
 # =========================================================
-# استخراج أمر من نص
+# أدوات الاختصارات
 # =========================================================
 
-def clean_detected_command(value):
+def normalize_alias(value):
+    """
+    توحيد الاختصار.
+
+    أمثلة:
+
+    ذ
+    -ذ
+    .ذ
+    /ذ
+
+    كلها تصبح:
+
+    ذ
+    """
 
     if not value:
         return ""
 
     value = str(value).strip()
 
-    value = normalize_command_name(value)
-
-    # إزالة أي شيء بعد مسافة
-    value = value.split()[0] if value else ""
-
-    # إزالة علامات شائعة
-    value = value.strip(
-        "\"'`()[]{}:;,"
-    )
-
     return normalize_command_name(value)
 
 
-# =========================================================
-# أدوات الاختصارات
-# =========================================================
-
-def normalize_alias(alias):
-    """
-    توحيد الاختصار.
-
-    أمثلة:
-
-    -ذ      -> ذ
-    .ذ      -> ذ
-    /ذ      -> ذ
-    ذ       -> ذ
-    """
-
-    if not alias:
-        return ""
-
-    return normalize_command_name(alias)
-
-
-def get_alias_data(guild_id, alias):
+def find_website_alias(guild_id, typed_alias):
     """
     البحث عن الاختصار الخاص بالسيرفر.
 
-    ندعم أكثر من شكل تخزين حتى لا تتعارض
-    النسخ القديمة والجديدة من الموقع.
+    يدعم تخزين guild_id كنص أو رقم.
+    ويدعم الاختصار مع أو بدون بادئة.
     """
 
-    if not guild_id or not alias:
+    if not guild_id or not typed_alias:
         return None
 
     guild_id = str(guild_id)
 
-    clean_alias = normalize_alias(alias)
+    alias = normalize_alias(
+        typed_alias
+    )
 
-    if not clean_alias:
+    if not alias:
         return None
 
     # =====================================================
-    # البحث بالشكل الأساسي
+    # البحث الأساسي
     # =====================================================
 
     data = aliases_collection.find_one({
         "guild_id": guild_id,
-        "alias": clean_alias
+        "alias": alias
     })
 
     if data:
         return data
 
     # =====================================================
-    # في حال الموقع مخزن الاختصار مع -
+    # لو الموقع حفظ الاختصار مع -
     # =====================================================
 
     data = aliases_collection.find_one({
         "guild_id": guild_id,
-        "alias": f"-{clean_alias}"
+        "alias": f"-{alias}"
     })
 
     if data:
         return data
 
     # =====================================================
-    # في حال guild_id مخزن كرقم بدل نص
+    # لو الموقع حفظ guild_id كرقم
     # =====================================================
 
     try:
 
-        numeric_guild_id = int(guild_id)
+        numeric_guild_id = int(
+            guild_id
+        )
 
         data = aliases_collection.find_one({
             "guild_id": numeric_guild_id,
-            "alias": clean_alias
+            "alias": alias
         })
 
         if data:
@@ -172,60 +159,103 @@ def get_alias_data(guild_id, alias):
 
         data = aliases_collection.find_one({
             "guild_id": numeric_guild_id,
-            "alias": f"-{clean_alias}"
+            "alias": f"-{alias}"
         })
 
         if data:
             return data
 
     except Exception:
-
         pass
 
     return None
 
 
-def get_original_command_from_alias(data):
+def get_alias_target(data):
     """
-    استخراج الأمر الأصلي من بيانات الاختصار.
+    استخراج الأمر الحقيقي من بيانات الاختصار.
 
-    يدعم:
-    command
-    command_name
-    target
+    يدعم أكثر من اسم للحقل حتى يكون
+    متوافقًا مع نسخ الموقع المختلفة.
     """
 
     if not data:
         return ""
 
-    original = (
+    target = (
         data.get("command")
         or data.get("command_name")
         or data.get("target")
+        or data.get("original_command")
         or ""
     )
 
     return normalize_command_name(
-        original
+        target
     )
 
 
-async def execute_website_alias(
-    message
+# =========================================================
+# منع تكرار معالجة الاختصار
+# =========================================================
+
+_ALIAS_GUARD_ATTRIBUTE = (
+    "_website_alias_processing"
+)
+
+
+# =========================================================
+# تشغيل الاختصار فعليًا
+# =========================================================
+
+async def process_website_alias(
+    message,
+    bot
 ):
     """
     تشغيل الاختصار فعليًا.
 
     مثال:
 
-    -ذ @أحمد
+    المستخدم يكتب:
 
-    يصبح داخليًا:
+    ث @شخص
 
-    -ذهبي @أحمد
+    MongoDB:
+
+    alias = ث
+    command = الاستدعاء
+
+    يصبح:
+
+    الاستدعاء @شخص
+
+    ثم يتم تشغيل الأمر الأصلي.
     """
 
-    if not message.guild:
+    # =====================================================
+    # تجاهل البوتات
+    # =====================================================
+
+    if message.author.bot:
+        return False
+
+    # =====================================================
+    # الرسائل الخاصة لا نلمسها
+    # =====================================================
+
+    if message.guild is None:
+        return False
+
+    # =====================================================
+    # منع إعادة معالجة نفس الرسالة
+    # =====================================================
+
+    if getattr(
+        message,
+        _ALIAS_GUARD_ATTRIBUTE,
+        False
+    ):
         return False
 
     content = message.content.strip()
@@ -234,11 +264,12 @@ async def execute_website_alias(
         return False
 
     # =====================================================
-    # الاختصارات تعمل فقط مع -
+    # استخراج أول كلمة
+    #
+    # ث
+    # ث @شخص
+    # ث السبب
     # =====================================================
-
-    if not content.startswith("-"):
-        return False
 
     parts = content.split()
 
@@ -251,10 +282,14 @@ async def execute_website_alias(
     # البحث عن الاختصار
     # =====================================================
 
-    alias_data = get_alias_data(
+    alias_data = find_website_alias(
         message.guild.id,
         typed_alias
     )
+
+    # =====================================================
+    # ليست اختصارًا
+    # =====================================================
 
     if not alias_data:
         return False
@@ -263,33 +298,33 @@ async def execute_website_alias(
     # استخراج الأمر الأصلي
     # =====================================================
 
-    original_command = get_original_command_from_alias(
+    target_command = get_alias_target(
         alias_data
     )
 
-    if not original_command:
+    if not target_command:
+
         print(
-            f"⚠️ [WEBSITE ALIAS] الاختصار "
-            f"{typed_alias} موجود لكن الأمر الأصلي فارغ"
+            f"⚠️ [ALIAS] الاختصار "
+            f"{typed_alias} موجود لكن الأمر الهدف فارغ"
         )
 
         return False
 
     # =====================================================
-    # التأكد أن الأمر الأصلي موجود فعلًا
+    # بناء الأمر الجديد
+    #
+    # ث
+    # ↓
+    # الاستدعاء
+    #
+    # ث @أحمد
+    # ↓
+    # الاستدعاء @أحمد
     # =====================================================
 
-    ctx = await self_bot_get_context(
-        message
-    )
+    new_content = target_command
 
-    # =====================================================
-    # بناء محتوى الأمر الجديد
-    # =====================================================
-
-    new_content = f"-{original_command}"
-
-    # إضافة بقية الكلام كما هو
     if len(parts) > 1:
 
         new_content += " "
@@ -298,49 +333,101 @@ async def execute_website_alias(
             parts[1:]
         )
 
+    old_content = message.content
+
+    print(
+        "=================================================="
+    )
+
+    print(
+        "🔁 [ALIAS] تم العثور على اختصار"
+    )
+
+    print(
+        f"👤 المستخدم: "
+        f"{message.author} ({message.author.id})"
+    )
+
+    print(
+        f"📌 الاختصار: {old_content}"
+    )
+
+    print(
+        f"🎯 الأمر الحقيقي: {new_content}"
+    )
+
+    print(
+        "=================================================="
+    )
+
     # =====================================================
-    # نسخ الرسالة بشكل آمن
+    # وضع علامة حماية
     # =====================================================
 
-    old_content = message.content
+    try:
+
+        setattr(
+            message,
+            _ALIAS_GUARD_ATTRIBUTE,
+            True
+        )
+
+    except Exception:
+        pass
+
+    # =====================================================
+    # تغيير محتوى الرسالة مؤقتًا
+    # =====================================================
 
     message.content = new_content
 
     try:
 
         # =================================================
-        # إنشاء Context جديد
+        # أولًا:
+        # محاولة العثور على أمر discord.py
         # =================================================
 
-        ctx = await self_bot_get_context(
+        ctx = await bot.get_context(
             message
         )
 
         # =================================================
-        # إذا لم يتم العثور على الأمر
+        # إذا كان الأمر مسجلًا في bot.commands
         # =================================================
 
-        if ctx.command is None:
+        if ctx.command is not None:
 
             print(
-                f"⚠️ [WEBSITE ALIAS] "
-                f"الأمر الأصلي غير موجود: "
-                f"-{original_command}"
+                f"✅ [ALIAS] الأمر مسجل في Discord.py: "
+                f"{ctx.command.qualified_name}"
             )
 
-            return False
+            await bot.invoke(
+                ctx
+            )
+
+            return True
 
         # =================================================
-        # تنفيذ الأمر
+        # ثانيًا:
+        #
+        # إذا كان الأمر يدويًا داخل on_message
+        #
+        # مثال:
+        #
+        # if message.content.startswith("الاستدعاء"):
+        #
         # =================================================
 
         print(
-            f"🔁 [WEBSITE ALIAS] "
-            f"{old_content} -> {new_content}"
+            "🔄 [ALIAS] الأمر ليس Discord.py command، "
+            "سيتم تمريره إلى on_message"
         )
 
-        await self_bot_invoke(
-            ctx
+        await bot.dispatch(
+            "message",
+            message
         )
 
         return True
@@ -348,8 +435,7 @@ async def execute_website_alias(
     except commands.CommandError as error:
 
         print(
-            f"❌ [WEBSITE ALIAS] خطأ أثناء تنفيذ "
-            f"{old_content}"
+            "❌ [ALIAS] حدث خطأ أثناء تنفيذ الأمر"
         )
 
         print(
@@ -361,7 +447,7 @@ async def execute_website_alias(
     except Exception as error:
 
         print(
-            f"❌ [WEBSITE ALIAS] خطأ غير متوقع"
+            "❌ [ALIAS] خطأ غير متوقع"
         )
 
         print(
@@ -375,40 +461,51 @@ async def execute_website_alias(
     finally:
 
         # =================================================
-        # إعادة النص الأصلي
+        # إعادة محتوى الرسالة الأصلي
         # =================================================
 
         message.content = old_content
 
+        try:
 
-async def self_bot_get_context(
-    message
-):
-    """
-    الحصول على Context من البوت.
+            delattr(
+                message,
+                _ALIAS_GUARD_ATTRIBUTE
+            )
 
-    هذه الدالة منفصلة حتى لا نغير أي شيء
-    من نظام البوت الأساسي.
-    """
+        except Exception:
+            pass
 
-    bot = message._state._get_client()
 
-    return await bot.get_context(
-        message
+# =========================================================
+# استخراج أمر من نص
+# =========================================================
+
+def clean_detected_command(value):
+
+    if not value:
+        return ""
+
+    value = str(value).strip()
+
+    value = normalize_command_name(
+        value
     )
 
+    # إزالة أي شيء بعد مسافة
+    value = (
+        value.split()[0]
+        if value
+        else ""
+    )
 
-async def self_bot_invoke(
-    ctx
-):
-    """
-    تنفيذ الأمر من الـ Context.
-    """
+    # إزالة علامات شائعة
+    value = value.strip(
+        "\"'`()[]{}:;,"
+    )
 
-    bot = ctx.bot
-
-    await bot.invoke(
-        ctx
+    return normalize_command_name(
+        value
     )
 
 
@@ -456,6 +553,7 @@ def detect_manual_commands(bot):
             # message.content.startswith("-رتبة")
             # message.content.startswith(".رتبة")
             # message.content.startswith("/رتبة")
+            # message.content.startswith("رتبة")
             # -------------------------------------------------
 
             patterns = [
@@ -465,6 +563,10 @@ def detect_manual_commands(bot):
                 r'\.content\s*==\s*["\']([\-\.\/][^"\']+)["\']',
 
                 r'\.content\.startswith\(\s*f?["\']([\-\.\/][^"\']+)["\']',
+
+                r'\.content\.startswith\(\s*["\']([^"\']+)["\']',
+
+                r'\.content\s*==\s*["\']([^"\']+)["\']',
 
             ]
 
@@ -652,6 +754,10 @@ def save_command(command_data):
         )
     }
 
+    # -----------------------------------------------------
+    # بيانات إضافية للأوامر المكتشفة تلقائيًا
+    # -----------------------------------------------------
+
     if command_data.get(
         "auto_detected",
         False
@@ -785,6 +891,7 @@ def save_bot_commands(bot):
         if not command_name:
             continue
 
+        # الأمر اليدوي لا يستبدل أمر Discord الحقيقي
         if command_name not in all_commands:
 
             all_commands[
@@ -1166,31 +1273,23 @@ class WebsiteCommands(
         message
     ):
 
-        # -------------------------------------------------
-        # تجاهل البوتات
-        # -------------------------------------------------
-
         if message.author.bot:
             return
-
-        # -------------------------------------------------
-        # إذا لم تكن رسالة سيرفر
-        # -------------------------------------------------
 
         if message.guild is None:
             return
 
         try:
 
-            await execute_website_alias(
-                message
+            await process_website_alias(
+                message,
+                self.bot
             )
 
         except Exception as error:
 
             print(
-                "❌ [WEBSITE ALIAS] "
-                "حدث خطأ في نظام الاختصارات"
+                "❌ [ALIAS] خطأ في نظام الاختصارات"
             )
 
             print(
@@ -1245,6 +1344,7 @@ class WebsiteCommands(
 
         # =================================================
         # إذا لا يوجد إعداد للموقع
+        # نخلي الأمر يعمل طبيعي
         # =================================================
 
         if not setting:
