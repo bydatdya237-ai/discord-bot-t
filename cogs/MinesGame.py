@@ -1518,3 +1518,186 @@ class MinesGame(commands.Cog):
 
     # =====================================================
     # أمر ذهبي
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_GOLDEN
+    )
+    async def golden_gold(
+        self,
+        ctx
+    ):
+
+        if ctx.guild is None:
+            return
+
+        # =================================================
+        # تحكم الموقع
+        # =================================================
+
+        if not await self.has_command_permission(
+            ctx.author,
+            COMMAND_GOLDEN,
+            ctx.channel.id
+        ):
+
+            return
+
+        guild_id = ctx.guild.id
+        user_id = ctx.author.id
+
+        # =================================================
+        # الحصول على بيانات اللاعب
+        # =================================================
+
+        document = await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        # =================================================
+        # آخر استخدام
+        # =================================================
+
+        last_golden_at = document.get(
+            "last_golden_at"
+        )
+
+        if last_golden_at:
+
+            if last_golden_at.tzinfo is None:
+
+                last_golden_at = last_golden_at.replace(
+                    tzinfo=timezone.utc
+                )
+
+            elapsed = (
+                datetime.now(
+                    timezone.utc
+                )
+                - last_golden_at
+            ).total_seconds()
+
+            remaining = (
+                GOLDEN_COOLDOWN
+                - elapsed
+            )
+
+            if remaining > 0:
+
+                hours = int(
+                    remaining // 3600
+                )
+
+                minutes = int(
+                    (remaining % 3600) // 60
+                )
+
+                seconds = int(
+                    remaining % 60
+                )
+
+                if hours > 0:
+
+                    if minutes > 0:
+
+                        time_text = (
+                            f"**{hours} ساعة و {minutes} دقيقة**"
+                        )
+
+                    else:
+
+                        time_text = (
+                            f"**{hours} ساعة**"
+                        )
+
+                elif minutes > 0:
+
+                    time_text = (
+                        f"**{minutes} دقيقة و {seconds} ثانية**"
+                    )
+
+                else:
+
+                    time_text = (
+                        f"**{seconds} ثانية**"
+                    )
+
+                await ctx.send(
+                    f"{ctx.author.mention}\n"
+                    f"⏳ تقدر تستخدم الأمر الذهبي مرة ثانية بعد {time_text}."
+                )
+
+                return
+
+        # =================================================
+        # تحديد الجائزة
+        # =================================================
+
+        reward = random.randint(
+            GOLDEN_MIN,
+            GOLDEN_MAX
+        )
+
+        # =================================================
+        # إضافة الذهب
+        # =================================================
+
+        new_gold = await self.change_gold(
+            guild_id,
+            user_id,
+            reward
+        )
+
+        # =================================================
+        # تسجيل وقت الاستخدام
+        # =================================================
+
+        await self.game_data.update_one(
+            {
+                "guild_id": {
+                    "$in": self.guild_id_variants(
+                        guild_id
+                    )
+                },
+                "user_id": str(
+                    user_id
+                )
+            },
+            {
+                "$set": {
+                    "last_golden_at": datetime.now(
+                        timezone.utc
+                    )
+                }
+            }
+        )
+
+        # =================================================
+        # رسالة المكافأة
+        # =================================================
+
+        embed = discord.Embed(
+            title="✨ المكافأة الذهبية",
+            description=(
+                f"🎉 {ctx.author.mention} حصلت على مكافأة ذهبية!\n\n"
+                f"💰 الذهب الذي حصلت عليه: **+{reward:,} ذهب**\n"
+                f"💳 رصيدك الحالي: **{new_gold:,} ذهب**\n\n"
+                "⏰ يمكنك استخدام المكافأة الذهبية مرة أخرى بعد **12 ساعة**."
+            ),
+            color=0xFFD700
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+
+# =========================================================
+# Setup
+# =========================================================
+
+async def setup(bot):
+    await bot.add_cog(
+        MinesGame(bot)
+    )
