@@ -1,12 +1,10 @@
 import os
 import re
-import asyncio
 from datetime import timedelta
 
 import discord
 from discord.ext import commands
 from discord import ui
-
 from pymongo import MongoClient
 
 
@@ -19,9 +17,11 @@ MONGO_URI = os.getenv("MONGO_URI")
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["discord_bot_db"]
 
-moderation_settings_collection = db["moderation_settings"]
 moderation_reasons_collection = db["moderation_reasons"]
 moderation_warnings_collection = db["moderation_warnings"]
+
+# نفس مجموعة نظام الموقع
+website_command_settings = db["website_command_settings"]
 
 
 # =========================================================
@@ -34,42 +34,197 @@ DEFAULT_REASONS = [
     "إزعاج",
     "استفزاز",
     "مخالفة القوانين",
-    "محتوى غير مناسب"
+    "محتوى غير مناسب",
 ]
 
 
 # =========================================================
-# إعدادات Mongo
+# أسماء الأوامر
 # =========================================================
 
-def get_moderation_settings(guild_id: int):
+COMMAND_MUTE = "لاتتكلم"
+COMMAND_UNMUTE = "احكي"
+COMMAND_BAN = "باند"
+COMMAND_UNBAN = "انتهاء-التسفير"
+COMMAND_KICK = "طرد"
+COMMAND_WARN = "تحذير"
+COMMAND_WARNS = "تحذيرات"
+COMMAND_CLEAR_WARNS = "مسح-تحذيرات"
 
-    settings = moderation_settings_collection.find_one(
-        {"guild_id": guild_id}
+
+# =========================================================
+# تنظيف اسم الأمر
+# =========================================================
+
+def normalize_command_name(name: str):
+    if not name:
+        return ""
+
+    name = str(name).strip().lower()
+
+    return (
+        name
+        .replace("-", "")
+        .replace("_", "")
+        .replace(" ", "")
     )
 
-    if not settings:
 
-        settings = {
-            "guild_id": guild_id
+# =========================================================
+# نظام صلاحيات الموقع
+# =========================================================
+
+def website_permission_allowed(
+    member: discord.Member,
+    command_name: str,
+    channel_id: int
+):
+    """
+    النظام هنا مقفّل افتراضيًا:
+
+    1. إذا الأمر غير موجود في الموقع = ممنوع.
+    2. إذا الأمر موجود لكنه غير مفعّل = ممنوع.
+    3. إذا محدد رتب = لازم العضو يملك رتبة مسموحة.
+    4. إذا محدد رومات = لازم يكون الأمر في روم مسموح.
+    5. إذا محدد الاثنين = لازم يحقق الاثنين.
+    6. إذا لا توجد رتب ولا رومات = الأمر يعمل لأي عضو
+       فقط لأن الأمر مفعّل من الموقع.
+    """
+
+    if member is None:
+        return False
+
+    if member.guild is None:
+        return False
+
+    wanted_name = normalize_command_name(command_name)
+
+    settings = list(
+        website_command_settings.find(
+            {
+                "guild_id": member.guild.id
+            }
+        )
+    )
+
+    found_setting = None
+
+    for setting in settings:
+
+        possible_names = []
+
+        if setting.get("command_name"):
+            possible_names.append(
+                setting.get("command_name")
+            )
+
+        if setting.get("name"):
+            possible_names.append(
+                setting.get("name")
+            )
+
+        if setting.get("command"):
+            possible_names.append(
+                setting.get("command")
+            )
+
+        aliases = setting.get("aliases", [])
+
+        if isinstance(aliases, list):
+            possible_names.extend(aliases)
+
+        for name in possible_names:
+
+            if normalize_command_name(str(name)) == wanted_name:
+                found_setting = setting
+                break
+
+        if found_setting:
+            break
+
+    # =====================================================
+    # الأمر غير موجود في الموقع
+    # =====================================================
+
+    if found_setting is None:
+        return False
+
+    # =====================================================
+    # الأمر غير مفعّل
+    # =====================================================
+
+    if found_setting.get("enabled") is not True:
+        return False
+
+    # =====================================================
+    # فحص الرتب
+    # =====================================================
+
+    role_ids = found_setting.get("role_ids", [])
+
+    if role_ids is None:
+        role_ids = []
+
+    allowed_role_ids = set()
+
+    for role_id in role_ids:
+
+        try:
+            allowed_role_ids.add(int(role_id))
+        except (TypeError, ValueError):
+            continue
+
+    if allowed_role_ids:
+
+        member_role_ids = {
+            role.id
+            for role in member.roles
         }
 
-        moderation_settings_collection.insert_one(
-            settings
-        )
+        if not allowed_role_ids.intersection(member_role_ids):
+            return False
 
-    return settings
+    # =====================================================
+    # فحص الرومات
+    # =====================================================
 
+    channel_ids = found_setting.get("channel_ids", [])
+
+    if channel_ids is None:
+        channel_ids = []
+
+    allowed_channel_ids = set()
+
+    for channel in channel_ids:
+
+        try:
+            allowed_channel_ids.add(int(channel))
+        except (TypeError, ValueError):
+            continue
+
+    if allowed_channel_ids:
+
+        if channel_id not in allowed_channel_ids:
+            return False
+
+    return True
+
+
+# =========================================================
+# الأسباب
+# =========================================================
 
 def get_reasons(guild_id: int):
 
     data = moderation_reasons_collection.find_one(
-        {"guild_id": guild_id}
+        {
+            "guild_id": guild_id
+        }
     )
 
     if not data:
 
-        reasons = list(DEFAULT_REASONS)
+        reasons = DEFAULT_REASONS.copy()
 
         moderation_reasons_collection.insert_one(
             {
@@ -80,53 +235,41 @@ def get_reasons(guild_id: int):
 
         return reasons
 
-    reasons = data.get(
-        "reasons",
-        []
-    )
+    reasons = data.get("reasons", [])
 
     if not reasons:
-
-        reasons = list(DEFAULT_REASONS)
-
-        moderation_reasons_collection.update_one(
-            {"guild_id": guild_id},
-            {
-                "$set": {
-                    "reasons": reasons
-                }
-            },
-            upsert=True
-        )
+        return DEFAULT_REASONS.copy()
 
     return reasons
 
 
-def add_reason(
-    guild_id: int,
-    reason: str
-):
+def add_reason(guild_id: int, reason: str):
 
     reason = reason.strip()
 
     if not reason:
         return False
 
-    reasons = get_reasons(
-        guild_id
-    )
+    reasons = get_reasons(guild_id)
 
-    # منع التكرار
-    if reason in reasons:
+    normalized_existing = {
+        str(item).strip().lower()
+        for item in reasons
+    }
+
+    if reason.lower() in normalized_existing:
         return False
 
-    reasons.append(reason)
-
     moderation_reasons_collection.update_one(
-        {"guild_id": guild_id},
         {
-            "$set": {
-                "reasons": reasons
+            "guild_id": guild_id
+        },
+        {
+            "$setOnInsert": {
+                "guild_id": guild_id
+            },
+            "$push": {
+                "reasons": reason
             }
         },
         upsert=True
@@ -136,266 +279,157 @@ def add_reason(
 
 
 # =========================================================
-# تحليل المدة
-#
-# أمثلة:
-# 10s
-# 100s
-# 10m
-# 2h
-# 7d
-# 1w
+# تحويل المدة
 # =========================================================
 
-def parse_duration(value):
+def parse_duration(value: str):
 
     if not value:
         return None
 
-    value = str(value).strip().lower()
+    value = value.strip().lower()
 
     match = re.fullmatch(
-        r"(\d+(?:\.\d+)?)\s*(s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|week|weeks)",
+        r"(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)",
         value
     )
 
     if not match:
         return None
 
-    number = float(
-        match.group(1)
-    )
-
+    amount = float(match.group(1))
     unit = match.group(2)
 
-    if number <= 0:
+    if amount <= 0:
         return None
 
-    if unit in (
+    if unit in {
         "s",
         "sec",
-        "secs"
-    ):
-        seconds = number
+        "secs",
+        "second",
+        "seconds"
+    }:
+        seconds = amount
 
-    elif unit in (
+    elif unit in {
         "m",
         "min",
-        "mins"
-    ):
-        seconds = number * 60
+        "mins",
+        "minute",
+        "minutes"
+    }:
+        seconds = amount * 60
 
-    elif unit in (
+    elif unit in {
         "h",
         "hr",
-        "hrs"
-    ):
-        seconds = number * 60 * 60
+        "hrs",
+        "hour",
+        "hours"
+    }:
+        seconds = amount * 60 * 60
 
-    elif unit in (
+    elif unit in {
         "d",
         "day",
         "days"
-    ):
-        seconds = number * 60 * 60 * 24
+    }:
+        seconds = amount * 60 * 60 * 24
 
-    elif unit in (
+    elif unit in {
         "w",
         "week",
         "weeks"
-    ):
-        seconds = number * 60 * 60 * 24 * 7
+    }:
+        seconds = amount * 60 * 60 * 24 * 7
 
     else:
         return None
 
     # Discord timeout maximum = 28 days
-    if seconds > 28 * 24 * 60 * 60:
+    max_seconds = 28 * 24 * 60 * 60
+
+    if seconds > max_seconds:
         return None
 
-    return timedelta(
-        seconds=seconds
-    )
-
-
-def format_duration(value):
-
-    duration = parse_duration(
-        value
-    )
-
-    if duration is None:
-        return value
-
-    seconds = int(
-        duration.total_seconds()
-    )
-
-    if seconds < 60:
-        return f"{seconds} ثانية"
-
-    if seconds < 3600:
-        return f"{seconds // 60} دقيقة"
-
-    if seconds < 86400:
-        return f"{seconds // 3600} ساعة"
-
-    if seconds < 604800:
-        return f"{seconds // 86400} يوم"
-
-    return f"{seconds // 604800} أسبوع"
+    return timedelta(seconds=seconds)
 
 
 # =========================================================
-# التحقق من إعدادات الموقع
-#
-# يستخدم نفس website_command_settings
+# عرض المدة
 # =========================================================
 
-async def website_moderation_allowed(
-    member,
-    command_name
+def format_duration(duration: timedelta):
+
+    total_seconds = int(duration.total_seconds())
+
+    days = total_seconds // 86400
+    total_seconds %= 86400
+
+    hours = total_seconds // 3600
+    total_seconds %= 3600
+
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+
+    parts = []
+
+    if days:
+        parts.append(f"{days} يوم")
+
+    if hours:
+        parts.append(f"{hours} ساعة")
+
+    if minutes:
+        parts.append(f"{minutes} دقيقة")
+
+    if seconds:
+        parts.append(f"{seconds} ثانية")
+
+    return " و ".join(parts) if parts else "0 ثانية"
+
+
+# =========================================================
+# فحص إمكانية الإشراف
+# =========================================================
+
+def can_moderate(
+    moderator: discord.Member,
+    target: discord.Member
 ):
 
-    try:
+    if target.id == moderator.id:
+        return False, "❌ ما تقدر تستخدم الأمر على نفسك."
 
-        setting = db[
-            "website_command_settings"
-        ].find_one(
-            {
-                "guild_id": member.guild.id,
-                "command_name": command_name
-            }
-        )
+    if target.id == moderator.guild.owner_id:
+        return False, "❌ ما تقدر تستخدم الأمر على صاحب السيرفر."
 
-        # إذا لم يوجد إعداد في الموقع
-        # نرجع إلى صلاحيات Discord الأساسية
-        if not setting:
-            return True
+    if moderator.id != moderator.guild.owner_id:
 
-        # الأمر مغلق من الموقع
-        if setting.get(
-            "enabled",
-            True
-        ) is False:
+        if target.top_role >= moderator.top_role:
+            return False, "❌ ما تقدر تستخدم الأمر على شخص رتبته مساوية أو أعلى من رتبتك."
 
-            return False
+    bot_member = moderator.guild.me
 
-        # التحقق من الرتب
-        role_ids = setting.get(
-            "role_ids",
-            []
-        )
+    if bot_member is None:
+        return False, "❌ ما قدرت أحدد رتبة البوت."
 
-        if role_ids:
+    if target.top_role >= bot_member.top_role:
+        return False, "❌ رتبة الشخص أعلى من رتبة البوت أو مساوية لها."
 
-            member_role_ids = {
-                role.id
-                for role in member.roles
-            }
-
-            if not member_role_ids.intersection(
-                set(role_ids)
-            ):
-
-                return False
-
-        # التحقق من الرومات
-        channel_ids = setting.get(
-            "channel_ids",
-            []
-        )
-
-        if channel_ids:
-
-            if member.guild.get_channel(
-                member.guild.id
-            ):
-                pass
-
-        return True
-
-    except Exception:
-
-        # لا نمنع النظام بالكامل بسبب خطأ في
-        # إعدادات الموقع
-        return True
+    return True, None
 
 
 # =========================================================
-# فحص صلاحية العضو من الموقع
-# مع تمرير الروم الحالي
-# =========================================================
-
-async def website_permission_for_interaction(
-    member,
-    command_name,
-    channel_id
-):
-
-    try:
-
-        setting = db[
-            "website_command_settings"
-        ].find_one(
-            {
-                "guild_id": member.guild.id,
-                "command_name": command_name
-            }
-        )
-
-        if not setting:
-            return True
-
-        if setting.get(
-            "enabled",
-            True
-        ) is False:
-            return False
-
-        role_ids = setting.get(
-            "role_ids",
-            []
-        )
-
-        if role_ids:
-
-            member_role_ids = {
-                role.id
-                for role in member.roles
-            }
-
-            if not member_role_ids.intersection(
-                set(role_ids)
-            ):
-                return False
-
-        channel_ids = setting.get(
-            "channel_ids",
-            []
-        )
-
-        if channel_ids:
-
-            if channel_id not in channel_ids:
-                return False
-
-        return True
-
-    except Exception:
-
-        return True
-
-
-# =========================================================
-# حفظ التحذير
+# الإنذارات
 # =========================================================
 
 def save_warning(
-    guild_id,
-    user_id,
-    moderator_id,
-    reason
+    guild_id: int,
+    user_id: int,
+    moderator_id: int,
+    reason: str
 ):
 
     moderation_warnings_collection.insert_one(
@@ -410,8 +444,8 @@ def save_warning(
 
 
 def get_warnings(
-    guild_id,
-    user_id
+    guild_id: int,
+    user_id: int
 ):
 
     return list(
@@ -421,8 +455,9 @@ def get_warnings(
                 "user_id": user_id
             }
         ).sort(
-            "created_at",
-            -1
+            [
+                ("created_at", -1)
+            ]
         )
     )
 
@@ -433,60 +468,52 @@ def get_warnings(
 
 class AddReasonModal(ui.Modal):
 
-    def __init__(
-        self,
-        moderation_cog,
-        member
-    ):
+    def __init__(self, target: discord.Member):
 
         super().__init__(
             title="إضافة سبب إسكات"
         )
 
-        self.moderation_cog = moderation_cog
-        self.member = member
+        self.target = target
 
         self.reason_input = ui.TextInput(
-            label="سبب الإسكات",
-            placeholder="مثال: مخالفة القوانين",
-            min_length=1,
+            label="السبب الجديد",
+            placeholder="اكتب سبب الإسكات...",
             max_length=100,
             required=True
         )
 
-        self.add_item(
-            self.reason_input
-        )
+        self.add_item(self.reason_input)
 
     async def on_submit(
         self,
         interaction: discord.Interaction
     ):
 
-        allowed = await website_permission_for_interaction(
+        # =================================================
+        # صلاحية الموقع
+        # =================================================
+
+        allowed = website_permission_allowed(
             interaction.user,
-            "لاتتكلم",
+            COMMAND_MUTE,
             interaction.channel.id
         )
 
         if not allowed:
-
             await interaction.response.send_message(
-                "❌ ليس لديك صلاحية استخدام هذا الخيار.",
+                "❌ ما عندك صلاحية استخدام إضافة أسباب الإسكات.",
                 ephemeral=True
             )
-
             return
 
         reason = self.reason_input.value.strip()
 
         if not reason:
-
             await interaction.response.send_message(
-                "❌ اكتب سببًا صحيحًا.",
+                "❌ اكتب سبب صحيح.",
                 ephemeral=True
             )
-
             return
 
         added = add_reason(
@@ -495,41 +522,44 @@ class AddReasonModal(ui.Modal):
         )
 
         if not added:
-
             await interaction.response.send_message(
-                "⚠️ هذا السبب موجود مسبقًا.",
+                "❌ هذا السبب موجود مسبقًا.",
                 ephemeral=True
             )
-
             return
 
         await interaction.response.send_message(
-            "✅ تم إضافة السبب بنجاح.",
+            f"✅ تمت إضافة السبب **{reason}**.",
             ephemeral=True
         )
 
-        # إظهار قائمة المدة
-        await interaction.followup.send(
-            "⏱️ الآن اختر مدة الإسكات:",
-            view=DurationView(
-                self.moderation_cog,
-                self.member,
-                reason
-            ),
-            ephemeral=True
-        )
+        # إرسال قائمة المدة
+        try:
+
+            await interaction.followup.send(
+                f"اختر مدة إسكات {self.target.mention}:",
+                view=DurationView(
+                    moderator=interaction.user,
+                    target=self.target,
+                    reason=reason
+                ),
+                ephemeral=True
+            )
+
+        except Exception:
+            pass
 
 
 # =========================================================
-# مودال مدة مخصصة
+# مودال المدة المخصصة
 # =========================================================
 
 class CustomDurationModal(ui.Modal):
 
     def __init__(
         self,
-        moderation_cog,
-        member,
+        moderator,
+        target,
         reason
     ):
 
@@ -537,74 +567,155 @@ class CustomDurationModal(ui.Modal):
             title="مدة مخصصة"
         )
 
-        self.moderation_cog = moderation_cog
-        self.member = member
+        self.moderator = moderator
+        self.target = target
         self.reason = reason
 
         self.duration_input = ui.TextInput(
             label="المدة",
-            placeholder="مثال: 100s أو 10m أو 2h أو 7d",
-            required=True,
-            max_length=30
+            placeholder="مثال: 30s أو 10m أو 2h أو 1d",
+            max_length=30,
+            required=True
         )
 
-        self.add_item(
-            self.duration_input
-        )
+        self.add_item(self.duration_input)
 
     async def on_submit(
         self,
         interaction: discord.Interaction
     ):
 
-        duration_text = (
-            self.duration_input.value
-            .strip()
-            .lower()
+        # صلاحية الموقع مرة ثانية
+        allowed = website_permission_allowed(
+            interaction.user,
+            COMMAND_MUTE,
+            interaction.channel.id
         )
 
+        if not allowed:
+            await interaction.response.send_message(
+                "❌ ما عندك صلاحية استخدام أمر الإسكات.",
+                ephemeral=True
+            )
+            return
+
         duration = parse_duration(
-            duration_text
+            self.duration_input.value
         )
 
         if duration is None:
 
             await interaction.response.send_message(
-                "❌ المدة غير صحيحة.\n"
-                "أمثلة: `100s` أو `10m` أو `2h` أو `7d`.",
+                "❌ المدة غير صحيحة.\n\n"
+                "أمثلة:\n"
+                "`30s`\n"
+                "`10m`\n"
+                "`2h`\n"
+                "`1d`\n\n"
+                "الحد الأقصى 28 يوم.",
                 ephemeral=True
             )
-
             return
 
-        await self.moderation_cog.apply_timeout(
+        cog = interaction.client.get_cog(
+            "ModerationCog"
+        )
+
+        if cog is None:
+            await interaction.response.send_message(
+                "❌ تعذر الوصول لنظام الحماية.",
+                ephemeral=True
+            )
+            return
+
+        await cog.apply_timeout(
             interaction,
-            self.member,
+            self.target,
             duration,
             self.reason
         )
 
 
 # =========================================================
-# قائمة مدة الإسكات
+# قائمة المدة
 # =========================================================
 
 class DurationView(ui.View):
 
     def __init__(
         self,
-        moderation_cog,
-        member,
+        moderator,
+        target,
         reason
     ):
 
-        super().__init__(
-            timeout=180
+        super().__init__(timeout=120)
+
+        self.moderator = moderator
+        self.target = target
+        self.reason = reason
+
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.user.id != self.moderator.id:
+
+            await interaction.response.send_message(
+                "❌ هذه القائمة ليست لك.",
+                ephemeral=True
+            )
+
+            return False
+
+        allowed = website_permission_allowed(
+            interaction.user,
+            COMMAND_MUTE,
+            interaction.channel.id
         )
 
-        self.moderation_cog = moderation_cog
-        self.member = member
-        self.reason = reason
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ ما عندك صلاحية استخدام أمر الإسكات.",
+                ephemeral=True
+            )
+
+            return False
+
+        return True
+
+    async def apply(
+        self,
+        interaction,
+        seconds,
+        label
+    ):
+
+        duration = timedelta(
+            seconds=seconds
+        )
+
+        cog = interaction.client.get_cog(
+            "ModerationCog"
+        )
+
+        if cog is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر الوصول لنظام الحماية.",
+                ephemeral=True
+            )
+
+            return
+
+        await cog.apply_timeout(
+            interaction,
+            self.target,
+            duration,
+            self.reason
+        )
 
     @ui.button(
         label="10 ثواني",
@@ -612,32 +723,30 @@ class DurationView(ui.View):
     )
     async def ten_seconds(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: ui.Button
     ):
 
-        await self.moderation_cog.apply_timeout(
+        await self.apply(
             interaction,
-            self.member,
-            timedelta(seconds=10),
-            self.reason
+            10,
+            "10 ثواني"
         )
 
     @ui.button(
         label="1 دقيقة",
-        style=discord.ButtonStyle.secondary
+        style=discord.ButtonStyle.primary
     )
     async def one_minute(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: ui.Button
     ):
 
-        await self.moderation_cog.apply_timeout(
+        await self.apply(
             interaction,
-            self.member,
-            timedelta(minutes=1),
-            self.reason
+            60,
+            "1 دقيقة"
         )
 
     @ui.button(
@@ -646,15 +755,14 @@ class DurationView(ui.View):
     )
     async def ten_minutes(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: ui.Button
     ):
 
-        await self.moderation_cog.apply_timeout(
+        await self.apply(
             interaction,
-            self.member,
-            timedelta(minutes=10),
-            self.reason
+            600,
+            "10 دقائق"
         )
 
     @ui.button(
@@ -663,49 +771,48 @@ class DurationView(ui.View):
     )
     async def one_hour(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: ui.Button
     ):
 
-        await self.moderation_cog.apply_timeout(
+        await self.apply(
             interaction,
-            self.member,
-            timedelta(hours=1),
-            self.reason
+            3600,
+            "1 ساعة"
         )
 
     @ui.button(
-        label="يوم",
-        style=discord.ButtonStyle.success
+        label="1 يوم",
+        style=discord.ButtonStyle.primary
     )
     async def one_day(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: ui.Button
     ):
 
-        await self.moderation_cog.apply_timeout(
+        await self.apply(
             interaction,
-            self.member,
-            timedelta(days=1),
-            self.reason
+            86400,
+            "1 يوم"
         )
 
     @ui.button(
         label="مدة مخصصة",
-        style=discord.ButtonStyle.success
+        style=discord.ButtonStyle.success,
+        row=2
     )
-    async def custom(
+    async def custom_duration(
         self,
-        interaction,
-        button
+        interaction: discord.Interaction,
+        button: ui.Button
     ):
 
         await interaction.response.send_modal(
             CustomDurationModal(
-                self.moderation_cog,
-                self.member,
-                self.reason
+                moderator=interaction.user,
+                target=self.target,
+                reason=self.reason
             )
         )
 
@@ -714,108 +821,81 @@ class DurationView(ui.View):
 # قائمة الأسباب
 # =========================================================
 
-class ReasonSelectView(ui.View):
+class ReasonSelect(ui.Select):
 
     def __init__(
         self,
-        moderation_cog,
-        member
+        target: discord.Member
     ):
 
-        super().__init__(
-            timeout=180
-        )
-
-        self.moderation_cog = moderation_cog
-        self.member = member
+        self.target = target
 
         reasons = get_reasons(
-            member.guild.id
+            target.guild.id
         )
 
         options = []
 
-        for index, reason in enumerate(
-            reasons[:24]
-        ):
+        for index, reason in enumerate(reasons[:24]):
 
             options.append(
                 discord.SelectOption(
-                    label=reason[:100],
+                    label=str(reason)[:100],
                     value=str(index)
                 )
             )
 
-        if not options:
-
-            options.append(
-                discord.SelectOption(
-                    label="لا توجد أسباب",
-                    value="none"
-                )
-            )
-
-        self.select = ui.Select(
-            placeholder="اختر سبب الإسكات",
+        super().__init__(
+            placeholder="اختر سبب الإسكات...",
+            min_values=1,
+            max_values=1,
             options=options
         )
 
-        self.select.callback = (
-            self.reason_callback
-        )
-
-        self.add_item(
-            self.select
-        )
-
-        # زر إضافة سبب
-        self.add_item(
-            AddReasonButton(
-                moderation_cog,
-                member
-            )
-        )
-
-    async def reason_callback(
+    async def callback(
         self,
-        interaction
+        interaction: discord.Interaction
     ):
 
-        value = self.select.values[0]
+        allowed = website_permission_allowed(
+            interaction.user,
+            COMMAND_MUTE,
+            interaction.channel.id
+        )
 
-        if value == "none":
+        if not allowed:
 
             await interaction.response.send_message(
-                "❌ لا توجد أسباب متاحة.",
+                "❌ ما عندك صلاحية استخدام أمر الإسكات.",
                 ephemeral=True
             )
 
             return
 
         reasons = get_reasons(
-            self.member.guild.id
+            self.target.guild.id
         )
 
-        try:
-            reason = reasons[
-                int(value)
-            ]
+        index = int(self.values[0])
 
-        except Exception:
+        if index >= len(reasons):
 
             await interaction.response.send_message(
-                "❌ تعذر العثور على السبب.",
+                "❌ السبب غير موجود.",
                 ephemeral=True
             )
 
             return
 
+        reason = reasons[index]
+
         await interaction.response.send_message(
-            f"⏱️ سبب الإسكات: **{reason}**\nاختر المدة:",
+            f"تم اختيار السبب: **{reason}**\n"
+            f"الآن اختر مدة الإسكات:",
             view=DurationView(
-                self.moderation_cog,
-                self.member,
-                reason
+                moderator=interaction.user,
+                target=self.target,
+                reason=reason
             ),
             ephemeral=True
         )
@@ -825,40 +905,36 @@ class ReasonSelectView(ui.View):
 # زر إضافة سبب
 # =========================================================
 
-class AddReasonButton(
-    ui.Button
-):
+class AddReasonButton(ui.Button):
 
     def __init__(
         self,
-        moderation_cog,
-        member
+        target: discord.Member
     ):
 
         super().__init__(
             label="إضافة سبب",
             style=discord.ButtonStyle.success,
-            emoji="➕"
+            row=1
         )
 
-        self.moderation_cog = moderation_cog
-        self.member = member
+        self.target = target
 
     async def callback(
         self,
-        interaction
+        interaction: discord.Interaction
     ):
 
-        allowed = await website_permission_for_interaction(
+        allowed = website_permission_allowed(
             interaction.user,
-            "لاتتكلم",
+            COMMAND_MUTE,
             interaction.channel.id
         )
 
         if not allowed:
 
             await interaction.response.send_message(
-                "❌ ليس لديك صلاحية إضافة أسباب من الموقع.",
+                "❌ ما عندك صلاحية إضافة أسباب.",
                 ephemeral=True
             )
 
@@ -866,9 +942,30 @@ class AddReasonButton(
 
         await interaction.response.send_modal(
             AddReasonModal(
-                self.moderation_cog,
-                self.member
+                target=self.target
             )
+        )
+
+
+# =========================================================
+# View الأسباب
+# =========================================================
+
+class ReasonView(ui.View):
+
+    def __init__(
+        self,
+        target: discord.Member
+    ):
+
+        super().__init__(timeout=120)
+
+        self.add_item(
+            ReasonSelect(target)
+        )
+
+        self.add_item(
+            AddReasonButton(target)
         )
 
 
@@ -878,36 +975,9 @@ class AddReasonButton(
 
 class ModerationCog(commands.Cog):
 
-    def __init__(
-        self,
-        bot
-    ):
+    def __init__(self, bot):
 
         self.bot = bot
-
-    # =====================================================
-    # فحص العضو المستهدف
-    # =====================================================
-
-    def can_moderate(
-        self,
-        ctx,
-        member
-    ):
-
-        if member.id == ctx.author.id:
-            return False
-
-        if member.id == ctx.guild.owner_id:
-            return False
-
-        if member.top_role >= ctx.author.top_role:
-            return False
-
-        if member.top_role >= ctx.guild.me.top_role:
-            return False
-
-        return True
 
     # =====================================================
     # تطبيق الإسكات
@@ -915,79 +985,62 @@ class ModerationCog(commands.Cog):
 
     async def apply_timeout(
         self,
-        interaction,
-        member,
-        duration,
-        reason
+        interaction: discord.Interaction,
+        target: discord.Member,
+        duration: timedelta,
+        reason: str
     ):
+
+        moderator = interaction.user
+
+        allowed, error = can_moderate(
+            moderator,
+            target
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                error,
+                ephemeral=True
+            )
+
+            return
 
         try:
 
-            await member.timeout(
+            await target.timeout(
                 duration,
-                reason=(
-                    f"{reason} | "
-                    f"بواسطة {interaction.user}"
-                )
-            )
-
-            seconds = int(
-                duration.total_seconds()
-            )
-
-            if seconds < 60:
-
-                duration_text = (
-                    f"{seconds} ثانية"
-                )
-
-            elif seconds < 3600:
-
-                duration_text = (
-                    f"{seconds // 60} دقيقة"
-                )
-
-            elif seconds < 86400:
-
-                duration_text = (
-                    f"{seconds // 3600} ساعة"
-                )
-
-            else:
-
-                duration_text = (
-                    f"{seconds // 86400} يوم"
-                )
-
-            await interaction.response.send_message(
-                (
-                    f"🔇 تم إسكات {member.mention}\n"
-                    f"📝 السبب: **{reason}**\n"
-                    f"⏱️ المدة: **{duration_text}**"
-                ),
-                ephemeral=False
+                reason=reason
             )
 
         except discord.Forbidden:
 
             await interaction.response.send_message(
-                "❌ البوت لا يملك صلاحية إسكات هذا العضو.",
+                "❌ البوت ما عنده صلاحية إسكات هذا الشخص، أو رتبة البوت أقل منه.",
                 ephemeral=True
             )
 
-        except Exception as e:
+            return
+
+        except discord.HTTPException:
 
             await interaction.response.send_message(
-                f"❌ حدث خطأ:\n`{e}`",
+                "❌ حصل خطأ أثناء تنفيذ الإسكات.",
                 ephemeral=True
             )
+
+            return
+
+        await interaction.response.send_message(
+            f"🔇 تم إسكات {target.mention}\n"
+            f"**المدة:** {format_duration(duration)}\n"
+            f"**السبب:** {reason}",
+            ephemeral=False
+        )
 
     # =====================================================
     # لاتتكلم
-    #
-    # الاستخدام:
-    # -لاتتكلم @الشخص
-    # -لاتتكلم @الشخص 10m
     # =====================================================
 
     @commands.command(
@@ -997,77 +1050,104 @@ class ModerationCog(commands.Cog):
         self,
         ctx,
         member: discord.Member = None,
-        duration: str = None
+        duration_text: str = None
     ):
+
+        # =================================================
+        # صلاحية الموقع
+        # =================================================
+
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_MUTE,
+            ctx.channel.id
+        ):
+            return
 
         if member is None:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-لاتتكلم @الشخص 10m`"
             )
 
             return
 
-        if not self.can_moderate(
-            ctx,
+        allowed, error = can_moderate(
+            ctx.author,
             member
-        ):
+        )
 
-            await ctx.send(
-                "❌ لا يمكنك تطبيق العقوبة على هذا العضو."
-            )
+        if not allowed:
+
+            await ctx.send(error)
 
             return
 
-        # مدة مكتوبة مباشرة
-        if duration:
+        # =================================================
+        # إذا كتب مدة
+        # =================================================
 
-            parsed = parse_duration(
-                duration
+        if duration_text:
+
+            duration = parse_duration(
+                duration_text
             )
 
-            if parsed is None:
+            if duration is None:
 
                 await ctx.send(
-                    "❌ المدة غير صحيحة.\n"
-                    "مثال: `100s` أو `10m` أو `2h` أو `7d`."
+                    "❌ المدة غير صحيحة.\n\n"
+                    "أمثلة:\n"
+                    "`10s`\n"
+                    "`100s`\n"
+                    "`10m`\n"
+                    "`2h`\n"
+                    "`1d`\n\n"
+                    "الحد الأقصى 28 يوم."
                 )
 
                 return
 
-            reason = "إسكات يدوي"
+            try:
 
-            await member.timeout(
-                parsed,
-                reason=(
-                    f"{reason} | "
-                    f"بواسطة {ctx.author}"
+                await member.timeout(
+                    duration,
+                    reason="إسكات يدوي"
                 )
-            )
+
+            except discord.Forbidden:
+
+                await ctx.send(
+                    "❌ البوت ما يقدر يسكت هذا الشخص. "
+                    "تأكد أن رتبة البوت أعلى منه."
+                )
+
+                return
+
+            except discord.HTTPException:
+
+                await ctx.send(
+                    "❌ حصل خطأ أثناء تنفيذ الإسكات."
+                )
+
+                return
 
             await ctx.send(
-                f"🔇 تم إسكات {member.mention} لمدة **{format_duration(duration)}**."
+                f"🔇 تم إسكات {member.mention}\n"
+                f"**المدة:** {format_duration(duration)}\n"
+                f"**السبب:** إسكات يدوي"
             )
 
             return
 
-        # بدون مدة → قائمة الأسباب
-        embed = discord.Embed(
-            title="🔇 إسكات عضو",
-            description=(
-                f"العضو: {member.mention}\n\n"
-                "اختر سبب الإسكات من القائمة."
-            ),
-            color=discord.Color.orange()
-        )
+        # =================================================
+        # بدون مدة → الأسباب
+        # =================================================
 
         await ctx.send(
-            embed=embed,
-            view=ReasonSelectView(
-                self,
-                member
-            )
+            f"🔇 اختر سبب إسكات {member.mention}:",
+            view=ReasonView(member)
         )
 
     # =====================================================
@@ -1083,23 +1163,30 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None
     ):
 
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_UNMUTE,
+            ctx.channel.id
+        ):
+            return
+
         if member is None:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-احكي @الشخص`"
             )
 
             return
 
-        if not self.can_moderate(
-            ctx,
+        allowed, error = can_moderate(
+            ctx.author,
             member
-        ):
+        )
 
-            await ctx.send(
-                "❌ لا يمكنك إزالة العقوبة عن هذا العضو."
-            )
+        if not allowed:
+
+            await ctx.send(error)
 
             return
 
@@ -1107,26 +1194,28 @@ class ModerationCog(commands.Cog):
 
             await member.timeout(
                 None,
-                reason=(
-                    f"إزالة الإسكات بواسطة {ctx.author}"
-                )
-            )
-
-            await ctx.send(
-                f"🔊 تم رفع الإسكات عن {member.mention}."
+                reason="إلغاء الإسكات"
             )
 
         except discord.Forbidden:
 
             await ctx.send(
-                "❌ البوت لا يملك صلاحية إزالة الإسكات."
+                "❌ البوت ما عنده صلاحية فك الإسكات."
             )
 
-        except Exception as e:
+            return
+
+        except discord.HTTPException:
 
             await ctx.send(
-                f"❌ حدث خطأ:\n`{e}`"
+                "❌ حصل خطأ أثناء فك الإسكات."
             )
+
+            return
+
+        await ctx.send(
+            f"🔊 تم فك الإسكات عن {member.mention}."
+        )
 
     # =====================================================
     # باند
@@ -1143,56 +1232,63 @@ class ModerationCog(commands.Cog):
         reason: str = "لا يوجد سبب"
     ):
 
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_BAN,
+            ctx.channel.id
+        ):
+            return
+
         if member is None:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-باند @الشخص السبب`"
             )
 
             return
 
-        if not self.can_moderate(
-            ctx,
+        allowed, error = can_moderate(
+            ctx.author,
             member
-        ):
+        )
 
-            await ctx.send(
-                "❌ لا يمكنك حظر هذا العضو."
-            )
+        if not allowed:
+
+            await ctx.send(error)
 
             return
 
         try:
 
             await member.ban(
-                reason=(
-                    f"{reason} | "
-                    f"بواسطة {ctx.author}"
-                )
-            )
-
-            await ctx.send(
-                f"🔨 تم حظر {member.mention}.\n"
-                f"📝 السبب: **{reason}**"
+                reason=reason,
+                delete_message_days=0
             )
 
         except discord.Forbidden:
 
             await ctx.send(
-                "❌ البوت لا يملك صلاحية حظر هذا العضو."
+                "❌ البوت ما عنده صلاحية تبنيد هذا الشخص."
             )
 
-        except Exception as e:
+            return
+
+        except discord.HTTPException:
 
             await ctx.send(
-                f"❌ حدث خطأ:\n`{e}`"
+                "❌ حصل خطأ أثناء التبنيد."
             )
+
+            return
+
+        await ctx.send(
+            f"🔨 تم تبنيد {member.mention}\n"
+            f"**السبب:** {reason}"
+        )
 
     # =====================================================
     # انتهاء التسفير / فك الباند
-    #
-    # يقبل ID أو منشن
     # =====================================================
 
     @commands.command(
@@ -1205,40 +1301,42 @@ class ModerationCog(commands.Cog):
     async def unban_command(
         self,
         ctx,
-        user_id: str = None
+        user_input: str = None
     ):
 
-        if not user_id:
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_UNBAN,
+            ctx.channel.id
+        ):
+            return
+
+        if not user_input:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-انتهاء-التسفير ID`"
             )
 
             return
 
-        # استخراج ID من المنشن
-        mention_match = re.fullmatch(
-            r"<@!?(\d+)>",
-            user_id
+        # إزالة المنشن إذا أرسل المستخدم ID على شكل منشن
+        user_id_match = re.search(
+            r"\d{15,25}",
+            user_input
         )
 
-        if mention_match:
-            user_id = mention_match.group(1)
-
-        try:
-
-            user_id = int(
-                user_id
-            )
-
-        except ValueError:
+        if not user_id_match:
 
             await ctx.send(
-                "❌ الـ ID غير صحيح."
+                "❌ ما قدرت أتعرف على ID الشخص."
             )
 
             return
+
+        user_id = int(
+            user_id_match.group()
+        )
 
         try:
 
@@ -1246,34 +1344,56 @@ class ModerationCog(commands.Cog):
                 user_id
             )
 
-            await ctx.guild.unban(
-                user,
-                reason=(
-                    f"فك الحظر بواسطة {ctx.author}"
-                )
-            )
+        except discord.NotFound:
 
             await ctx.send(
-                f"✅ تم فك حظر **{user}**."
+                "❌ هذا المستخدم غير موجود."
+            )
+
+            return
+
+        except discord.HTTPException:
+
+            await ctx.send(
+                "❌ حصل خطأ أثناء جلب المستخدم."
+            )
+
+            return
+
+        try:
+
+            await ctx.guild.unban(
+                user,
+                reason=f"فك الباند بواسطة {ctx.author}"
             )
 
         except discord.NotFound:
 
             await ctx.send(
-                "❌ هذا العضو غير موجود ضمن قائمة المحظورين."
+                "❌ هذا الشخص غير موجود في قائمة المبندين."
             )
+
+            return
 
         except discord.Forbidden:
 
             await ctx.send(
-                "❌ البوت لا يملك صلاحية فك الحظر."
+                "❌ البوت ما عنده صلاحية فك الباند."
             )
 
-        except Exception as e:
+            return
+
+        except discord.HTTPException:
 
             await ctx.send(
-                f"❌ حدث خطأ:\n`{e}`"
+                "❌ حصل خطأ أثناء فك الباند."
             )
+
+            return
+
+        await ctx.send(
+            f"🔓 تم فك الباند عن **{user}**."
+        )
 
     # =====================================================
     # طرد
@@ -1290,51 +1410,59 @@ class ModerationCog(commands.Cog):
         reason: str = "لا يوجد سبب"
     ):
 
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_KICK,
+            ctx.channel.id
+        ):
+            return
+
         if member is None:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-طرد @الشخص السبب`"
             )
 
             return
 
-        if not self.can_moderate(
-            ctx,
+        allowed, error = can_moderate(
+            ctx.author,
             member
-        ):
+        )
 
-            await ctx.send(
-                "❌ لا يمكنك طرد هذا العضو."
-            )
+        if not allowed:
+
+            await ctx.send(error)
 
             return
 
         try:
 
             await member.kick(
-                reason=(
-                    f"{reason} | "
-                    f"بواسطة {ctx.author}"
-                )
-            )
-
-            await ctx.send(
-                f"👢 تم طرد {member.mention}.\n"
-                f"📝 السبب: **{reason}**"
+                reason=reason
             )
 
         except discord.Forbidden:
 
             await ctx.send(
-                "❌ البوت لا يملك صلاحية طرد هذا العضو."
+                "❌ البوت ما عنده صلاحية طرد هذا الشخص."
             )
 
-        except Exception as e:
+            return
+
+        except discord.HTTPException:
 
             await ctx.send(
-                f"❌ حدث خطأ:\n`{e}`"
+                "❌ حصل خطأ أثناء الطرد."
             )
+
+            return
+
+        await ctx.send(
+            f"👢 تم طرد {member.mention}\n"
+            f"**السبب:** {reason}"
+        )
 
     # =====================================================
     # تحذير
@@ -1351,52 +1479,63 @@ class ModerationCog(commands.Cog):
         reason: str = "لا يوجد سبب"
     ):
 
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_WARN,
+            ctx.channel.id
+        ):
+            return
+
         if member is None:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-تحذير @الشخص السبب`"
             )
 
             return
 
-        if not self.can_moderate(
-            ctx,
+        allowed, error = can_moderate(
+            ctx.author,
             member
-        ):
+        )
 
-            await ctx.send(
-                "❌ لا يمكنك تحذير هذا العضو."
-            )
+        if not allowed:
+
+            await ctx.send(error)
 
             return
 
         save_warning(
-            ctx.guild.id,
-            member.id,
-            ctx.author.id,
-            reason
-        )
-
-        await ctx.send(
-            f"⚠️ تم تحذير {member.mention}.\n"
-            f"📝 السبب: **{reason}**"
+            guild_id=ctx.guild.id,
+            user_id=member.id,
+            moderator_id=ctx.author.id,
+            reason=reason
         )
 
         try:
 
             await member.send(
-                (
-                    f"⚠️ تم تحذيرك في سيرفر **{ctx.guild.name}**.\n"
-                    f"📝 السبب: **{reason}**"
-                )
+                f"⚠️ تم تحذيرك في سيرفر **{ctx.guild.name}**.\n"
+                f"**السبب:** {reason}"
             )
 
-        except Exception:
+        except discord.HTTPException:
             pass
 
+        warnings = get_warnings(
+            ctx.guild.id,
+            member.id
+        )
+
+        await ctx.send(
+            f"⚠️ تم تحذير {member.mention}.\n"
+            f"**السبب:** {reason}\n"
+            f"**عدد التحذيرات:** {len(warnings)}"
+        )
+
     # =====================================================
-    # عرض التحذيرات
+    # تحذيرات
     # =====================================================
 
     @commands.command(
@@ -1408,8 +1547,21 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None
     ):
 
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_WARNS,
+            ctx.channel.id
+        ):
+            return
+
         if member is None:
-            member = ctx.author
+
+            await ctx.send(
+                "❌ استخدم الأمر هكذا:\n"
+                "`-تحذيرات @الشخص`"
+            )
+
+            return
 
         warnings = get_warnings(
             ctx.guild.id,
@@ -1419,13 +1571,14 @@ class ModerationCog(commands.Cog):
         if not warnings:
 
             await ctx.send(
-                f"📋 {member.mention} ليس لديه تحذيرات."
+                f"✅ {member.mention} ما عليه أي تحذيرات."
             )
 
             return
 
         embed = discord.Embed(
             title=f"⚠️ تحذيرات {member}",
+            description=f"عدد التحذيرات: **{len(warnings)}**",
             color=discord.Color.orange()
         )
 
@@ -1434,8 +1587,14 @@ class ModerationCog(commands.Cog):
             start=1
         ):
 
-            moderator = warning.get(
-                "moderator_id"
+            moderator = ctx.guild.get_member(
+                warning.get("moderator_id")
+            )
+
+            moderator_name = (
+                moderator.mention
+                if moderator
+                else f"`{warning.get('moderator_id')}`"
             )
 
             reason = warning.get(
@@ -1449,21 +1608,21 @@ class ModerationCog(commands.Cog):
 
             if created_at:
 
-                date_text = discord.utils.format_dt(
+                time_text = discord.utils.format_dt(
                     created_at,
                     style="R"
                 )
 
             else:
 
-                date_text = "غير معروف"
+                time_text = "غير معروف"
 
             embed.add_field(
                 name=f"التحذير #{index}",
                 value=(
-                    f"📝 السبب: {reason}\n"
-                    f"👮 بواسطة: <@{moderator}>\n"
-                    f"🕒 {date_text}"
+                    f"**السبب:** {reason}\n"
+                    f"**بواسطة:** {moderator_name}\n"
+                    f"**الوقت:** {time_text}"
                 ),
                 inline=False
             )
@@ -1485,27 +1644,23 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None
     ):
 
+        if not website_permission_allowed(
+            ctx.author,
+            COMMAND_CLEAR_WARNS,
+            ctx.channel.id
+        ):
+            return
+
         if member is None:
 
             await ctx.send(
-                "❌ استخدم:\n"
+                "❌ استخدم الأمر هكذا:\n"
                 "`-مسح-تحذيرات @الشخص`"
             )
 
             return
 
-        if not self.can_moderate(
-            ctx,
-            member
-        ):
-
-            await ctx.send(
-                "❌ لا يمكنك مسح تحذيرات هذا العضو."
-            )
-
-            return
-
-        result = moderation_warnings_collection.delete_many(
+        deleted = moderation_warnings_collection.delete_many(
             {
                 "guild_id": ctx.guild.id,
                 "user_id": member.id
@@ -1513,7 +1668,8 @@ class ModerationCog(commands.Cog):
         )
 
         await ctx.send(
-            f"✅ تم مسح **{result.deleted_count}** تحذيرًا عن {member.mention}."
+            f"🧹 تم مسح **{deleted.deleted_count}** "
+            f"تحذير عن {member.mention}."
         )
 
 
