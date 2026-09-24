@@ -31,6 +31,12 @@ commands_collection = db["website_commands"]
 guilds_collection = db["website_guilds"]
 settings_collection = db["website_command_settings"]
 
+# =========================================================
+# مجموعة اختصارات الموقع
+# =========================================================
+
+aliases_collection = db["website_command_aliases"]
+
 
 # =========================================================
 # أدوات عامة
@@ -82,6 +88,328 @@ def clean_detected_command(value):
     )
 
     return normalize_command_name(value)
+
+
+# =========================================================
+# أدوات الاختصارات
+# =========================================================
+
+def normalize_alias(alias):
+    """
+    توحيد الاختصار.
+
+    أمثلة:
+
+    -ذ      -> ذ
+    .ذ      -> ذ
+    /ذ      -> ذ
+    ذ       -> ذ
+    """
+
+    if not alias:
+        return ""
+
+    return normalize_command_name(alias)
+
+
+def get_alias_data(guild_id, alias):
+    """
+    البحث عن الاختصار الخاص بالسيرفر.
+
+    ندعم أكثر من شكل تخزين حتى لا تتعارض
+    النسخ القديمة والجديدة من الموقع.
+    """
+
+    if not guild_id or not alias:
+        return None
+
+    guild_id = str(guild_id)
+
+    clean_alias = normalize_alias(alias)
+
+    if not clean_alias:
+        return None
+
+    # =====================================================
+    # البحث بالشكل الأساسي
+    # =====================================================
+
+    data = aliases_collection.find_one({
+        "guild_id": guild_id,
+        "alias": clean_alias
+    })
+
+    if data:
+        return data
+
+    # =====================================================
+    # في حال الموقع مخزن الاختصار مع -
+    # =====================================================
+
+    data = aliases_collection.find_one({
+        "guild_id": guild_id,
+        "alias": f"-{clean_alias}"
+    })
+
+    if data:
+        return data
+
+    # =====================================================
+    # في حال guild_id مخزن كرقم بدل نص
+    # =====================================================
+
+    try:
+
+        numeric_guild_id = int(guild_id)
+
+        data = aliases_collection.find_one({
+            "guild_id": numeric_guild_id,
+            "alias": clean_alias
+        })
+
+        if data:
+            return data
+
+        data = aliases_collection.find_one({
+            "guild_id": numeric_guild_id,
+            "alias": f"-{clean_alias}"
+        })
+
+        if data:
+            return data
+
+    except Exception:
+
+        pass
+
+    return None
+
+
+def get_original_command_from_alias(data):
+    """
+    استخراج الأمر الأصلي من بيانات الاختصار.
+
+    يدعم:
+    command
+    command_name
+    target
+    """
+
+    if not data:
+        return ""
+
+    original = (
+        data.get("command")
+        or data.get("command_name")
+        or data.get("target")
+        or ""
+    )
+
+    return normalize_command_name(
+        original
+    )
+
+
+async def execute_website_alias(
+    message
+):
+    """
+    تشغيل الاختصار فعليًا.
+
+    مثال:
+
+    -ذ @أحمد
+
+    يصبح داخليًا:
+
+    -ذهبي @أحمد
+    """
+
+    if not message.guild:
+        return False
+
+    content = message.content.strip()
+
+    if not content:
+        return False
+
+    # =====================================================
+    # الاختصارات تعمل فقط مع -
+    # =====================================================
+
+    if not content.startswith("-"):
+        return False
+
+    parts = content.split()
+
+    if not parts:
+        return False
+
+    typed_alias = parts[0]
+
+    # =====================================================
+    # البحث عن الاختصار
+    # =====================================================
+
+    alias_data = get_alias_data(
+        message.guild.id,
+        typed_alias
+    )
+
+    if not alias_data:
+        return False
+
+    # =====================================================
+    # استخراج الأمر الأصلي
+    # =====================================================
+
+    original_command = get_original_command_from_alias(
+        alias_data
+    )
+
+    if not original_command:
+        print(
+            f"⚠️ [WEBSITE ALIAS] الاختصار "
+            f"{typed_alias} موجود لكن الأمر الأصلي فارغ"
+        )
+
+        return False
+
+    # =====================================================
+    # التأكد أن الأمر الأصلي موجود فعلًا
+    # =====================================================
+
+    ctx = await self_bot_get_context(
+        message
+    )
+
+    # =====================================================
+    # بناء محتوى الأمر الجديد
+    # =====================================================
+
+    new_content = f"-{original_command}"
+
+    # إضافة بقية الكلام كما هو
+    if len(parts) > 1:
+
+        new_content += " "
+
+        new_content += " ".join(
+            parts[1:]
+        )
+
+    # =====================================================
+    # نسخ الرسالة بشكل آمن
+    # =====================================================
+
+    old_content = message.content
+
+    message.content = new_content
+
+    try:
+
+        # =================================================
+        # إنشاء Context جديد
+        # =================================================
+
+        ctx = await self_bot_get_context(
+            message
+        )
+
+        # =================================================
+        # إذا لم يتم العثور على الأمر
+        # =================================================
+
+        if ctx.command is None:
+
+            print(
+                f"⚠️ [WEBSITE ALIAS] "
+                f"الأمر الأصلي غير موجود: "
+                f"-{original_command}"
+            )
+
+            return False
+
+        # =================================================
+        # تنفيذ الأمر
+        # =================================================
+
+        print(
+            f"🔁 [WEBSITE ALIAS] "
+            f"{old_content} -> {new_content}"
+        )
+
+        await self_bot_invoke(
+            ctx
+        )
+
+        return True
+
+    except commands.CommandError as error:
+
+        print(
+            f"❌ [WEBSITE ALIAS] خطأ أثناء تنفيذ "
+            f"{old_content}"
+        )
+
+        print(
+            f"❌ {type(error).__name__}: {error}"
+        )
+
+        return True
+
+    except Exception as error:
+
+        print(
+            f"❌ [WEBSITE ALIAS] خطأ غير متوقع"
+        )
+
+        print(
+            f"❌ {type(error).__name__}: {error}"
+        )
+
+        traceback.print_exc()
+
+        return True
+
+    finally:
+
+        # =================================================
+        # إعادة النص الأصلي
+        # =================================================
+
+        message.content = old_content
+
+
+async def self_bot_get_context(
+    message
+):
+    """
+    الحصول على Context من البوت.
+
+    هذه الدالة منفصلة حتى لا نغير أي شيء
+    من نظام البوت الأساسي.
+    """
+
+    bot = message._state._get_client()
+
+    return await bot.get_context(
+        message
+    )
+
+
+async def self_bot_invoke(
+    ctx
+):
+    """
+    تنفيذ الأمر من الـ Context.
+    """
+
+    bot = ctx.bot
+
+    await bot.invoke(
+        ctx
+    )
 
 
 # =========================================================
@@ -201,13 +529,6 @@ def detect_manual_commands(bot):
 
 # =========================================================
 # اكتشاف أسماء إعدادات الأوامر من الـCogs
-#
-# مثال:
-#
-# COMMAND_NAME = "طلب"
-# LOG_COMMAND_NAME = "طلب-سجل"
-#
-# سيتم اكتشاف الاثنين تلقائيًا.
 # =========================================================
 
 def detect_command_setting_names(bot):
@@ -242,17 +563,6 @@ def detect_command_setting_names(bot):
                 variable_upper = str(
                     variable_name
                 ).upper()
-
-                # -------------------------------------------------
-                # أي متغير اسمه يحتوي COMMAND_NAME
-                #
-                # مثل:
-                #
-                # COMMAND_NAME
-                # LOG_COMMAND_NAME
-                # TEST_COMMAND_NAME
-                # ADMIN_COMMAND_NAME
-                # -------------------------------------------------
 
                 if "COMMAND_NAME" not in variable_upper:
                     continue
@@ -341,10 +651,6 @@ def save_command(command_data):
             timezone.utc
         )
     }
-
-    # -----------------------------------------------------
-    # بيانات إضافية للأوامر المكتشفة تلقائيًا
-    # -----------------------------------------------------
 
     if command_data.get(
         "auto_detected",
@@ -479,7 +785,6 @@ def save_bot_commands(bot):
         if not command_name:
             continue
 
-        # الأمر اليدوي لا يستبدل أمر Discord الحقيقي
         if command_name not in all_commands:
 
             all_commands[
@@ -488,10 +793,6 @@ def save_bot_commands(bot):
 
     # =====================================================
     # 3 - إعدادات الأوامر الخاصة بالـCogs
-    #
-    # مثال:
-    #
-    # LOG_COMMAND_NAME = "طلب-سجل"
     # =====================================================
 
     setting_commands = detect_command_setting_names(
@@ -856,6 +1157,50 @@ class WebsiteCommands(
         )
 
     # =====================================================
+    # الاختصارات الفعلية
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_message(
+        self,
+        message
+    ):
+
+        # -------------------------------------------------
+        # تجاهل البوتات
+        # -------------------------------------------------
+
+        if message.author.bot:
+            return
+
+        # -------------------------------------------------
+        # إذا لم تكن رسالة سيرفر
+        # -------------------------------------------------
+
+        if message.guild is None:
+            return
+
+        try:
+
+            await execute_website_alias(
+                message
+            )
+
+        except Exception as error:
+
+            print(
+                "❌ [WEBSITE ALIAS] "
+                "حدث خطأ في نظام الاختصارات"
+            )
+
+            print(
+                f"❌ {type(error).__name__}: "
+                f"{error}"
+            )
+
+            traceback.print_exc()
+
+    # =====================================================
     # التحقق من صلاحيات الموقع
     # =====================================================
 
@@ -900,7 +1245,6 @@ class WebsiteCommands(
 
         # =================================================
         # إذا لا يوجد إعداد للموقع
-        # نخلي الأمر يعمل طبيعي
         # =================================================
 
         if not setting:
