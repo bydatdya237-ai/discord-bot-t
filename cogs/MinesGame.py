@@ -1,3 +1,4 @@
+import os
 import asyncio
 import random
 
@@ -11,13 +12,15 @@ from pymongo import ReturnDocument
 
 
 # =========================================================
-# إعدادات MongoDB
+# MongoDB
 # =========================================================
 
-MONGO_URI = __import__("os").getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGO_URI")
 
 if not MONGO_URI:
-    raise RuntimeError("❌ MONGO_URI غير موجود في Environment Variables.")
+    raise RuntimeError(
+        "❌ MONGO_URI غير موجود في Environment Variables."
+    )
 
 
 # =========================================================
@@ -28,12 +31,17 @@ GAME_COOLDOWN = 30
 GAME_TIMEOUT = 120
 
 STARTING_GOLD = 1000
+
 WIN_GOLD = 50
 LOSS_GOLD = 35
 
-LUCK_MIN_GOLD = 100
-LUCK_MAX_GOLD = 200
-LUCK_COOLDOWN = 12 * 60 * 60
+# ---------------------------------------------------------
+# أمر ذهبي
+# ---------------------------------------------------------
+
+GOLDEN_MIN = 100
+GOLDEN_MAX = 200
+GOLDEN_COOLDOWN = 12 * 60 * 60
 
 
 # =========================================================
@@ -43,7 +51,7 @@ LUCK_COOLDOWN = 12 * 60 * 60
 COMMAND_MINES = "الغام"
 COMMAND_WALLET = "محفظتي"
 COMMAND_ADD = "ضيف"
-COMMAND_LUCK = "ذهبي"
+COMMAND_GOLDEN = "ذهبي"
 
 
 # =========================================================
@@ -79,13 +87,21 @@ class MinesView(discord.ui.View):
 
         self.mines = set()
 
+        # =================================================
+        # إنشاء الألغام
+        # =================================================
+
         while len(self.mines) < self.total_mines:
+
             self.mines.add(
-                random.randint(0, 24)
+                random.randint(
+                    0,
+                    24
+                )
             )
 
         # =================================================
-        # إنشاء شبكة 5x5
+        # إنشاء شبكة 5 × 5
         # =================================================
 
         for index in range(25):
@@ -99,7 +115,9 @@ class MinesView(discord.ui.View):
 
             button.callback = self.button_callback
 
-            self.add_item(button)
+            self.add_item(
+                button
+            )
 
     # =====================================================
     # لون الرقم
@@ -131,7 +149,10 @@ class MinesView(discord.ui.View):
     # حساب الألغام حول الخانة
     # =====================================================
 
-    def get_nearby_mines(self, index):
+    def get_nearby_mines(
+        self,
+        index
+    ):
 
         row, column = divmod(
             index,
@@ -156,15 +177,19 @@ class MinesView(discord.ui.View):
                 )
 
                 if nearby_index in self.mines:
+
                     nearby_mines += 1
 
         return nearby_mines
 
     # =====================================================
-    # الحصول على الخانات المحيطة
+    # الخانات المحيطة
     # =====================================================
 
-    def get_neighbors(self, index):
+    def get_neighbors(
+        self,
+        index
+    ):
 
         row, column = divmod(
             index,
@@ -200,9 +225,15 @@ class MinesView(discord.ui.View):
     # الكشف التلقائي
     # =====================================================
 
-    def reveal_safe_area(self, start_index):
+    def reveal_safe_area(
+        self,
+        start_index
+    ):
 
-        to_check = [start_index]
+        to_check = [
+            start_index
+        ]
+
         revealed_now = set()
 
         while to_check:
@@ -311,7 +342,7 @@ class MinesView(discord.ui.View):
                 child.label = "؟"
 
     # =====================================================
-    # إظهار الألغام عند الخسارة
+    # إظهار الألغام عند الخسارة فقط
     # =====================================================
 
     def reveal_all_mines(self):
@@ -381,6 +412,7 @@ class MinesView(discord.ui.View):
             )
 
         except discord.HTTPException:
+
             pass
 
     # =====================================================
@@ -393,7 +425,7 @@ class MinesView(discord.ui.View):
     ):
 
         # =================================================
-        # التأكد من اللاعب
+        # صاحب اللعبة فقط
         # =================================================
 
         if interaction.user.id != self.user_id:
@@ -436,7 +468,7 @@ class MinesView(discord.ui.View):
         try:
 
             # =================================================
-            # قراءة الخانة
+            # قراءة رقم الخانة
             # =================================================
 
             try:
@@ -488,7 +520,7 @@ class MinesView(discord.ui.View):
                 self.reveal_all_mines()
 
                 # -----------------------------------------
-                # خصم الذهب وحفظه في MongoDB
+                # خصم الذهب وحفظه
                 # -----------------------------------------
 
                 new_gold = await self.cog.change_gold(
@@ -604,13 +636,16 @@ class MinesView(discord.ui.View):
 
 class MinesGame(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
-        # ================================================
+        # =================================================
         # MongoDB
-        # ================================================
+        # =================================================
 
         self.mongo_client = AsyncIOMotorClient(
             MONGO_URI
@@ -628,18 +663,17 @@ class MinesGame(commands.Cog):
             "website_command_settings"
         ]
 
-        # ================================================
+        # =================================================
         # الألعاب النشطة
-        # ================================================
+        # =================================================
 
         self.active_games = {}
 
-        # ================================================
-        # كاش صاحب البوت
-        # ================================================
+        # =================================================
+        # صاحب البوت
+        # =================================================
 
         self.bot_owner_id = None
-
         self.owner_lock = asyncio.Lock()
 
     # =====================================================
@@ -684,9 +718,9 @@ class MinesGame(commands.Cog):
             guild_id
         )
 
-        # -----------------------------------------------
+        # =================================================
         # النظام الجديد
-        # -----------------------------------------------
+        # =================================================
 
         setting = await self.website_command_settings.find_one(
             {
@@ -702,9 +736,9 @@ class MinesGame(commands.Cog):
         if setting:
             return setting
 
-        # -----------------------------------------------
-        # دعم النظام القديم
-        # -----------------------------------------------
+        # =================================================
+        # دعم البيانات القديمة
+        # =================================================
 
         setting = await self.website_command_settings.find_one(
             {
@@ -742,17 +776,17 @@ class MinesGame(commands.Cog):
             command_name
         )
 
-        # -----------------------------------------------
-        # لا يوجد إعداد للموقع
-        # -----------------------------------------------
+        # =================================================
+        # إذا لم يوجد إعداد للأمر
+        # =================================================
 
         if setting is None:
 
             return True
 
-        # -----------------------------------------------
+        # =================================================
         # الأمر متوقف
-        # -----------------------------------------------
+        # =================================================
 
         if not setting.get(
             "enabled",
@@ -761,9 +795,9 @@ class MinesGame(commands.Cog):
 
             return False
 
-        # -----------------------------------------------
+        # =================================================
         # الرتب
-        # -----------------------------------------------
+        # =================================================
 
         role_ids = setting.get(
             "role_ids",
@@ -788,20 +822,23 @@ class MinesGame(commands.Cog):
 
                 return False
 
-        # -----------------------------------------------
+        # =================================================
         # الرومات
-        # -----------------------------------------------
+        # =================================================
 
         channel_ids = setting.get(
             "channel_ids",
             []
         )
 
-        if channel_ids and channel_id is not None:
+        if channel_ids:
+
+            if channel_id is None:
+                return False
 
             allowed_channel_ids = {
-                str(channel)
-                for channel in channel_ids
+                str(channel_id)
+                for channel_id in channel_ids
             }
 
             if str(channel_id) not in allowed_channel_ids:
@@ -843,7 +880,7 @@ class MinesGame(commands.Cog):
         return self.bot_owner_id
 
     # =====================================================
-    # التأكد أن الشخص صاحب البوت
+    # هل هو صاحب البوت؟
     # =====================================================
 
     async def is_bot_owner(
@@ -861,7 +898,7 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # الحصول على بيانات اللاعب
+    # بيانات اللاعب
     # =====================================================
 
     async def get_user_data(
@@ -888,9 +925,9 @@ class MinesGame(commands.Cog):
         if document is not None:
             return document
 
-        # -----------------------------------------------
+        # =================================================
         # إنشاء اللاعب لأول مرة
-        # -----------------------------------------------
+        # =================================================
 
         document = {
             "guild_id": str(
@@ -901,7 +938,7 @@ class MinesGame(commands.Cog):
             ),
             "gold": STARTING_GOLD,
             "last_game_at": None,
-            "last_luck_at": None,
+            "last_golden_at": None,
             "created_at": datetime.now(
                 timezone.utc
             )
@@ -915,7 +952,6 @@ class MinesGame(commands.Cog):
 
         except Exception:
 
-            # لو صار إنشاء متزامن
             document = await self.game_data.find_one(
                 {
                     "guild_id": {
@@ -955,7 +991,7 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # تغيير الرصيد
+    # تغيير الذهب
     # =====================================================
 
     async def change_gold(
@@ -974,9 +1010,9 @@ class MinesGame(commands.Cog):
             guild_id
         )
 
-        # -----------------------------------------------
-        # إذا خصم
-        # -----------------------------------------------
+        # =================================================
+        # خصم
+        # =================================================
 
         if amount < 0:
 
@@ -1004,7 +1040,6 @@ class MinesGame(commands.Cog):
 
             if document is None:
 
-                # الرصيد لا يكفي
                 await self.game_data.update_one(
                     {
                         "guild_id": {
@@ -1030,9 +1065,9 @@ class MinesGame(commands.Cog):
                 )
             )
 
-        # -----------------------------------------------
-        # إذا إضافة
-        # -----------------------------------------------
+        # =================================================
+        # إضافة
+        # =================================================
 
         document = await self.game_data.find_one_and_update(
             {
@@ -1075,10 +1110,6 @@ class MinesGame(commands.Cog):
             guild_id
         )
 
-        now = datetime.now(
-            timezone.utc
-        )
-
         await self.game_data.update_one(
             {
                 "guild_id": {
@@ -1090,13 +1121,15 @@ class MinesGame(commands.Cog):
             },
             {
                 "$set": {
-                    "last_game_at": now
+                    "last_game_at": datetime.now(
+                        timezone.utc
+                    )
                 }
             }
         )
 
     # =====================================================
-    # فحص كول داون اللعبة
+    # وقت الانتظار للعبة
     # =====================================================
 
     async def get_game_cooldown_remaining(
@@ -1124,7 +1157,9 @@ class MinesGame(commands.Cog):
             )
 
         elapsed = (
-            datetime.now(timezone.utc)
+            datetime.now(
+                timezone.utc
+            )
             - last_game_at
         ).total_seconds()
 
@@ -1142,7 +1177,7 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # أمر الألغام
+    # أمر الغام
     # =====================================================
 
     @commands.command(
@@ -1156,9 +1191,9 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # -----------------------------------------------
-        # صلاحية الموقع
-        # -----------------------------------------------
+        # =================================================
+        # تحكم الموقع
+        # =================================================
 
         allowed = await self.has_command_permission(
             ctx.author,
@@ -1172,11 +1207,16 @@ class MinesGame(commands.Cog):
         user_id = ctx.author.id
         guild_id = ctx.guild.id
 
-        # -----------------------------------------------
+        # =================================================
         # منع أكثر من لعبة
-        # -----------------------------------------------
+        # =================================================
 
-        if user_id in self.active_games:
+        active_key = (
+            guild_id,
+            user_id
+        )
+
+        if active_key in self.active_games:
 
             await ctx.send(
                 f"{ctx.author.mention}\n"
@@ -1185,9 +1225,9 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
+        # =================================================
         # الكول داون
-        # -----------------------------------------------
+        # =================================================
 
         remaining = await self.get_game_cooldown_remaining(
             guild_id,
@@ -1203,27 +1243,27 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
-        # تسجيل وقت اللعبة في MongoDB
-        # -----------------------------------------------
+        # =================================================
+        # تسجيل وقت اللعبة
+        # =================================================
 
         await self.set_last_game_time(
             guild_id,
             user_id
         )
 
-        # -----------------------------------------------
-        # التأكد من وجود الرصيد
-        # -----------------------------------------------
+        # =================================================
+        # إنشاء بيانات اللاعب
+        # =================================================
 
         await self.get_balance(
             guild_id,
             user_id
         )
 
-        # -----------------------------------------------
+        # =================================================
         # إنشاء اللعبة
-        # -----------------------------------------------
+        # =================================================
 
         view = MinesView(
             self,
@@ -1232,12 +1272,12 @@ class MinesGame(commands.Cog):
         )
 
         self.active_games[
-            user_id
+            active_key
         ] = view
 
-        # -----------------------------------------------
+        # =================================================
         # واجهة اللعبة
-        # -----------------------------------------------
+        # =================================================
 
         embed = discord.Embed(
             title="💣 لعبة الألغام",
@@ -1276,7 +1316,7 @@ class MinesGame(commands.Cog):
         except discord.HTTPException:
 
             self.active_games.pop(
-                user_id,
+                active_key,
                 None
             )
 
@@ -1295,9 +1335,9 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # -----------------------------------------------
-        # صلاحية الموقع
-        # -----------------------------------------------
+        # =================================================
+        # تحكم الموقع
+        # =================================================
 
         allowed = await self.has_command_permission(
             ctx.author,
@@ -1343,9 +1383,9 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # -----------------------------------------------
-        # صلاحية الموقع أولاً
-        # -----------------------------------------------
+        # =================================================
+        # تحكم الموقع
+        # =================================================
 
         allowed = await self.has_command_permission(
             ctx.author,
@@ -1356,15 +1396,13 @@ class MinesGame(commands.Cog):
         if not allowed:
             return
 
-        # -----------------------------------------------
+        # =================================================
         # صاحب البوت فقط
-        # -----------------------------------------------
+        # =================================================
 
-        is_owner = await self.is_bot_owner(
+        if not await self.is_bot_owner(
             ctx.author.id
-        )
-
-        if not is_owner:
+        ):
 
             await ctx.send(
                 "❌ هذا الأمر متاح لصاحب البوت فقط."
@@ -1372,9 +1410,9 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
+        # =================================================
         # الشخص
-        # -----------------------------------------------
+        # =================================================
 
         if member is None:
 
@@ -1385,9 +1423,9 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
+        # =================================================
         # المبلغ
-        # -----------------------------------------------
+        # =================================================
 
         if amount is None:
 
@@ -1398,9 +1436,9 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
+        # =================================================
         # تنظيف الرقم
-        # -----------------------------------------------
+        # =================================================
 
         clean_amount = (
             amount
@@ -1424,9 +1462,9 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
+        # =================================================
         # منع الصفر والسالب
-        # -----------------------------------------------
+        # =================================================
 
         if gold_amount <= 0:
 
@@ -1436,9 +1474,9 @@ class MinesGame(commands.Cog):
 
             return
 
-        # -----------------------------------------------
+        # =================================================
         # إضافة الذهب
-        # -----------------------------------------------
+        # =================================================
 
         new_gold = await self.change_gold(
             ctx.guild.id,
@@ -1446,9 +1484,9 @@ class MinesGame(commands.Cog):
             gold_amount
         )
 
-        # -----------------------------------------------
-        # رسالة النجاح
-        # -----------------------------------------------
+        # =================================================
+        # النتيجة
+        # =================================================
 
         embed = discord.Embed(
             title="💰 تمت إضافة الذهب",
@@ -1465,13 +1503,13 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
-    # أمر حظ
+    # أمر ذهبي
     # =====================================================
 
     @commands.command(
-        name=COMMAND_LUCK
+        name=COMMAND_GOLDEN
     )
-    async def luck(
+    async def golden(
         self,
         ctx
     ):
@@ -1479,13 +1517,13 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # -----------------------------------------------
-        # صلاحية الموقع
-        # -----------------------------------------------
+        # =================================================
+        # تحكم الموقع
+        # =================================================
 
         allowed = await self.has_command_permission(
             ctx.author,
-            COMMAND_LUCK,
+            COMMAND_GOLDEN,
             ctx.channel.id
         )
 
@@ -1495,9 +1533,9 @@ class MinesGame(commands.Cog):
         guild_id = ctx.guild.id
         user_id = ctx.author.id
 
-        # -----------------------------------------------
-        # إنشاء بيانات اللاعب إذا لم تكن موجودة
-        # -----------------------------------------------
+        # =================================================
+        # إنشاء بيانات اللاعب
+        # =================================================
 
         await self.get_user_data(
             guild_id,
@@ -1515,182 +1553,15 @@ class MinesGame(commands.Cog):
         cooldown_before = (
             now
             - timedelta(
-                seconds=LUCK_COOLDOWN
+                seconds=GOLDEN_COOLDOWN
             )
         )
 
-        # -----------------------------------------------
-        # محاولة حجز استخدام الحظ
-        #
-        # العملية Atomic في MongoDB
-        # حتى لا يستطيع اللاعب استخدامه مرتين
-        # في نفس اللحظة.
-        # -----------------------------------------------
+        # =================================================
+        # محاولة حجز الاستخدام بشكل Atomic
+        # =================================================
 
         document = await self.game_data.find_one_and_update(
             {
                 "guild_id": {
                     "$in": guild_ids
-                },
-                "user_id": str(
-                    user_id
-                },
-                "$or": [
-                    {
-                        "last_luck_at": {
-                            "$exists": False
-                        }
-                    },
-                    {
-                        "last_luck_at": {
-                            "$lte": cooldown_before
-                        }
-                    },
-                    {
-                        "last_luck_at": None
-                    }
-                ]
-            },
-            {
-                "$set": {
-                    "last_luck_at": now
-                }
-            },
-            return_document=ReturnDocument.AFTER
-        )
-
-        # -----------------------------------------------
-        # لم يسمح باستخدام الأمر
-        # -----------------------------------------------
-
-        if document is None:
-
-            current_document = await self.game_data.find_one(
-                {
-                    "guild_id": {
-                        "$in": guild_ids
-                    },
-                    "user_id": str(
-                        user_id
-                    )
-                }
-            )
-
-            last_luck_at = None
-
-            if current_document:
-
-                last_luck_at = current_document.get(
-                    "last_luck_at"
-                )
-
-            if last_luck_at is None:
-
-                await ctx.send(
-                    "⏳ لا يمكنك استخدام الحظ الآن."
-                )
-
-                return
-
-            if last_luck_at.tzinfo is None:
-
-                last_luck_at = last_luck_at.replace(
-                    tzinfo=timezone.utc
-                )
-
-            elapsed = (
-                now
-                - last_luck_at
-            ).total_seconds()
-
-            remaining_seconds = max(
-                1,
-                int(
-                    LUCK_COOLDOWN
-                    - elapsed
-                )
-            )
-
-            hours = remaining_seconds // 3600
-            minutes = (
-                remaining_seconds % 3600
-            ) // 60
-            seconds = (
-                remaining_seconds % 60
-            )
-
-            if hours > 0:
-
-                time_text = (
-                    f"{hours} ساعة و "
-                    f"{minutes} دقيقة"
-                )
-
-            elif minutes > 0:
-
-                time_text = (
-                    f"{minutes} دقيقة و "
-                    f"{seconds} ثانية"
-                )
-
-            else:
-
-                time_text = (
-                    f"{seconds} ثانية"
-                )
-
-            await ctx.send(
-                f"{ctx.author.mention}\n"
-                f"🍀 حظك مستخدم بالفعل، ارجع بعد **{time_text}**."
-            )
-
-            return
-
-        # -----------------------------------------------
-        # حساب جائزة الحظ
-        # -----------------------------------------------
-
-        reward = random.randint(
-            LUCK_MIN_GOLD,
-            LUCK_MAX_GOLD
-        )
-
-        # -----------------------------------------------
-        # إضافة الجائزة
-        # -----------------------------------------------
-
-        new_gold = await self.change_gold(
-            guild_id,
-            user_id,
-            reward
-        )
-
-        # -----------------------------------------------
-        # رسالة الحظ
-        # -----------------------------------------------
-
-        embed = discord.Embed(
-            title="🍀 حظك اليوم",
-            description=(
-                f"🎉 مبروك {ctx.author.mention}!\n\n"
-                f"🍀 حصلت على **+{reward:,} ذهب**\n\n"
-                f"💰 رصيدك الحالي: **{new_gold:,} ذهب**\n\n"
-                "⏰ يمكنك استخدام الحظ مرة أخرى بعد **12 ساعة**."
-            ),
-            color=0x2ECC71
-        )
-
-        await ctx.send(
-            embed=embed
-        )
-
-
-# =========================================================
-# SETUP
-# =========================================================
-
-async def setup(bot):
-
-    await bot.add_cog(
-        MinesGame(bot)
-    )
