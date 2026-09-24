@@ -44,7 +44,7 @@ ideas_settings_collection = db["idea_settings"]
 # إعدادات أوامر الموقع
 website_command_settings = db["website_command_settings"]
 
-# ربط رسائل الـ DM بالسيرفر
+# ربط رسائل الـ DM
 idea_dm_messages_collection = db[IDEA_DM_COLLECTION_NAME]
 
 
@@ -223,28 +223,10 @@ def website_command_allowed(
     """
     نظام صلاحيات الموقع:
 
-    1. إذا لم يوجد إعداد للأمر:
-       ❌ ممنوع.
-
-    2. إذا enabled = False:
-       ❌ ممنوع.
-
-    3. إذا enabled = True بدون رومات أو رتب:
-       ✅ مسموح للجميع.
-
-    4. إذا تم تحديد رومات:
-       ✅ فقط داخل الرومات المحددة.
-
-    5. إذا تم تحديد رتب:
-       ✅ فقط أصحاب الرتب المحددة.
-
-    6. إذا تم تحديد رومات + رتب:
-       ✅ يجب توفر الاثنين.
-
-    ملاحظة:
-    لا نستخدم member.channel لأن Member لا يحتوي على channel.
-    يتم تمرير الروم من ctx.channel أو interaction.channel
-    أو message.channel.
+    - الأمر يجب أن يكون مفعّلًا.
+    - إذا توجد رومات محددة يتم فحص الروم.
+    - إذا توجد رتب محددة يتم فحص الرتبة.
+    - إذا توجد رومات ورتب يجب توفر الاثنين.
     """
 
     if not isinstance(member, discord.Member):
@@ -296,7 +278,7 @@ def website_command_allowed(
     ]
 
     # =====================================================
-    # الأمر مفعّل ولا توجد أي قيود
+    # لا توجد أي قيود
     # =====================================================
 
     if not channel_ids and not role_ids:
@@ -366,6 +348,89 @@ def website_command_allowed(
 
 
 # =========================================================
+# صلاحية أزرار مراجعة المساهمات
+# =========================================================
+
+def website_command_allowed_review(
+    member: discord.Member,
+    command_names
+) -> bool:
+
+    """
+    صلاحية أزرار:
+
+    - قبول
+    - رفض
+    - طلب تعديل
+
+    تعتمد على إعداد «ساهم» من الموقع.
+
+    الفرق عن website_command_allowed:
+    لا يتم فحص channel_ids.
+
+    السبب:
+    أزرار المراجعة موجودة في روم لوق المساهمات،
+    وقد يكون هذا الروم مختلفًا عن روم أمر «ساهم».
+
+    إذا كان أمر «ساهم» مقيدًا برتبة:
+    يتم احترام الرتبة.
+
+    إذا لم توجد رتب محددة:
+    يكفي أن يكون الأمر مفعّلًا.
+    """
+
+    if not isinstance(member, discord.Member):
+        return False
+
+    setting = get_command_setting(
+        member.guild.id,
+        command_names
+    )
+
+    if not setting:
+        return False
+
+    if setting.get("enabled") is not True:
+        return False
+
+    # =====================================================
+    # الرتب المسموحة
+    # =====================================================
+
+    role_ids = [
+
+        str(role_id).strip()
+
+        for role_id in setting.get(
+            "role_ids",
+            []
+        )
+
+        if str(role_id).strip()
+
+    ]
+
+    # =====================================================
+    # لا توجد رتب محددة
+    # =====================================================
+
+    if not role_ids:
+        return True
+
+    # =====================================================
+    # التحقق من رتب العضو
+    # =====================================================
+
+    return any(
+
+        str(role.id) in role_ids
+
+        for role in member.roles
+
+    )
+
+
+# =========================================================
 # فحص صلاحية أمر المساهمات من الـ DM
 # =========================================================
 
@@ -375,17 +440,13 @@ def website_command_allowed_dm(
 ) -> bool:
 
     """
-    هذا الفحص مخصص لزر «ساهم بفكرتك» الموجود في الخاص.
+    فحص زر «ساهم بفكرتك» الموجود في الخاص.
 
-    لأن المستخدم في DM لا يوجد لديه interaction.channel
-    تابع للسيرفر، لذلك لا نفحص channel_ids هنا.
+    لا يتم فحص channel_ids لأن الزر موجود في الخاص.
 
     يتم فحص:
-    - وجود إعداد الأمر في الموقع.
-    - أن الأمر مفعّل.
+    - الأمر مفعّل.
     - الرتب المسموحة إن وجدت.
-
-    أما قيود الرومات فتظل مطبقة على أمر «ساهم» داخل السيرفر.
     """
 
     if not isinstance(member, discord.Member):
@@ -415,11 +476,9 @@ def website_command_allowed_dm(
 
     ]
 
-    # لا توجد رتب محددة
     if not role_ids:
         return True
 
-    # توجد رتب محددة
     return any(
 
         str(role.id) in role_ids
@@ -533,7 +592,7 @@ class IdeaModal(
         user = interaction.user
 
         # =====================================================
-        # الحصول على السيرفر من الربط المحفوظ
+        # الحصول على السيرفر
         # =====================================================
 
         guild = interaction.client.get_guild(
@@ -553,7 +612,7 @@ class IdeaModal(
             return
 
         # =====================================================
-        # الحصول على Member الحقيقي داخل السيرفر
+        # الحصول على Member
         # =====================================================
 
         member = await get_guild_member(
@@ -574,7 +633,7 @@ class IdeaModal(
             return
 
         # =====================================================
-        # التحقق من تفعيل أمر المساهمة
+        # التحقق من تفعيل المساهمة
         # =====================================================
 
         if not website_command_allowed_dm(
@@ -652,7 +711,7 @@ class IdeaModal(
             return
 
         # =====================================================
-        # منع إرسال فكرة ثانية أثناء المراجعة
+        # منع وجود مساهمة أخرى قيد المراجعة
         # =====================================================
 
         existing = ideas_collection.find_one({
@@ -886,8 +945,7 @@ class IdeaDMView(ui.View):
     ):
 
         # =====================================================
-        # الزر موجود في الخاص
-        # لذلك لا نستخدم interaction.guild
+        # الحصول على السيرفر المرتبط برسالة الـ DM
         # =====================================================
 
         if interaction.guild is not None:
@@ -903,10 +961,6 @@ class IdeaDMView(ui.View):
                 interaction.user.id
 
             )
-
-        # =====================================================
-        # لم نجد السيرفر المرتبط بالرسالة
-        # =====================================================
 
         if not guild_id:
 
@@ -942,7 +996,7 @@ class IdeaDMView(ui.View):
             return
 
         # =====================================================
-        # الحصول على العضو داخل السيرفر
+        # الحصول على العضو
         # =====================================================
 
         member = await get_guild_member(
@@ -966,7 +1020,7 @@ class IdeaDMView(ui.View):
             return
 
         # =====================================================
-        # التحقق من إعدادات الموقع
+        # فحص صلاحية المساهمة
         # =====================================================
 
         if not website_command_allowed_dm(
@@ -1086,6 +1140,10 @@ class RejectReasonModal(
 
         )
 
+        # =====================================================
+        # تحديث الرسالة
+        # =====================================================
+
         if interaction.message:
 
             if interaction.message.embeds:
@@ -1118,6 +1176,10 @@ class RejectReasonModal(
                     )
 
                 )
+
+        # =====================================================
+        # إرسال DM لصاحب الفكرة
+        # =====================================================
 
         try:
 
@@ -1251,6 +1313,10 @@ class EditRequestModal(
 
         )
 
+        # =====================================================
+        # تحديث الرسالة
+        # =====================================================
+
         if interaction.message:
 
             if interaction.message.embeds:
@@ -1283,6 +1349,10 @@ class EditRequestModal(
                     )
 
                 )
+
+        # =====================================================
+        # إرسال DM لصاحب الفكرة
+        # =====================================================
 
         try:
 
@@ -1373,14 +1443,11 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not website_command_allowed(
+        if not website_command_allowed_review(
             interaction.user,
             [
-                "ساهم",
-                "المساهمات",
-                "مراجعة المساهمات"
-            ],
-            interaction.channel
+                "ساهم"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1540,14 +1607,11 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not website_command_allowed(
+        if not website_command_allowed_review(
             interaction.user,
             [
-                "ساهم",
-                "المساهمات",
-                "مراجعة المساهمات"
-            ],
-            interaction.channel
+                "ساهم"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1611,14 +1675,11 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not website_command_allowed(
+        if not website_command_allowed_review(
             interaction.user,
             [
-                "ساهم",
-                "المساهمات",
-                "مراجعة المساهمات"
-            ],
-            interaction.channel
+                "ساهم"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1871,10 +1932,6 @@ class IdeasCog(commands.Cog):
         if message.guild is None:
             return
 
-        # =====================================================
-        # صلاحية الأمر من الموقع
-        # =====================================================
-
         if not website_command_allowed(
             message.author,
             [
@@ -1887,10 +1944,6 @@ class IdeasCog(commands.Cog):
         ):
 
             return
-
-        # =====================================================
-        # حفظ الروم الحالي
-        # =====================================================
 
         set_idea_log_channel(
 
@@ -2115,10 +2168,6 @@ class IdeasCog(commands.Cog):
         if ctx.guild is None:
             return
 
-        # =====================================================
-        # صلاحية الموقع
-        # =====================================================
-
         if not website_command_allowed(
             ctx.author,
             [
@@ -2128,10 +2177,6 @@ class IdeasCog(commands.Cog):
         ):
 
             return
-
-        # =====================================================
-        # التأكد من وجود اللوق
-        # =====================================================
 
         log_channel_id = get_idea_log_channel_id(
             ctx.guild.id
@@ -2147,10 +2192,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # أكثر من منشن
-        # =====================================================
 
         if len(ctx.message.mentions) > 1:
 
@@ -2169,10 +2210,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # نص إضافي بدون منشن
-        # =====================================================
 
         if (
             len(args) > 0
@@ -2194,10 +2231,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # إرسال لشخص واحد
-        # =====================================================
 
         if len(ctx.message.mentions) == 1:
 
@@ -2355,10 +2388,6 @@ class IdeasCog(commands.Cog):
         )
 
         try:
-
-            # =================================================
-            # إرسال الرسالة
-            # =================================================
 
             sent_message = await member.send(
 
