@@ -922,7 +922,7 @@ def save_bot_commands(bot):
             ] = command_data
 
     # =====================================================
-    # حفظ كل شيء
+    # 4 - حفظ كل الأوامر الحالية
     # =====================================================
 
     for command_data in all_commands.values():
@@ -944,6 +944,125 @@ def save_bot_commands(bot):
                 f"❌ {type(error).__name__}: "
                 f"{error}"
             )
+
+    # =====================================================
+    # 5 - مزامنة الأوامر المحذوفة
+    #
+    # أي أمر موجود في MongoDB ولكنه لم يعد موجودًا
+    # ضمن الأوامر الحالية للبوت سيتم حذفه من:
+    #
+    # website_commands
+    #
+    # وكذلك إعداداته القديمة من:
+    #
+    # website_command_settings
+    # =====================================================
+
+    current_command_names = {
+        normalize_command_name(
+            command_name
+        )
+        for command_name in all_commands.keys()
+        if normalize_command_name(
+            command_name
+        )
+    }
+
+    # -----------------------------------------------------
+    # قراءة جميع الأوامر الموجودة حاليًا في الموقع
+    # -----------------------------------------------------
+
+    old_commands = list(
+        commands_collection.find(
+            {},
+            {
+                "_id": 1,
+                "name": 1
+            }
+        )
+    )
+
+    deleted_command_names = []
+
+    for old_command in old_commands:
+
+        old_name = normalize_command_name(
+            old_command.get("name")
+        )
+
+        if not old_name:
+            continue
+
+        # -------------------------------------------------
+        # إذا الأمر القديم غير موجود في البوت
+        # -------------------------------------------------
+
+        if old_name not in current_command_names:
+
+            try:
+
+                commands_collection.delete_one(
+                    {
+                        "_id": old_command["_id"]
+                    }
+                )
+
+                deleted_command_names.append(
+                    old_name
+                )
+
+                print(
+                    f"🗑️ [WEBSITE] تم حذف أمر قديم من الموقع: "
+                    f"{old_name}"
+                )
+
+            except Exception as error:
+
+                print(
+                    f"❌ [WEBSITE] فشل حذف الأمر القديم: "
+                    f"{old_name}"
+                )
+
+                print(
+                    f"❌ {type(error).__name__}: "
+                    f"{error}"
+                )
+
+    # -----------------------------------------------------
+    # حذف إعدادات الأوامر التي لم تعد موجودة
+    # -----------------------------------------------------
+
+    if deleted_command_names:
+
+        for deleted_name in deleted_command_names:
+
+            try:
+
+                result = settings_collection.delete_many({
+                    "$or": [
+                        {
+                            "command_name": deleted_name
+                        },
+                        {
+                            "name": deleted_name
+                        }
+                    ]
+                })
+
+                if result.deleted_count > 0:
+
+                    print(
+                        f"🧹 [WEBSITE] تم حذف "
+                        f"{result.deleted_count} إعداد قديم "
+                        f"للأمر: {deleted_name}"
+                    )
+
+            except Exception as error:
+
+                print(
+                    f"⚠️ [WEBSITE] فشل تنظيف إعدادات "
+                    f"{deleted_name}: {error}"
+                )
 
     # =====================================================
     # إحصائيات
@@ -980,6 +1099,19 @@ def save_bot_commands(bot):
         f"📦 إجمالي الأوامر في MongoDB: "
         f"{total_commands}"
     )
+
+    if deleted_command_names:
+
+        print(
+            f"🗑️ عدد الأوامر القديمة المحذوفة: "
+            f"{len(deleted_command_names)}"
+        )
+
+    else:
+
+        print(
+            "🗑️ لا توجد أوامر قديمة تحتاج للحذف"
+        )
 
     print(
         "=================================================="
