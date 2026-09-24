@@ -1,7 +1,7 @@
 import os
 import re
-import discord
 
+import discord
 from discord.ext import commands
 from discord import ui
 from pymongo import MongoClient
@@ -18,6 +18,13 @@ db = mongo_client["discord_bot_db"]
 
 # إعدادات التوب لكل سيرفر
 top_settings_collection = db["top_announcement_settings"]
+
+
+# =========================================================
+# الإعدادات
+# =========================================================
+
+MEMBER_ROLE_ID = 1544078847253811331
 
 
 # =========================================================
@@ -41,21 +48,22 @@ DEFAULT_PRIZES = {
 
 
 # =========================================================
-# أدوات Mongo
+# MongoDB - إعدادات السيرفر
 # =========================================================
 
 def get_settings(guild_id: int):
+
     settings = top_settings_collection.find_one(
         {"guild_id": guild_id}
     )
 
     if not settings:
+
         settings = {
             "guild_id": guild_id,
             "source_channel_id": None,
             "top_message_channel_id": None,
-            "announcement_channel_id": None,
-            "contribution_log_channel_id": None
+            "announcement_channel_id": None
         }
 
         top_settings_collection.insert_one(settings)
@@ -63,7 +71,12 @@ def get_settings(guild_id: int):
     return settings
 
 
-def save_channel(guild_id: int, field: str, channel_id: int):
+def save_channel(
+    guild_id: int,
+    field: str,
+    channel_id: int
+):
+
     top_settings_collection.update_one(
         {"guild_id": guild_id},
         {
@@ -80,35 +93,49 @@ def save_channel(guild_id: int, field: str, channel_id: int):
 # =========================================================
 
 def parse_amount(value):
+
     if value is None:
         return 0
 
-    value = str(value).strip().lower().replace(",", "")
+    value = str(value).strip().lower()
+    value = value.replace(",", "")
 
     try:
+
         if value.endswith("k"):
-            return int(float(value[:-1]) * 1_000)
+            return int(
+                float(value[:-1]) * 1_000
+            )
 
         if value.endswith("m"):
-            return int(float(value[:-1]) * 1_000_000)
+            return int(
+                float(value[:-1]) * 1_000_000
+            )
 
         if value.endswith("b"):
-            return int(float(value[:-1]) * 1_000_000_000)
+            return int(
+                float(value[:-1]) * 1_000_000_000
+            )
 
         if value.endswith("t"):
-            return int(float(value[:-1]) * 1_000_000_000_000)
+            return int(
+                float(value[:-1]) * 1_000_000_000_000
+            )
 
         return int(float(value))
 
     except Exception:
+
         return 0
 
 
 # =========================================================
-# استخراج نص الرسالة
+# استخراج محتوى الرسالة
 # =========================================================
 
-def get_message_text(message: discord.Message):
+def get_message_text(
+    message: discord.Message
+):
 
     parts = []
 
@@ -127,6 +154,7 @@ def get_message_text(message: discord.Message):
             parts.append(embed.author.name)
 
         for field in embed.fields:
+
             if field.name:
                 parts.append(field.name)
 
@@ -143,13 +171,15 @@ def get_message_text(message: discord.Message):
 # استخراج أفضل 3
 # =========================================================
 
-def extract_top_3(message: discord.Message):
+def extract_top_3(
+    message: discord.Message
+):
 
     text = get_message_text(message)
 
     results = []
 
-    # استخراج المنشنات
+    # استخراج منشنات الأشخاص
     mentions = re.findall(
         r"<@!?(\d+)>",
         text
@@ -188,38 +218,50 @@ def extract_top_3(message: discord.Message):
 
 
 # =========================================================
-# جلب رسالة التوب
+# البحث عن رسالة التوب
 # =========================================================
 
-async def get_top_message(channel: discord.TextChannel):
+async def get_top_message(
+    channel: discord.TextChannel
+):
 
     try:
 
-        async for message in channel.history(limit=30):
+        async for message in channel.history(
+            limit=30
+        ):
 
             text = get_message_text(message)
 
             if not text:
                 continue
 
-            top = extract_top_3(message)
+            top_users = extract_top_3(
+                message
+            )
 
-            if len(top) >= 3:
-                return message, top
+            if len(top_users) >= 3:
+
+                return message, top_users
 
     except Exception:
+
         return None, []
 
     return None, []
 
 
 # =========================================================
-# مودال تعديل الجائزة
+# مودال تعديل الجوائز
 # =========================================================
 
 class PrizeEditModal(ui.Modal):
 
-    def __init__(self, place, parent_view):
+    def __init__(
+        self,
+        place,
+        parent_view
+    ):
 
         super().__init__(
             title=f"تعديل جائزة المركز {place}"
@@ -246,13 +288,26 @@ class PrizeEditModal(ui.Modal):
             required=True
         )
 
-        self.add_item(self.gold_input)
-        self.add_item(self.ai_input)
+        self.add_item(
+            self.gold_input
+        )
 
-    async def on_submit(self, interaction: discord.Interaction):
+        self.add_item(
+            self.ai_input
+        )
 
-        gold = parse_amount(self.gold_input.value)
-        ai = parse_amount(self.ai_input.value)
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        gold = parse_amount(
+            self.gold_input.value
+        )
+
+        ai = parse_amount(
+            self.ai_input.value
+        )
 
         if gold < 0 or ai < 0:
 
@@ -260,9 +315,12 @@ class PrizeEditModal(ui.Modal):
                 "❌ قيم الجوائز غير صحيحة.",
                 ephemeral=True
             )
+
             return
 
-        self.parent_view.prizes[self.place] = {
+        self.parent_view.prizes[
+            self.place
+        ] = {
             "gold": gold,
             "ai": ai
         }
@@ -274,14 +332,19 @@ class PrizeEditModal(ui.Modal):
 
 
 # =========================================================
-# اختيار الجائزة
+# قائمة اختيار الجائزة
 # =========================================================
 
 class PrizeSelectView(ui.View):
 
-    def __init__(self, parent_view):
+    def __init__(
+        self,
+        parent_view
+    ):
 
-        super().__init__(timeout=180)
+        super().__init__(
+            timeout=180
+        )
 
         self.parent_view = parent_view
 
@@ -308,13 +371,22 @@ class PrizeSelectView(ui.View):
             options=options
         )
 
-        self.select.callback = self.select_callback
+        self.select.callback = (
+            self.select_callback
+        )
 
-        self.add_item(self.select)
+        self.add_item(
+            self.select
+        )
 
-    async def select_callback(self, interaction):
+    async def select_callback(
+        self,
+        interaction: discord.Interaction
+    ):
 
-        place = int(self.select.values[0])
+        place = int(
+            self.select.values[0]
+        )
 
         await interaction.response.send_modal(
             PrizeEditModal(
@@ -337,21 +409,29 @@ class AnnouncementView(ui.View):
         top_users
     ):
 
-        super().__init__(timeout=300)
+        super().__init__(
+            timeout=300
+        )
 
         self.cog = cog
         self.guild_id = guild_id
         self.top_users = top_users
 
         self.prizes = {
-            1: dict(DEFAULT_PRIZES[1]),
-            2: dict(DEFAULT_PRIZES[2]),
-            3: dict(DEFAULT_PRIZES[3])
+            1: dict(
+                DEFAULT_PRIZES[1]
+            ),
+            2: dict(
+                DEFAULT_PRIZES[2]
+            ),
+            3: dict(
+                DEFAULT_PRIZES[3]
+            )
         }
 
-    # -----------------------------------------------------
-    # Embed
-    # -----------------------------------------------------
+    # =====================================================
+    # Embed المعاينة
+    # =====================================================
 
     def build_embed(self):
 
@@ -369,9 +449,13 @@ class AnnouncementView(ui.View):
 
         for place in range(1, 4):
 
-            user_id = self.top_users[place - 1]
+            user_id = self.top_users[
+                place - 1
+            ]
 
-            prize = self.prizes[place]
+            prize = self.prizes[
+                place
+            ]
 
             embed.add_field(
                 name=f"{medals[place]} المركز {place}",
@@ -385,9 +469,9 @@ class AnnouncementView(ui.View):
 
         return embed
 
-    # -----------------------------------------------------
+    # =====================================================
     # تعديل الجوائز
-    # -----------------------------------------------------
+    # =====================================================
 
     @ui.button(
         label="تعديل الجوائز",
@@ -402,13 +486,15 @@ class AnnouncementView(ui.View):
 
         await interaction.response.send_message(
             "اختر المركز الذي تريد تعديل جائزته:",
-            view=PrizeSelectView(self),
+            view=PrizeSelectView(
+                self
+            ),
             ephemeral=True
         )
 
-    # -----------------------------------------------------
+    # =====================================================
     # معاينة
-    # -----------------------------------------------------
+    # =====================================================
 
     @ui.button(
         label="معاينة",
@@ -426,9 +512,9 @@ class AnnouncementView(ui.View):
             ephemeral=True
         )
 
-    # -----------------------------------------------------
+    # =====================================================
     # إعلان
-    # -----------------------------------------------------
+    # =====================================================
 
     @ui.button(
         label="إعلان",
@@ -456,6 +542,7 @@ class AnnouncementView(ui.View):
                 "استخدم الأمر `-اعلان-التوب` داخل الروم المطلوب.",
                 ephemeral=True
             )
+
             return
 
         channel = interaction.guild.get_channel(
@@ -465,9 +552,10 @@ class AnnouncementView(ui.View):
         if channel is None:
 
             await interaction.response.send_message(
-                "❌ روم إعلان التوب المحفوظ غير موجود أو البوت لا يستطيع الوصول إليه.",
+                "❌ روم إعلان التوب المحفوظ غير موجود أو لا أستطيع الوصول إليه.",
                 ephemeral=True
             )
+
             return
 
         await interaction.response.defer(
@@ -486,9 +574,13 @@ class AnnouncementView(ui.View):
 
         for place in range(1, 4):
 
-            user_id = self.top_users[place - 1]
+            user_id = self.top_users[
+                place - 1
+            ]
 
-            prize = self.prizes[place]
+            prize = self.prizes[
+                place
+            ]
 
             description += (
                 f"{medals[place]} **المركز {place}**\n"
@@ -508,7 +600,7 @@ class AnnouncementView(ui.View):
             await channel.send(
                 content=(
                     "@everyone\n"
-                    f"<@&{self.cog.member_role_id}>"
+                    f"<@&{MEMBER_ROLE_ID}>"
                 ),
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(
@@ -532,9 +624,9 @@ class AnnouncementView(ui.View):
                 ephemeral=True
             )
 
-    # -----------------------------------------------------
+    # =====================================================
     # إلغاء
-    # -----------------------------------------------------
+    # =====================================================
 
     @ui.button(
         label="إلغاء",
@@ -562,18 +654,21 @@ class AnnouncementView(ui.View):
 
 class AnnouncementCog(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(
+        self,
+        bot
+    ):
 
         self.bot = bot
 
-        # رتبة العضو التي يتم منشنها في الإعلان
-        self.member_role_id = 1544078847253811331
-
     # =====================================================
-    # التحقق من صلاحية إعداد الرومات
+    # صلاحية التحكم بإعدادات التوب
     # =====================================================
 
-    async def can_manage_top(self, ctx):
+    async def can_manage_top(
+        self,
+        ctx
+    ):
 
         if ctx.guild is None:
             return False
@@ -582,7 +677,6 @@ class AnnouncementCog(commands.Cog):
         if ctx.guild.owner_id == ctx.author.id:
             return True
 
-        # Administrator / Manage Guild
         permissions = ctx.author.guild_permissions
 
         if permissions.administrator:
@@ -595,7 +689,8 @@ class AnnouncementCog(commands.Cog):
 
     # =====================================================
     # سحب أفضل 3
-    # يحفظ الروم الحالي كروم مصدر التوب
+    #
+    # يحفظ الروم الحالي كروم مصدر رسالة التوب
     # =====================================================
 
     @commands.command(
@@ -606,7 +701,9 @@ class AnnouncementCog(commands.Cog):
         ctx
     ):
 
-        if not await self.can_manage_top(ctx):
+        if not await self.can_manage_top(
+            ctx
+        ):
             return
 
         save_channel(
@@ -617,11 +714,12 @@ class AnnouncementCog(commands.Cog):
 
         await ctx.send(
             f"✅ تم حفظ {ctx.channel.mention} كروم مصدر التوب.\n"
-            "الآن أي أمر `-اعلن` سيبحث عن رسالة التوب في هذا الروم."
+            "الآن أمر `-اعلن` سيبحث عن رسالة التوب في هذا الروم."
         )
 
     # =====================================================
     # تحديد رسالة التوب
+    #
     # يحفظ الروم الحالي كمكان لرسالة التوب
     # =====================================================
 
@@ -633,7 +731,9 @@ class AnnouncementCog(commands.Cog):
         ctx
     ):
 
-        if not await self.can_manage_top(ctx):
+        if not await self.can_manage_top(
+            ctx
+        ):
             return
 
         save_channel(
@@ -648,7 +748,8 @@ class AnnouncementCog(commands.Cog):
 
     # =====================================================
     # إعلان التوب
-    # يحفظ الروم الحالي كروم الإعلان
+    #
+    # يحفظ الروم الحالي كروم الإعلان النهائي
     # =====================================================
 
     @commands.command(
@@ -659,7 +760,9 @@ class AnnouncementCog(commands.Cog):
         ctx
     ):
 
-        if not await self.can_manage_top(ctx):
+        if not await self.can_manage_top(
+            ctx
+        ):
             return
 
         save_channel(
@@ -670,32 +773,6 @@ class AnnouncementCog(commands.Cog):
 
         await ctx.send(
             f"✅ تم تحديد {ctx.channel.mention} كروم إعلان أفضل 3."
-        )
-
-    # =====================================================
-    # تحديد لوق المساهمات
-    # يحفظ الروم فقط
-    # =====================================================
-
-    @commands.command(
-        name="تحديد-لوق-المساهمات"
-    )
-    async def set_contribution_log(
-        self,
-        ctx
-    ):
-
-        if not await self.can_manage_top(ctx):
-            return
-
-        save_channel(
-            ctx.guild.id,
-            "contribution_log_channel_id",
-            ctx.channel.id
-        )
-
-        await ctx.send(
-            f"✅ تم تحديد {ctx.channel.mention} كلوق للمساهمات."
         )
 
     # =====================================================
@@ -710,7 +787,9 @@ class AnnouncementCog(commands.Cog):
         ctx
     ):
 
-        if not await self.can_manage_top(ctx):
+        if not await self.can_manage_top(
+            ctx
+        ):
             return
 
         settings = get_settings(
@@ -724,8 +803,8 @@ class AnnouncementCog(commands.Cog):
         if not source_channel_id:
 
             await ctx.send(
-                "❌ لم يتم تحديد روم سحب أفضل 3.\n"
-                "استخدم `-سحب-افضل-3` داخل روم رسالة التوب."
+                "❌ لم يتم تحديد روم مصدر التوب.\n"
+                "استخدم `-سحب-افضل-3` داخل الروم الذي توجد فيه رسالة التوب."
             )
 
             return
@@ -742,9 +821,9 @@ class AnnouncementCog(commands.Cog):
 
             return
 
-        # ---------------------------------------------
+        # =================================================
         # البحث عن رسالة التوب
-        # ---------------------------------------------
+        # =================================================
 
         message, top_users = await get_top_message(
             source_channel
@@ -758,9 +837,9 @@ class AnnouncementCog(commands.Cog):
 
             return
 
-        # ---------------------------------------------
-        # إرسال نسخة التوب إلى روم تحديد رسالة التوب
-        # ---------------------------------------------
+        # =================================================
+        # إرسال رسالة التوب إلى الروم المحدد
+        # =================================================
 
         top_message_channel_id = settings.get(
             "top_message_channel_id"
@@ -793,9 +872,9 @@ class AnnouncementCog(commands.Cog):
                 except Exception:
                     pass
 
-        # ---------------------------------------------
-        # واجهة الجوائز القديمة
-        # ---------------------------------------------
+        # =================================================
+        # واجهة الجوائز
+        # =================================================
 
         embed = discord.Embed(
             title="🏆 تجهيز إعلان أفضل 3",
