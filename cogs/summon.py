@@ -3,20 +3,7 @@ import os
 
 import discord
 from discord.ext import commands
-from pymongo import MongoClient
-
-
-# =========================================================
-# إعدادات MongoDB
-# =========================================================
-
-MONGO_URI = os.getenv("MONGO_URI")
-
-mongo = MongoClient(MONGO_URI)
-db = mongo["discord_bot_db"]
-
-# نفس المجموعة التي يستخدمها الموقع
-command_settings_collection = db["website_command_settings"]
+from motor.motor_asyncio import AsyncIOMotorClient
 
 
 # =========================================================
@@ -27,113 +14,298 @@ COMMAND_NAME = "استدعاء"
 
 
 # =========================================================
-# جلب إعدادات أمر الاستدعاء للسيرفر
+# Cog الاستدعاء
 # =========================================================
 
-def get_summon_settings(guild_id):
+class SummonCog(commands.Cog):
 
-    guild_id = str(guild_id)
+    def __init__(self, bot):
 
-    settings = command_settings_collection.find_one({
-        "guild_id": guild_id,
-        "command_name": COMMAND_NAME
-    })
+        self.bot = bot
 
-    if not settings:
-        return None
+        # =================================================
+        # MongoDB
+        # =================================================
 
-    return settings
+        mongo_uri = os.environ.get("MONGO_URI")
 
+        if mongo_uri:
 
-# =========================================================
-# التحقق من أن الأمر مسموح في الروم الحالي
-# =========================================================
+            self.db_client = AsyncIOMotorClient(
+                mongo_uri
+            )
 
-def is_allowed_channel(ctx):
+            self.db = self.db_client.discord_bot_db
 
-    settings = get_summon_settings(ctx.guild.id)
+            self.website_command_settings = (
+                self.db.website_command_settings
+            )
 
-    if not settings:
-        return False
+        else:
 
-    if not settings.get("enabled", True):
-        return False
+            self.db_client = None
+            self.db = None
+            self.website_command_settings = None
 
-    channel_ids = settings.get("channel_ids", [])
+    # =====================================================
+    # دعم guild_id كـ String أو Integer
+    # =====================================================
 
-    channel_ids = {
-        str(channel_id)
-        for channel_id in channel_ids
-    }
+    def guild_id_variants(self, guild_id):
 
-    return str(ctx.channel.id) in channel_ids
+        variants = [
+            str(guild_id)
+        ]
 
+        try:
 
-# =========================================================
-# التحقق من صلاحية الرتبة
-# =========================================================
+            variants.append(
+                int(guild_id)
+            )
 
-def has_summon_permission(member):
+        except Exception:
+            pass
 
-    if member is None:
-        return False
+        return variants
 
-    settings = get_summon_settings(member.guild.id)
+    # =====================================================
+    # جلب إعدادات الأمر من الموقع
+    # =====================================================
 
-    if not settings:
-        return False
+    async def get_command_setting(
+        self,
+        guild_id,
+        command_name
+    ):
 
-    if not settings.get("enabled", True):
-        return False
+        if self.website_command_settings is None:
+            return None
 
-    role_ids = settings.get("role_ids", [])
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
 
-    role_ids = {
-        str(role_id)
-        for role_id in role_ids
-    }
+        # -------------------------------------------------
+        # الطريقة الجديدة
+        # -------------------------------------------------
 
-    return any(
-        str(role.id) in role_ids
-        for role in member.roles
-    )
+        setting = await self.website_command_settings.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "command_name": str(command_name)
+            }
+        )
 
+        if setting:
+            return setting
 
-# =========================================================
-# جلب الروم
-# =========================================================
+        # -------------------------------------------------
+        # دعم البيانات القديمة
+        # -------------------------------------------------
 
-async def get_target_channel(bot, channel_id):
+        setting = await self.website_command_settings.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "name": str(command_name)
+            }
+        )
 
-    try:
+        return setting
 
-        channel_id = int(str(channel_id).strip())
+    # =====================================================
+    # التحقق من صلاحية الأمر
+    # =====================================================
 
-    except (ValueError, TypeError):
+    async def has_summon_permission(
+        self,
+        guild_id,
+        member,
+        channel_id=None
+    ):
 
-        return None, "❌ ID الروم غير صحيح."
+        if member is None:
+            return False
 
-    try:
+        setting = await self.get_command_setting(
+            guild_id,
+            COMMAND_NAME
+        )
 
-        channel = bot.get_channel(channel_id)
+        # -------------------------------------------------
+        # لا يوجد إعداد
+        # -------------------------------------------------
 
-        if channel is None:
+        if not setting:
+            return False
 
-            channel = await bot.fetch_channel(channel_id)
+        # -------------------------------------------------
+        # الأمر غير مفعل
+        # -------------------------------------------------
 
-        return channel, None
+        if not setting.get(
+            "enabled",
+            False
+        ):
+            return False
 
-    except discord.NotFound:
+        # -------------------------------------------------
+        # الرتب المسموحة
+        # -------------------------------------------------
 
-        return None, "❌ لم يتم العثور على الروم بهذا الـ ID."
+        role_ids = setting.get(
+            "role_ids",
+            []
+        )
 
-    except discord.Forbidden:
+        if not role_ids:
+            return False
 
-        return None, "❌ البوت لا يملك صلاحية الوصول إلى هذا الروم."
+        allowed_role_ids = {
+            str(role_id)
+            for role_id in role_ids
+        }
 
-    except discord.HTTPException:
+        user_role_ids = {
+            str(role.id)
+            for role in member.roles
+        }
 
-        return None, "❌ حدث خطأ أثناء جلب الروم."
+        # -------------------------------------------------
+        # لا يملك الرتبة
+        # -------------------------------------------------
+
+        if not allowed_role_ids.intersection(
+            user_role_ids
+        ):
+            return False
+
+        # -------------------------------------------------
+        # التحقق من الروم
+        # -------------------------------------------------
+
+        if channel_id is not None:
+
+            channel_ids = setting.get(
+                "channel_ids",
+                []
+            )
+
+            if not channel_ids:
+                return False
+
+            allowed_channel_ids = {
+                str(channel_id)
+                for channel_id in channel_ids
+            }
+
+            if str(channel_id) not in allowed_channel_ids:
+                return False
+
+        return True
+
+    # =====================================================
+    # جلب الروم المطلوب
+    # =====================================================
+
+    async def get_target_channel(
+        self,
+        channel_id
+    ):
+
+        try:
+
+            channel_id = int(
+                str(channel_id).strip()
+            )
+
+        except (
+            ValueError,
+            TypeError
+        ):
+
+            return (
+                None,
+                "❌ ID الروم غير صحيح."
+            )
+
+        try:
+
+            channel = self.bot.get_channel(
+                channel_id
+            )
+
+            if channel is None:
+
+                channel = await self.bot.fetch_channel(
+                    channel_id
+                )
+
+            return (
+                channel,
+                None
+            )
+
+        except discord.NotFound:
+
+            return (
+                None,
+                "❌ لم يتم العثور على الروم بهذا الـ ID."
+            )
+
+        except discord.Forbidden:
+
+            return (
+                None,
+                "❌ البوت لا يملك صلاحية الوصول إلى هذا الروم."
+            )
+
+        except discord.HTTPException:
+
+            return (
+                None,
+                "❌ حدث خطأ أثناء جلب الروم."
+            )
+
+    # =====================================================
+    # إنشاء Embed الاستدعاء
+    # =====================================================
+
+    def create_summon_embed(
+        self,
+        target_channel,
+        reason,
+        author
+    ):
+
+        embed = discord.Embed(
+            title="🚨 تنبيه استدعاء رسمي",
+            description=(
+                "لقد تم استدعاؤك للتوجه إلى الروم المحدد."
+            ),
+            color=discord.Color.red()
+        )
+
+        embed.add_field(
+            name="📍 الروم المطلوب:",
+            value=target_channel.mention,
+            inline=False
+        )
+
+        embed.add_field(
+            name="📝 سبب الاستدعاء:",
+            value=reason,
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"بواسطة المشرف: {author.name}"
+        )
+
+        return embed
 
 
 # =========================================================
@@ -162,7 +334,7 @@ class SummonModal(
 
     def __init__(
         self,
-        bot,
+        cog,
         member=None,
         author=None,
         full=False
@@ -170,7 +342,7 @@ class SummonModal(
 
         super().__init__()
 
-        self.bot = bot
+        self.cog = cog
         self.member = member
         self.author = author
         self.full = full
@@ -194,19 +366,16 @@ class SummonModal(
             return
 
         # =================================================
-        # التحقق من إعدادات الأمر
+        # التحقق من الموقع
         # =================================================
 
-        if not is_allowed_channel(interaction):
+        allowed = await self.cog.has_summon_permission(
+            interaction.guild.id,
+            interaction.user,
+            interaction.channel.id
+        )
 
-            await interaction.response.send_message(
-                "❌ أمر الاستدعاء غير مفعل في هذا الروم.",
-                ephemeral=True
-            )
-
-            return
-
-        if not has_summon_permission(interaction.user):
+        if not allowed:
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام أمر الاستدعاء.",
@@ -216,12 +385,13 @@ class SummonModal(
             return
 
         # =================================================
-        # جلب الروم المطلوب
+        # جلب الروم
         # =================================================
 
-        target_channel, error = await get_target_channel(
-            self.bot,
-            self.room_id.value
+        target_channel, error = (
+            await self.cog.get_target_channel(
+                self.room_id.value
+            )
         )
 
         if error:
@@ -234,12 +404,18 @@ class SummonModal(
             return
 
         # =================================================
-        # التأكد أن الروم داخل نفس السيرفر
+        # التأكد أن الروم من نفس السيرفر
         # =================================================
 
-        if getattr(target_channel, "guild", None):
+        target_guild = getattr(
+            target_channel,
+            "guild",
+            None
+        )
 
-            if target_channel.guild.id != interaction.guild.id:
+        if target_guild is not None:
+
+            if target_guild.id != interaction.guild.id:
 
                 await interaction.response.send_message(
                     "❌ لا يمكنك تحديد روم من سيرفر آخر.",
@@ -254,28 +430,10 @@ class SummonModal(
 
         if not self.full:
 
-            embed = discord.Embed(
-                title="🚨 تنبيه استدعاء رسمي",
-                description=(
-                    "لقد تم استدعاؤك للتوجه إلى الروم المحدد."
-                ),
-                color=discord.Color.red()
-            )
-
-            embed.add_field(
-                name="📍 الروم المطلوب:",
-                value=target_channel.mention,
-                inline=False
-            )
-
-            embed.add_field(
-                name="📝 سبب الاستدعاء:",
-                value=self.reason.value,
-                inline=False
-            )
-
-            embed.set_footer(
-                text=f"بواسطة المشرف: {self.author.name}"
+            embed = self.cog.create_summon_embed(
+                target_channel,
+                self.reason.value,
+                self.author
             )
 
             try:
@@ -313,28 +471,10 @@ class SummonModal(
 
         guild = interaction.guild
 
-        embed = discord.Embed(
-            title="🚨 تنبيه استدعاء رسمي",
-            description=(
-                "لقد تم استدعاؤك للتوجه إلى الروم المحدد."
-            ),
-            color=discord.Color.red()
-        )
-
-        embed.add_field(
-            name="📍 الروم المطلوب:",
-            value=target_channel.mention,
-            inline=False
-        )
-
-        embed.add_field(
-            name="📝 سبب الاستدعاء:",
-            value=self.reason.value,
-            inline=False
-        )
-
-        embed.set_footer(
-            text=f"بواسطة المشرف: {self.author.name}"
+        embed = self.cog.create_summon_embed(
+            target_channel,
+            self.reason.value,
+            self.author
         )
 
         await interaction.response.send_message(
@@ -368,6 +508,10 @@ class SummonModal(
 
             await asyncio.sleep(1)
 
+        # =================================================
+        # النتيجة
+        # =================================================
+
         try:
 
             await interaction.followup.send(
@@ -389,15 +533,17 @@ class SummonView(discord.ui.View):
 
     def __init__(
         self,
-        bot,
+        cog,
         member,
         author,
         full=False
     ):
 
-        super().__init__(timeout=120)
+        super().__init__(
+            timeout=120
+        )
 
-        self.bot = bot
+        self.cog = cog
         self.member = member
         self.author = author
         self.full = full
@@ -422,9 +568,37 @@ class SummonView(discord.ui.View):
 
             return
 
+        # =================================================
+        # إعادة التحقق من صلاحيات الموقع
+        # =================================================
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        allowed = await self.cog.has_summon_permission(
+            interaction.guild.id,
+            interaction.user,
+            interaction.channel.id
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية استخدام أمر الاستدعاء.",
+                ephemeral=True
+            )
+
+            return
+
         await interaction.response.send_modal(
             SummonModal(
-                self.bot,
+                self.cog,
                 self.member,
                 self.author,
                 self.full
@@ -458,21 +632,27 @@ class GroupSummonModal(
 
     def __init__(
         self,
-        bot,
+        cog,
         member_ids,
         author
     ):
 
         super().__init__()
 
-        self.bot = bot
-        self.member_ids = list(member_ids)
+        self.cog = cog
+        self.member_ids = list(
+            member_ids
+        )
         self.author = author
 
     async def on_submit(
         self,
         interaction: discord.Interaction
     ):
+
+        # =================================================
+        # التحقق من السيرفر
+        # =================================================
 
         if interaction.guild is None:
 
@@ -484,19 +664,16 @@ class GroupSummonModal(
             return
 
         # =================================================
-        # التحقق من إعدادات الموقع
+        # التحقق من صلاحية الموقع
         # =================================================
 
-        if not is_allowed_channel(interaction):
+        allowed = await self.cog.has_summon_permission(
+            interaction.guild.id,
+            interaction.user,
+            interaction.channel.id
+        )
 
-            await interaction.response.send_message(
-                "❌ أمر الاستدعاء غير مفعل في هذا الروم.",
-                ephemeral=True
-            )
-
-            return
-
-        if not has_summon_permission(interaction.user):
+        if not allowed:
 
             await interaction.response.send_message(
                 "❌ ليس لديك صلاحية استخدام أمر الاستدعاء.",
@@ -509,9 +686,10 @@ class GroupSummonModal(
         # جلب الروم
         # =================================================
 
-        target_channel, error = await get_target_channel(
-            self.bot,
-            self.room_id.value
+        target_channel, error = (
+            await self.cog.get_target_channel(
+                self.room_id.value
+            )
         )
 
         if error:
@@ -527,9 +705,15 @@ class GroupSummonModal(
         # التأكد من نفس السيرفر
         # =================================================
 
-        if getattr(target_channel, "guild", None):
+        target_guild = getattr(
+            target_channel,
+            "guild",
+            None
+        )
 
-            if target_channel.guild.id != interaction.guild.id:
+        if target_guild is not None:
+
+            if target_guild.id != interaction.guild.id:
 
                 await interaction.response.send_message(
                     "❌ لا يمكنك تحديد روم من سيرفر آخر.",
@@ -544,28 +728,10 @@ class GroupSummonModal(
         # إنشاء الرسالة
         # =================================================
 
-        embed = discord.Embed(
-            title="🚨 تنبيه استدعاء رسمي",
-            description=(
-                "لقد تم استدعاؤك للتوجه إلى الروم المحدد."
-            ),
-            color=discord.Color.red()
-        )
-
-        embed.add_field(
-            name="📍 الروم المطلوب:",
-            value=target_channel.mention,
-            inline=False
-        )
-
-        embed.add_field(
-            name="📝 سبب الاستدعاء:",
-            value=self.reason.value,
-            inline=False
-        )
-
-        embed.set_footer(
-            text=f"بواسطة المشرف: {self.author.name}"
+        embed = self.cog.create_summon_embed(
+            target_channel,
+            self.reason.value,
+            self.author
         )
 
         await interaction.response.send_message(
@@ -582,7 +748,9 @@ class GroupSummonModal(
 
         for member_id in self.member_ids:
 
-            member = guild.get_member(member_id)
+            member = guild.get_member(
+                member_id
+            )
 
             if member is None:
 
@@ -632,7 +800,9 @@ class GroupSummonModal(
 # قائمة اختيار الأعضاء
 # =========================================================
 
-class GroupMemberSelect(discord.ui.Select):
+class GroupMemberSelect(
+    discord.ui.Select
+):
 
     def __init__(
         self,
@@ -649,7 +819,6 @@ class GroupMemberSelect(discord.ui.Select):
             description = f"@{member.name}"
 
             if len(description) > 100:
-
                 description = description[:100]
 
             options.append(
@@ -660,10 +829,23 @@ class GroupMemberSelect(discord.ui.Select):
                 )
             )
 
+        # حماية إضافية
+        if not options:
+
+            options.append(
+                discord.SelectOption(
+                    label="لا يوجد أعضاء",
+                    value="none"
+                )
+            )
+
         super().__init__(
             placeholder="👥 اختر الأعضاء الذين تريد استدعاءهم",
             min_values=1,
-            max_values=len(options),
+            max_values=min(
+                len(options),
+                25
+            ),
             options=options,
             row=0
         )
@@ -682,7 +864,38 @@ class GroupMemberSelect(discord.ui.Select):
 
             return
 
+        # =================================================
+        # إعادة التحقق من صلاحية الموقع
+        # =================================================
+
+        if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        allowed = await self.group_view.cog.has_summon_permission(
+            interaction.guild.id,
+            interaction.user,
+            interaction.channel.id
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية استخدام أمر الاستدعاء.",
+                ephemeral=True
+            )
+
+            return
+
         for value in self.values:
+
+            if value == "none":
+                continue
 
             member_id = int(value)
 
@@ -702,20 +915,24 @@ class GroupMemberSelect(discord.ui.Select):
 # View استدعاء المجموعة
 # =========================================================
 
-class GroupSummonView(discord.ui.View):
+class GroupSummonView(
+    discord.ui.View
+):
 
     MEMBERS_PER_PAGE = 25
 
     def __init__(
         self,
-        bot,
+        cog,
         guild,
         author
     ):
 
-        super().__init__(timeout=300)
+        super().__init__(
+            timeout=300
+        )
 
-        self.bot = bot
+        self.cog = cog
         self.guild = guild
         self.author = author
 
@@ -726,13 +943,19 @@ class GroupSummonView(discord.ui.View):
         ]
 
         self.members.sort(
-            key=lambda member: member.display_name.lower()
+            key=lambda member: (
+                member.display_name or ""
+            ).lower()
         )
 
         self.page = 0
         self.selected_members = []
 
         self.update_components()
+
+    # =====================================================
+    # عدد الصفحات
+    # =====================================================
 
     @property
     def total_pages(self):
@@ -746,6 +969,10 @@ class GroupSummonView(discord.ui.View):
             - 1
         ) // self.MEMBERS_PER_PAGE
 
+    # =====================================================
+    # أعضاء الصفحة الحالية
+    # =====================================================
+
     def current_members(self):
 
         start = (
@@ -753,9 +980,18 @@ class GroupSummonView(discord.ui.View):
             * self.MEMBERS_PER_PAGE
         )
 
-        end = start + self.MEMBERS_PER_PAGE
+        end = (
+            start
+            + self.MEMBERS_PER_PAGE
+        )
 
-        return self.members[start:end]
+        return self.members[
+            start:end
+        ]
+
+    # =====================================================
+    # Embed
+    # =====================================================
 
     def create_embed(self):
 
@@ -782,6 +1018,10 @@ class GroupSummonView(discord.ui.View):
         )
 
         return embed
+
+    # =====================================================
+    # تحديث الأزرار والقائمة
+    # =====================================================
 
     def update_components(self):
 
@@ -823,6 +1063,30 @@ class GroupSummonView(discord.ui.View):
 
                 return
 
+            if interaction.guild is None:
+
+                await interaction.response.send_message(
+                    "❌ تعذر تحديد السيرفر.",
+                    ephemeral=True
+                )
+
+                return
+
+            allowed = await self.cog.has_summon_permission(
+                interaction.guild.id,
+                interaction.user,
+                interaction.channel.id
+            )
+
+            if not allowed:
+
+                await interaction.response.send_message(
+                    "❌ لم تعد تملك صلاحية استخدام أمر الاستدعاء.",
+                    ephemeral=True
+                )
+
+                return
+
             if self.page > 0:
                 self.page -= 1
 
@@ -835,7 +1099,9 @@ class GroupSummonView(discord.ui.View):
 
         previous_button.callback = previous_callback
 
-        self.add_item(previous_button)
+        self.add_item(
+            previous_button
+        )
 
         # =================================================
         # التالي
@@ -845,7 +1111,10 @@ class GroupSummonView(discord.ui.View):
             label="التالي",
             style=discord.ButtonStyle.secondary,
             emoji="➡️",
-            disabled=self.page >= self.total_pages - 1,
+            disabled=(
+                self.page
+                >= self.total_pages - 1
+            ),
             row=1
         )
 
@@ -862,7 +1131,32 @@ class GroupSummonView(discord.ui.View):
 
                 return
 
+            if interaction.guild is None:
+
+                await interaction.response.send_message(
+                    "❌ تعذر تحديد السيرفر.",
+                    ephemeral=True
+                )
+
+                return
+
+            allowed = await self.cog.has_summon_permission(
+                interaction.guild.id,
+                interaction.user,
+                interaction.channel.id
+            )
+
+            if not allowed:
+
+                await interaction.response.send_message(
+                    "❌ لم تعد تملك صلاحية استخدام أمر الاستدعاء.",
+                    ephemeral=True
+                )
+
+                return
+
             if self.page < self.total_pages - 1:
+
                 self.page += 1
 
             self.update_components()
@@ -874,7 +1168,9 @@ class GroupSummonView(discord.ui.View):
 
         next_button.callback = next_callback
 
-        self.add_item(next_button)
+        self.add_item(
+            next_button
+        )
 
         # =================================================
         # بدء الاستدعاء
@@ -900,6 +1196,30 @@ class GroupSummonView(discord.ui.View):
 
                 return
 
+            if interaction.guild is None:
+
+                await interaction.response.send_message(
+                    "❌ تعذر تحديد السيرفر.",
+                    ephemeral=True
+                )
+
+                return
+
+            allowed = await self.cog.has_summon_permission(
+                interaction.guild.id,
+                interaction.user,
+                interaction.channel.id
+            )
+
+            if not allowed:
+
+                await interaction.response.send_message(
+                    "❌ لم تعد تملك صلاحية استخدام أمر الاستدعاء.",
+                    ephemeral=True
+                )
+
+                return
+
             if not self.selected_members:
 
                 await interaction.response.send_message(
@@ -911,7 +1231,7 @@ class GroupSummonView(discord.ui.View):
 
             await interaction.response.send_modal(
                 GroupSummonModal(
-                    self.bot,
+                    self.cog,
                     self.selected_members,
                     self.author
                 )
@@ -919,7 +1239,9 @@ class GroupSummonView(discord.ui.View):
 
         summon_button.callback = summon_callback
 
-        self.add_item(summon_button)
+        self.add_item(
+            summon_button
+        )
 
         # =================================================
         # إلغاء
@@ -955,7 +1277,13 @@ class GroupSummonView(discord.ui.View):
 
         cancel_button.callback = cancel_callback
 
-        self.add_item(cancel_button)
+        self.add_item(
+            cancel_button
+        )
+
+    # =====================================================
+    # انتهاء الوقت
+    # =====================================================
 
     async def on_timeout(self):
 
@@ -963,20 +1291,25 @@ class GroupSummonView(discord.ui.View):
 
 
 # =========================================================
-# Cog الاستدعاء
+# أمر الاستدعاء
 # =========================================================
 
-class SummonCog(commands.Cog):
+class SummonCommandsCog(
+    commands.Cog
+):
 
-    def __init__(self, bot):
+    pass
 
-        self.bot = bot
 
-    # =====================================================
-    # أمر الاستدعاء
-    # =====================================================
+# =========================================================
+# نضيف الأمر إلى نفس الـ Cog الأساسي
+# =========================================================
 
-    @commands.command(name="استدعاء")
+class SummonCog(SummonCog):
+
+    @commands.command(
+        name="استدعاء"
+    )
     async def summon(
         self,
         ctx,
@@ -991,31 +1324,55 @@ class SummonCog(commands.Cog):
             return
 
         # =================================================
-        # التحقق من إعدادات الموقع
+        # التحقق من الموقع
         # =================================================
 
-        settings = get_summon_settings(
-            ctx.guild.id
+        allowed = await self.has_summon_permission(
+            ctx.guild.id,
+            ctx.author,
+            ctx.channel.id
         )
 
-        if not settings:
-            return
-
-        if not settings.get("enabled", True):
-            return
-
         # =================================================
-        # التحقق من الروم
+        # إذا الأمر غير مفعل / الروم غير مسموح /
+        # الرتبة غير مسموحة
         # =================================================
 
-        if not is_allowed_channel(ctx):
-            return
+        if not allowed:
 
-        # =================================================
-        # التحقق من الرتبة
-        # =================================================
+            # إذا كان الأمر موجودًا لكن العضو ليس لديه
+            # الرتبة المسموحة، نرسل رسالة فقط إذا كان
+            # الإعداد موجودًا والروم مسموحًا.
 
-        if not has_summon_permission(ctx.author):
+            setting = await self.get_command_setting(
+                ctx.guild.id,
+                COMMAND_NAME
+            )
+
+            if not setting:
+                return
+
+            if not setting.get(
+                "enabled",
+                False
+            ):
+                return
+
+            channel_ids = setting.get(
+                "channel_ids",
+                []
+            )
+
+            if not channel_ids:
+                return
+
+            allowed_channels = {
+                str(channel_id)
+                for channel_id in channel_ids
+            }
+
+            if str(ctx.channel.id) not in allowed_channels:
+                return
 
             await ctx.send(
                 "❌ ليس لديك صلاحية لاستخدام أمر الاستدعاء."
@@ -1027,7 +1384,10 @@ class SummonCog(commands.Cog):
         # الاستدعاء الكامل
         # =================================================
 
-        if target and target.lower() == "كامل":
+        if (
+            target
+            and target.lower() == "كامل"
+        ):
 
             embed = discord.Embed(
                 title="🚨 استدعاء كامل",
@@ -1042,7 +1402,7 @@ class SummonCog(commands.Cog):
             await ctx.send(
                 embed=embed,
                 view=SummonView(
-                    self.bot,
+                    self,
                     None,
                     ctx.author,
                     full=True
@@ -1055,7 +1415,10 @@ class SummonCog(commands.Cog):
         # استدعاء مجموعة
         # =================================================
 
-        if target and target.lower() == "مجموعة":
+        if (
+            target
+            and target.lower() == "مجموعة"
+        ):
 
             guild = ctx.guild
 
@@ -1074,7 +1437,7 @@ class SummonCog(commands.Cog):
                 return
 
             view = GroupSummonView(
-                self.bot,
+                self,
                 guild,
                 ctx.author
             )
@@ -1143,7 +1506,7 @@ class SummonCog(commands.Cog):
         await ctx.send(
             embed=embed,
             view=SummonView(
-                self.bot,
+                self,
                 member,
                 ctx.author,
                 full=False
@@ -1161,24 +1524,51 @@ class SummonCog(commands.Cog):
         error
     ):
 
-        # إذا كان الأمر غير مفعل في هذا السيرفر
-        # لا نرسل أي شيء
-
         if ctx.guild is None:
             return
 
-        settings = get_summon_settings(
-            ctx.guild.id
+        # =================================================
+        # تجاهل إذا الأمر غير موجود بالموقع
+        # =================================================
+
+        setting = await self.get_command_setting(
+            ctx.guild.id,
+            COMMAND_NAME
         )
 
-        if not settings:
+        if not setting:
             return
 
-        if not settings.get("enabled", True):
+        # =================================================
+        # تجاهل إذا الأمر غير مفعل
+        # =================================================
+
+        if not setting.get(
+            "enabled",
+            False
+        ):
             return
 
-        if not is_allowed_channel(ctx):
+        # =================================================
+        # تجاهل إذا الروم غير مسموح
+        # =================================================
+
+        channel_ids = setting.get(
+            "channel_ids",
+            []
+        )
+
+        allowed_channels = {
+            str(channel_id)
+            for channel_id in channel_ids
+        }
+
+        if str(ctx.channel.id) not in allowed_channels:
             return
+
+        # =================================================
+        # أخطاء العضو
+        # =================================================
 
         if isinstance(
             error,
@@ -1189,7 +1579,9 @@ class SummonCog(commands.Cog):
                 "❌ لم أتمكن من العثور على هذا العضو."
             )
 
-        elif isinstance(
+            return
+
+        if isinstance(
             error,
             commands.BadArgument
         ):
@@ -1198,6 +1590,16 @@ class SummonCog(commands.Cog):
                 "❌ العضو غير صحيح.\n"
                 "استخدم: `-استدعاء @الشخص`"
             )
+
+            return
+
+        # =================================================
+        # طباعة الأخطاء غير المتوقعة في Console
+        # =================================================
+
+        print(
+            f"[Summon] Error: {repr(error)}"
+        )
 
 
 # =========================================================
@@ -1209,6 +1611,3 @@ async def setup(bot):
     await bot.add_cog(
         SummonCog(bot)
     )
-
-[/code]
-[/writing]
