@@ -17,6 +17,9 @@ MONGO_DB_NAME = "discord_bot_db"
 
 IDEA_COLLECTION_NAME = "idea_submissions"
 
+# حفظ ربط رسائل الـ DM بالسيرفر الذي أرسلها
+IDEA_DM_COLLECTION_NAME = "idea_dm_messages"
+
 DM_DELAY = 0.7
 
 
@@ -40,6 +43,9 @@ ideas_settings_collection = db["idea_settings"]
 
 # إعدادات أوامر الموقع
 website_command_settings = db["website_command_settings"]
+
+# ربط رسائل الـ DM بالسيرفر
+idea_dm_messages_collection = db[IDEA_DM_COLLECTION_NAME]
 
 
 # =========================================================
@@ -205,7 +211,7 @@ def get_command_setting(
 
 
 # =========================================================
-# فحص صلاحية أمر الموقع
+# فحص صلاحية أمر الموقع داخل السيرفر
 # =========================================================
 
 def website_command_allowed(
@@ -244,26 +250,13 @@ def website_command_allowed(
     if not isinstance(member, discord.Member):
         return False
 
-    # =====================================================
-    # جلب إعداد الأمر
-    # =====================================================
-
     setting = get_command_setting(
         member.guild.id,
         command_names
     )
 
-    # =====================================================
-    # لا يوجد إعداد في الموقع
-    # الأمر ممنوع من الأساس
-    # =====================================================
-
     if not setting:
         return False
-
-    # =====================================================
-    # الأمر غير مفعّل
-    # =====================================================
 
     if setting.get("enabled") is not True:
         return False
@@ -318,8 +311,6 @@ def website_command_allowed(
 
     if channel_ids:
 
-        # إذا تم تحديد رومات في الموقع
-        # يجب أن يكون لدينا channel لفحصه
         if channel is None:
             return False
 
@@ -375,6 +366,124 @@ def website_command_allowed(
 
 
 # =========================================================
+# فحص صلاحية أمر المساهمات من الـ DM
+# =========================================================
+
+def website_command_allowed_dm(
+    member: discord.Member,
+    command_names
+) -> bool:
+
+    """
+    هذا الفحص مخصص لزر «ساهم بفكرتك» الموجود في الخاص.
+
+    لأن المستخدم في DM لا يوجد لديه interaction.channel
+    تابع للسيرفر، لذلك لا نفحص channel_ids هنا.
+
+    يتم فحص:
+    - وجود إعداد الأمر في الموقع.
+    - أن الأمر مفعّل.
+    - الرتب المسموحة إن وجدت.
+
+    أما قيود الرومات فتظل مطبقة على أمر «ساهم» داخل السيرفر.
+    """
+
+    if not isinstance(member, discord.Member):
+        return False
+
+    setting = get_command_setting(
+        member.guild.id,
+        command_names
+    )
+
+    if not setting:
+        return False
+
+    if setting.get("enabled") is not True:
+        return False
+
+    role_ids = [
+
+        str(role_id).strip()
+
+        for role_id in setting.get(
+            "role_ids",
+            []
+        )
+
+        if str(role_id).strip()
+
+    ]
+
+    # لا توجد رتب محددة
+    if not role_ids:
+        return True
+
+    # توجد رتب محددة
+    return any(
+
+        str(role.id) in role_ids
+
+        for role in member.roles
+
+    )
+
+
+# =========================================================
+# الحصول على السيرفر المرتبط برسالة DM
+# =========================================================
+
+def get_dm_guild_id(
+    message_id: int,
+    user_id: int
+):
+
+    data = idea_dm_messages_collection.find_one({
+
+        "message_id": message_id,
+
+        "user_id": user_id
+
+    })
+
+    if not data:
+        return None
+
+    return data.get("guild_id")
+
+
+# =========================================================
+# الحصول على Member من السيرفر
+# =========================================================
+
+async def get_guild_member(
+    guild: discord.Guild,
+    user_id: int
+):
+
+    member = guild.get_member(user_id)
+
+    if member is not None:
+        return member
+
+    try:
+
+        member = await guild.fetch_member(
+            user_id
+        )
+
+        return member
+
+    except (
+        discord.NotFound,
+        discord.Forbidden,
+        discord.HTTPException
+    ):
+
+        return None
+
+
+# =========================================================
 # Modal إرسال الفكرة
 # =========================================================
 
@@ -407,6 +516,15 @@ class IdeaModal(
         max_length=2000
     )
 
+    def __init__(
+        self,
+        guild_id: int
+    ):
+
+        super().__init__()
+
+        self.guild_id = guild_id
+
     async def on_submit(
         self,
         interaction: discord.Interaction
@@ -414,13 +532,43 @@ class IdeaModal(
 
         user = interaction.user
 
-        guild = interaction.guild
+        # =====================================================
+        # الحصول على السيرفر من الربط المحفوظ
+        # =====================================================
+
+        guild = interaction.client.get_guild(
+            self.guild_id
+        )
 
         if guild is None:
 
             await interaction.response.send_message(
-                "❌ لا يمكن إرسال المساهمة من الخاص.",
+
+                "❌ تعذر العثور على السيرفر المرتبط بهذه المساهمة.",
+
                 ephemeral=True
+
+            )
+
+            return
+
+        # =====================================================
+        # الحصول على Member الحقيقي داخل السيرفر
+        # =====================================================
+
+        member = await get_guild_member(
+            guild,
+            user.id
+        )
+
+        if member is None:
+
+            await interaction.response.send_message(
+
+                "❌ لم أتمكن من العثور عليك داخل السيرفر.",
+
+                ephemeral=True
+
             )
 
             return
@@ -429,17 +577,19 @@ class IdeaModal(
         # التحقق من تفعيل أمر المساهمة
         # =====================================================
 
-        if not website_command_allowed(
-            user,
+        if not website_command_allowed_dm(
+            member,
             [
                 "ساهم"
-            ],
-            interaction.channel
+            ]
         ):
 
             await interaction.response.send_message(
-                "❌ أمر المساهمات غير مفعّل حاليًا.",
+
+                "❌ نظام المساهمات غير مفعّل حاليًا.",
+
                 ephemeral=True
+
             )
 
             return
@@ -455,8 +605,11 @@ class IdeaModal(
         if not log_channel_id:
 
             await interaction.response.send_message(
+
                 "❌ لم يتم تحديد روم استقبال المساهمات حتى الآن.",
+
                 ephemeral=True
+
             )
 
             return
@@ -473,8 +626,11 @@ class IdeaModal(
         ):
 
             await interaction.response.send_message(
+
                 "❌ إعداد روم المساهمات غير صحيح.",
+
                 ephemeral=True
+
             )
 
             return
@@ -486,8 +642,11 @@ class IdeaModal(
         if idea_channel is None:
 
             await interaction.response.send_message(
+
                 "❌ روم استقبال المساهمات المحدد غير موجود.",
+
                 ephemeral=True
+
             )
 
             return
@@ -727,14 +886,78 @@ class IdeaDMView(ui.View):
     ):
 
         # =====================================================
-        # التحقق من السيرفر
+        # الزر موجود في الخاص
+        # لذلك لا نستخدم interaction.guild
         # =====================================================
 
-        if not interaction.guild:
+        if interaction.guild is not None:
+
+            guild_id = interaction.guild.id
+
+        else:
+
+            guild_id = get_dm_guild_id(
+
+                interaction.message.id,
+
+                interaction.user.id
+
+            )
+
+        # =====================================================
+        # لم نجد السيرفر المرتبط بالرسالة
+        # =====================================================
+
+        if not guild_id:
 
             await interaction.response.send_message(
 
-                "❌ لا يمكن استخدام المساهمات من الخاص.",
+                "❌ تعذر معرفة السيرفر المرتبط بهذه الرسالة.\n"
+                "يرجى طلب رسالة مساهمة جديدة من الإدارة.",
+
+                ephemeral=True
+
+            )
+
+            return
+
+        # =====================================================
+        # الحصول على السيرفر
+        # =====================================================
+
+        guild = interaction.client.get_guild(
+            int(guild_id)
+        )
+
+        if guild is None:
+
+            await interaction.response.send_message(
+
+                "❌ تعذر العثور على السيرفر المرتبط بهذه المساهمة.",
+
+                ephemeral=True
+
+            )
+
+            return
+
+        # =====================================================
+        # الحصول على العضو داخل السيرفر
+        # =====================================================
+
+        member = await get_guild_member(
+
+            guild,
+
+            interaction.user.id
+
+        )
+
+        if member is None:
+
+            await interaction.response.send_message(
+
+                "❌ لم أتمكن من العثور عليك داخل السيرفر.",
 
                 ephemeral=True
 
@@ -746,12 +969,14 @@ class IdeaDMView(ui.View):
         # التحقق من إعدادات الموقع
         # =====================================================
 
-        if not website_command_allowed(
-            interaction.user,
+        if not website_command_allowed_dm(
+
+            member,
+
             [
                 "ساهم"
-            ],
-            interaction.channel
+            ]
+
         ):
 
             await interaction.response.send_message(
@@ -764,8 +989,16 @@ class IdeaDMView(ui.View):
 
             return
 
+        # =====================================================
+        # فتح النموذج
+        # =====================================================
+
         await interaction.response.send_modal(
-            IdeaModal()
+
+            IdeaModal(
+                guild.id
+            )
+
         )
 
 
@@ -1767,18 +2000,9 @@ class IdeasCog(commands.Cog):
 
             return
 
-        # =====================================================
-        # إذا لم يتم تحديد روم
-        # يستخدم الروم الحالي
-        # =====================================================
-
         if channel is None:
 
             channel = ctx.channel
-
-        # =====================================================
-        # حفظ اللوق
-        # =====================================================
 
         set_idea_log_channel(
 
@@ -1988,7 +2212,11 @@ class IdeasCog(commands.Cog):
                 return
 
             success = await self.send_dm(
-                member
+
+                member,
+
+                ctx.guild.id
+
             )
 
             if success:
@@ -2048,8 +2276,11 @@ class IdeasCog(commands.Cog):
             embed=embed,
 
             view=BroadcastConfirmView(
+
                 self,
+
                 ctx.guild.id
+
             )
 
         )
@@ -2060,7 +2291,8 @@ class IdeasCog(commands.Cog):
 
     async def send_dm(
         self,
-        member: discord.Member
+        member: discord.Member,
+        guild_id: int
     ):
 
         if member.bot:
@@ -2124,11 +2356,50 @@ class IdeasCog(commands.Cog):
 
         try:
 
-            await member.send(
+            # =================================================
+            # إرسال الرسالة
+            # =================================================
+
+            sent_message = await member.send(
 
                 embed=embed,
 
                 view=IdeaDMView()
+
+            )
+
+            # =================================================
+            # حفظ ربط رسالة الـ DM بالسيرفر
+            # =================================================
+
+            idea_dm_messages_collection.update_one(
+
+                {
+                    "message_id":
+                        sent_message.id
+                },
+
+                {
+                    "$set": {
+
+                        "message_id":
+                            sent_message.id,
+
+                        "user_id":
+                            member.id,
+
+                        "guild_id":
+                            int(guild_id),
+
+                        "created_at":
+                            datetime.now(
+                                timezone.utc
+                            )
+
+                    }
+                },
+
+                upsert=True
 
             )
 
@@ -2176,7 +2447,11 @@ class IdeasCog(commands.Cog):
         for member in members:
 
             success = await self.send_dm(
-                member
+
+                member,
+
+                guild.id
+
             )
 
             if success:
