@@ -17,10 +17,13 @@ MONGO_DB_NAME = "discord_bot_db"
 
 IDEA_COLLECTION_NAME = "idea_submissions"
 
-# رتبة الإدارة المسموح لها بإعداد نظام المساهمات
-SETUP_ROLE_ID = 1544078469657530578
+# =========================================================
+# مهم:
+# لا يوجد أي Role ID ثابت هنا.
+# صلاحيات الأوامر يتم أخذها من:
+# website_command_settings
+# =========================================================
 
-# تأخير بين رسائل الـ DM
 DM_DELAY = 0.7
 
 
@@ -41,6 +44,9 @@ ideas_collection = db[IDEA_COLLECTION_NAME]
 
 # إعدادات المساهمات لكل سيرفر
 ideas_settings_collection = db["idea_settings"]
+
+# إعدادات صلاحيات الأوامر من الموقع
+website_command_settings = db["website_command_settings"]
 
 
 # =========================================================
@@ -94,18 +100,219 @@ def set_idea_log_channel(
 
 
 # =========================================================
-# التحقق من رتبة الإعداد
+# نظام صلاحيات الموقع
 # =========================================================
 
-def has_setup_role(member: discord.Member) -> bool:
+def normalize_command_name(name):
+
+    return (
+        str(name or "")
+        .strip()
+        .replace("ـ", "")
+        .replace("  ", " ")
+    )
+
+
+def get_command_setting(
+    guild_id: int,
+    command_names
+):
+
+    if isinstance(command_names, str):
+        command_names = [command_names]
+
+    normalized_names = [
+        normalize_command_name(name)
+        for name in command_names
+    ]
+
+    normalized_names = [
+        name
+        for name in normalized_names
+        if name
+    ]
+
+    if not normalized_names:
+        return None
+
+    # =====================================================
+    # البحث عن إعداد الأمر في الموقع
+    # =====================================================
+
+    for command_name in normalized_names:
+
+        setting = website_command_settings.find_one({
+
+            "guild_id": str(guild_id),
+
+            "command_name": command_name
+        })
+
+        if setting:
+            return setting
+
+        # دعم احتمال أن الموقع حفظ guild_id كرقم
+        setting = website_command_settings.find_one({
+
+            "guild_id": guild_id,
+
+            "command_name": command_name
+        })
+
+        if setting:
+            return setting
+
+    return None
+
+
+def website_command_allowed(
+    member: discord.Member,
+    command_names
+) -> bool:
+
+    """
+    صلاحية الأمر تأتي من الموقع.
+
+    إذا لم يوجد إعداد للأمر:
+        يسمح بالأمر.
+
+    إذا كان enabled = False:
+        يسمح بالأمر لأن الموقع لم يقيده.
+
+    إذا كان enabled = True:
+        يتم التحقق من الرومات والرتب المحددة في الموقع.
+
+    إذا لم يتم تحديد رومات أو رتب:
+        يسمح بالأمر.
+
+    إذا تم تحديد رتب:
+        يجب أن يمتلك العضو واحدة منها.
+
+    وإذا تم تحديد رومات:
+        يجب أن يكون في أحدها.
+    """
 
     if not isinstance(member, discord.Member):
         return False
 
-    return any(
-        role.id == SETUP_ROLE_ID
-        for role in member.roles
+    setting = get_command_setting(
+        member.guild.id,
+        command_names
     )
+
+    # =====================================================
+    # لا يوجد إعداد في الموقع
+    # =====================================================
+
+    if not setting:
+        return True
+
+    # =====================================================
+    # الأمر غير مفعل من إعدادات الموقع
+    #
+    # حسب نظام الموقع الحالي:
+    # عدم التفعيل = لا يوجد تقييد إضافي.
+    # =====================================================
+
+    if setting.get("enabled", False) is not True:
+        return True
+
+    # =====================================================
+    # الرومات المسموحة
+    # =====================================================
+
+    channel_ids = [
+
+        str(channel_id)
+
+        for channel_id in setting.get(
+            "channel_ids",
+            []
+        )
+
+        if str(channel_id).strip()
+    ]
+
+    # =====================================================
+    # الرتب المسموحة
+    # =====================================================
+
+    role_ids = [
+
+        str(role_id)
+
+        for role_id in setting.get(
+            "role_ids",
+            []
+        )
+
+        if str(role_id).strip()
+    ]
+
+    # =====================================================
+    # إذا لم يتم تحديد لا روم ولا رتبة
+    # =====================================================
+
+    if not channel_ids and not role_ids:
+        return True
+
+    # =====================================================
+    # التحقق من الروم
+    # =====================================================
+
+    channel_allowed = True
+
+    if channel_ids:
+
+        channel_allowed = (
+            str(member.channel.id)
+            in channel_ids
+        )
+
+    # =====================================================
+    # التحقق من الرتبة
+    # =====================================================
+
+    role_allowed = True
+
+    if role_ids:
+
+        role_allowed = any(
+
+            str(role.id) in role_ids
+
+            for role in member.roles
+        )
+
+    # =====================================================
+    # إذا تم تحديد الاثنين:
+    # لازم يطابق الروم والرتبة
+    # =====================================================
+
+    if channel_ids and role_ids:
+
+        return (
+            channel_allowed
+            and role_allowed
+        )
+
+    # =====================================================
+    # إذا تم تحديد روم فقط
+    # =====================================================
+
+    if channel_ids:
+
+        return channel_allowed
+
+    # =====================================================
+    # إذا تم تحديد رتبة فقط
+    # =====================================================
+
+    if role_ids:
+
+        return role_allowed
+
+    return True
 
 
 # =========================================================
@@ -147,10 +354,6 @@ class IdeaModal(
     ):
 
         user = interaction.user
-
-        # =====================================================
-        # التأكد من وجود السيرفر
-        # =====================================================
 
         guild = interaction.guild
 
@@ -317,10 +520,6 @@ class IdeaModal(
             text="🟡 حالة المساهمة: قيد المراجعة"
         )
 
-        # =====================================================
-        # أزرار المراجعة
-        # =====================================================
-
         review_view = IdeaReviewView()
 
         try:
@@ -335,7 +534,6 @@ class IdeaModal(
                 discord.AllowedMentions.none()
             )
 
-            # حفظ رسالة المراجعة
             ideas_collection.update_one(
 
                 {
@@ -373,10 +571,6 @@ class IdeaModal(
             )
 
             return
-
-        # =====================================================
-        # الرد لصاحب الفكرة
-        # =====================================================
 
         await interaction.response.send_message(
 
@@ -475,10 +669,6 @@ class RejectReasonModal(
             self.reason
         )
 
-        # =====================================================
-        # تحديث قاعدة البيانات
-        # =====================================================
-
         ideas_collection.update_one(
 
             {
@@ -503,10 +693,6 @@ class RejectReasonModal(
                 }
             }
         )
-
-        # =====================================================
-        # تعديل الرسالة
-        # =====================================================
 
         if interaction.message:
 
@@ -538,10 +724,6 @@ class RejectReasonModal(
                         disabled=True
                     )
                 )
-
-        # =====================================================
-        # إرسال سبب الرفض
-        # =====================================================
 
         try:
 
@@ -641,10 +823,6 @@ class EditRequestModal(
             self.changes
         )
 
-        # =====================================================
-        # تحديث الحالة
-        # =====================================================
-
         ideas_collection.update_one(
 
             {
@@ -669,10 +847,6 @@ class EditRequestModal(
                 }
             }
         )
-
-        # =====================================================
-        # تعديل Embed
-        # =====================================================
 
         if interaction.message:
 
@@ -704,10 +878,6 @@ class EditRequestModal(
                         disabled=True
                     )
                 )
-
-        # =====================================================
-        # إرسال الطلب لصاحب الفكرة
-        # =====================================================
 
         try:
 
@@ -795,8 +965,13 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_setup_role(
-            interaction.user
+        if not website_command_allowed(
+            interaction.user,
+            [
+                "ساهم",
+                "المساهمات",
+                "مراجعة المساهمات"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -836,10 +1011,6 @@ class IdeaReviewView(ui.View):
 
             return
 
-        # =====================================================
-        # تحديث
-        # =====================================================
-
         ideas_collection.update_one(
 
             {
@@ -861,10 +1032,6 @@ class IdeaReviewView(ui.View):
                 }
             }
         )
-
-        # =====================================================
-        # تعديل Embed
-        # =====================================================
 
         old_embed = (
             interaction.message.embeds[0]
@@ -892,10 +1059,6 @@ class IdeaReviewView(ui.View):
                 disabled=True
             )
         )
-
-        # =====================================================
-        # DM
-        # =====================================================
 
         try:
 
@@ -955,8 +1118,13 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_setup_role(
-            interaction.user
+        if not website_command_allowed(
+            interaction.user,
+            [
+                "ساهم",
+                "المساهمات",
+                "مراجعة المساهمات"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1016,8 +1184,13 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_setup_role(
-            interaction.user
+        if not website_command_allowed(
+            interaction.user,
+            [
+                "ساهم",
+                "المساهمات",
+                "مراجعة المساهمات"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1097,8 +1270,11 @@ class BroadcastConfirmView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_setup_role(
-            interaction.user
+        if not website_command_allowed(
+            interaction.user,
+            [
+                "ساهم"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1125,8 +1301,6 @@ class BroadcastConfirmView(ui.View):
 
             return
 
-        # تعطيل الأزرار
-
         for child in self.children:
 
             if isinstance(
@@ -1147,10 +1321,6 @@ class BroadcastConfirmView(ui.View):
 
             view=self
         )
-
-        # =====================================================
-        # الإرسال
-        # =====================================================
 
         sent, failed = (
             await self.cog.broadcast_to_server(
@@ -1190,8 +1360,11 @@ class BroadcastConfirmView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_setup_role(
-            interaction.user
+        if not website_command_allowed(
+            interaction.user,
+            [
+                "ساهم"
+            ]
         ):
 
             await interaction.response.send_message(
@@ -1246,8 +1419,6 @@ class IdeasCog(commands.Cog):
     # =====================================================
     # تحديد لوق المساهمات
     #
-    # الاستخدام المطلوب:
-    #
     # تحديد لوق المساهمات
     #
     # داخل الروم نفسه الذي تريد جعله لوق.
@@ -1262,12 +1433,17 @@ class IdeasCog(commands.Cog):
             return
 
         # =====================================================
-        # التحقق من الرتبة
+        # صلاحية الأمر من الموقع
         # =====================================================
 
-        if not has_setup_role(
-            message.author
+        if not website_command_allowed(
+            message.author,
+            [
+                "تحديد لوق المساهمات",
+                "تحديد-لوق-المساهمات"
+            ]
         ):
+
             return
 
         # =====================================================
@@ -1310,18 +1486,10 @@ class IdeasCog(commands.Cog):
         message
     ):
 
-        # =====================================================
-        # تجاهل البوتات
-        # =====================================================
-
         if message.author.bot:
             return
 
         content = message.content.strip()
-
-        # =====================================================
-        # الأمر الأساسي بدون أي بادئة
-        # =====================================================
 
         normalized = (
             content
@@ -1338,14 +1506,6 @@ class IdeasCog(commands.Cog):
 
             return
 
-        # =====================================================
-        # صيغة إضافية:
-        #
-        # تحديد-لوق-المساهمات
-        #
-        # أيضًا تجعل نفس الروم هو اللوق
-        # =====================================================
-
         if normalized == "تحديد-لوق-المساهمات":
 
             await self.handle_set_idea_log(
@@ -1356,8 +1516,6 @@ class IdeasCog(commands.Cog):
 
     # =====================================================
     # الأمر القديم مع تحديد الروم
-    #
-    # تحديد-لوق-المساهمات #الروم
     # =====================================================
 
     @commands.command(
@@ -1369,17 +1527,15 @@ class IdeasCog(commands.Cog):
         channel: discord.TextChannel = None
     ):
 
-        if not has_setup_role(
-            ctx.author
+        if not website_command_allowed(
+            ctx.author,
+            [
+                "تحديد لوق المساهمات",
+                "تحديد-لوق-المساهمات"
+            ]
         ):
 
             return
-
-        # =====================================================
-        # إذا لم يتم تحديد روم
-        #
-        # نستخدم نفس الروم الحالي
-        # =====================================================
 
         if channel is None:
 
@@ -1400,10 +1556,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # إذا تم تحديد روم يدويًا
-        # =====================================================
 
         set_idea_log_channel(
 
@@ -1433,8 +1585,12 @@ class IdeasCog(commands.Cog):
         ctx
     ):
 
-        if not has_setup_role(
-            ctx.author
+        if not website_command_allowed(
+            ctx.author,
+            [
+                "لوق-المساهمات",
+                "لوق المساهمات"
+            ]
         ):
 
             return
@@ -1485,16 +1641,21 @@ class IdeasCog(commands.Cog):
         *args
     ):
 
-        # =====================================================
-        # التأكد من السيرفر
-        # =====================================================
-
         if ctx.guild is None:
             return
 
         # =====================================================
-        # التأكد من وجود اللوق
+        # صلاحية الأمر من الموقع
         # =====================================================
+
+        if not website_command_allowed(
+            ctx.author,
+            [
+                "ساهم"
+            ]
+        ):
+
+            return
 
         log_channel_id = get_idea_log_channel_id(
             ctx.guild.id
@@ -1509,10 +1670,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # أكثر من منشن
-        # =====================================================
 
         if len(ctx.message.mentions) > 1:
 
@@ -1530,10 +1687,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # كلام إضافي بدون منشن
-        # =====================================================
 
         if (
             len(args) > 0
@@ -1554,10 +1707,6 @@ class IdeasCog(commands.Cog):
             )
 
             return
-
-        # =====================================================
-        # شخص واحد
-        # =====================================================
 
         if len(ctx.message.mentions) == 1:
 
@@ -1598,10 +1747,6 @@ class IdeasCog(commands.Cog):
                 )
 
             return
-
-        # =====================================================
-        # إرسال للجميع
-        # =====================================================
 
         embed = discord.Embed(
 
@@ -1776,8 +1921,12 @@ class IdeasCog(commands.Cog):
         ctx
     ):
 
-        if not has_setup_role(
-            ctx.author
+        if not website_command_allowed(
+            ctx.author,
+            [
+                "حالة-المساهمات",
+                "حالة المساهمات"
+            ]
         ):
 
             return
