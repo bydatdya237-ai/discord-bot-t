@@ -10,23 +10,18 @@ from pymongo import MongoClient
 
 
 # =========================================================
-# الإعدادات
+# الإعدادات العامة
 # =========================================================
 
-# الرتبة المسموح لها باستخدام أوامر المساهمات
-ALLOWED_ROLE_ID = 1544078469657530578
-
-# روم استقبال الأفكار
-IDEA_CHANNEL_ID = 1550797517237518417
-
-# قاعدة البيانات
 MONGO_DB_NAME = "discord_bot_db"
 
-# Collection خاصة بالمساهمات فقط
 IDEA_COLLECTION_NAME = "idea_submissions"
 
-# تأخير بسيط بين الـ DM والـ DM
-# حتى لا يتم إرسال كمية ضخمة بنفس اللحظة
+# نفس رتبة الإدارة المستخدمة سابقًا لأمر تحديد اللوق
+# ويمكنك تغييرها إذا أردت.
+SETUP_ROLE_ID = 1544078469657530578
+
+# تأخير بين رسائل الـ DM
 DM_DELAY = 0.7
 
 
@@ -36,20 +31,79 @@ DM_DELAY = 0.7
 
 mongo_url = os.environ.get("MONGO_URI")
 
+if not mongo_url:
+    raise RuntimeError("❌ متغير MONGO_URI غير موجود.")
+
 mongo_client = MongoClient(mongo_url)
 
 db = mongo_client[MONGO_DB_NAME]
 
 ideas_collection = db[IDEA_COLLECTION_NAME]
 
+# إعدادات المساهمات لكل سيرفر
+ideas_settings_collection = db["idea_settings"]
+
 
 # =========================================================
-# التحقق من الرتبة
+# أدوات الإعدادات
 # =========================================================
 
-def has_allowed_role(member: discord.Member) -> bool:
+def get_guild_settings(guild_id: int):
+    """
+    جلب إعدادات المساهمات الخاصة بالسيرفر.
+    """
+
+    settings = ideas_settings_collection.find_one({
+        "guild_id": guild_id
+    })
+
+    if not settings:
+        return {}
+
+    return settings
+
+
+def get_idea_log_channel_id(guild_id: int):
+    """
+    جلب روم استقبال المساهمات.
+    """
+
+    settings = get_guild_settings(guild_id)
+
+    return settings.get("log_channel_id")
+
+
+def set_idea_log_channel(guild_id: int, channel_id: int):
+    """
+    حفظ روم استقبال المساهمات.
+    """
+
+    ideas_settings_collection.update_one(
+        {
+            "guild_id": guild_id
+        },
+        {
+            "$set": {
+                "guild_id": guild_id,
+                "log_channel_id": channel_id,
+                "updated_at": datetime.now(timezone.utc)
+            }
+        },
+        upsert=True
+    )
+
+
+# =========================================================
+# التحقق من رتبة إعداد اللوق
+# =========================================================
+
+def has_setup_role(member: discord.Member) -> bool:
+
+    if not isinstance(member, discord.Member):
+        return False
+
     return any(
-        role.id == ALLOWED_ROLE_ID
+        role.id == SETUP_ROLE_ID
         for role in member.roles
     )
 
@@ -78,21 +132,70 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
 
     implementation = ui.TextInput(
         label="طريقة التطبيق",
-        placeholder="كيف يمكن تطبيق الفكرة داخل السيرفر؟",
+        placeholder="كيف يمكن تطبيقها داخل السيرفر؟",
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=2000
     )
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
 
         user = interaction.user
+
+        # =====================================================
+        # التأكد من وجود السيرفر
+        # =====================================================
+
+        guild = interaction.guild
+
+        if guild is None:
+
+            await interaction.response.send_message(
+                "❌ لا يمكن إرسال المساهمة من الخاص.",
+                ephemeral=True
+            )
+
+            return
+
+        # =====================================================
+        # التأكد من أن النظام مفعّل وله لوق
+        # =====================================================
+
+        log_channel_id = get_idea_log_channel_id(
+            guild.id
+        )
+
+        if not log_channel_id:
+
+            await interaction.response.send_message(
+                "❌ لم يتم تحديد روم استقبال المساهمات حتى الآن.",
+                ephemeral=True
+            )
+
+            return
+
+        idea_channel = guild.get_channel(
+            int(log_channel_id)
+        )
+
+        if idea_channel is None:
+
+            await interaction.response.send_message(
+                "❌ روم استقبال المساهمات المحدد غير موجود.",
+                ephemeral=True
+            )
+
+            return
 
         # =====================================================
         # منع إرسال فكرة ثانية أثناء وجود فكرة قيد المراجعة
         # =====================================================
 
         existing = ideas_collection.find_one({
+            "guild_id": guild.id,
             "user_id": user.id,
             "status": "pending"
         })
@@ -108,59 +211,27 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
             return
 
         # =====================================================
-        # رقم الفكرة
+        # رقم المساهمة
         # =====================================================
 
         last_idea = ideas_collection.find_one(
-            {},
-            sort=[("idea_number", -1)]
+            {
+                "guild_id": guild.id
+            },
+            sort=[
+                ("idea_number", -1)
+            ]
         )
 
         if last_idea:
-            idea_number = last_idea.get(
-                "idea_number",
-                0
-            ) + 1
+
+            idea_number = (
+                last_idea.get("idea_number", 0) + 1
+            )
+
         else:
+
             idea_number = 1
-
-        # =====================================================
-        # العثور على السيرفر
-        # =====================================================
-
-        guild = None
-
-        for g in interaction.client.guilds:
-
-            if g.get_member(user.id):
-                guild = g
-                break
-
-        if guild is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر العثور على السيرفر.",
-                ephemeral=True
-            )
-
-            return
-
-        # =====================================================
-        # روم الأفكار
-        # =====================================================
-
-        idea_channel = guild.get_channel(
-            IDEA_CHANNEL_ID
-        )
-
-        if idea_channel is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر العثور على روم استقبال الأفكار.",
-                ephemeral=True
-            )
-
-            return
 
         # =====================================================
         # حفظ الفكرة
@@ -176,7 +247,9 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
 
             "guild_id": guild.id,
 
-            "idea_name": str(self.idea_name),
+            "idea_name": str(
+                self.idea_name
+            ),
 
             "description": str(
                 self.idea_description
@@ -251,7 +324,7 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
                 discord.AllowedMentions.none()
             )
 
-            # حفظ رقم رسالة المراجعة
+            # حفظ رسالة المراجعة
             ideas_collection.update_one(
 
                 {
@@ -260,8 +333,12 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
 
                 {
                     "$set": {
+
                         "review_message_id":
-                            review_message.id
+                            review_message.id,
+
+                        "log_channel_id":
+                            idea_channel.id
                     }
                 }
             )
@@ -273,11 +350,11 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
             })
 
             print(
-                f"❌ خطأ أثناء إرسال الفكرة: {e}"
+                f"❌ خطأ أثناء إرسال المساهمة: {e}"
             )
 
             await interaction.response.send_message(
-                "❌ حدث خطأ أثناء إرسال فكرتك.",
+                "❌ حدث خطأ أثناء إرسال مساهمتك.",
                 ephemeral=True
             )
 
@@ -290,8 +367,12 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
         await interaction.response.send_message(
 
             f"✅ **تم إرسال مساهمتك بنجاح!**\n\n"
+
             f"💡 الفكرة: **{self.idea_name}**\n"
-            f"📌 رقم المساهمة: `#{idea_number:03d}`\n\n"
+
+            f"📌 رقم المساهمة: "
+            f"`#{idea_number:03d}`\n\n"
+
             f"🟡 سيتم مراجعتها من الإدارة.",
 
             ephemeral=True
@@ -305,6 +386,7 @@ class IdeaModal(ui.Modal, title="ساهم معنا بفعالية"):
 class IdeaDMView(ui.View):
 
     def __init__(self):
+
         super().__init__(
             timeout=None
         )
@@ -343,7 +425,10 @@ class RejectReasonModal(
         max_length=1500
     )
 
-    def __init__(self, idea):
+    def __init__(
+        self,
+        idea
+    ):
 
         super().__init__()
 
@@ -356,7 +441,6 @@ class RejectReasonModal(
 
         idea = self.idea
 
-        # التأكد أن الفكرة ما زالت قيد المراجعة
         if idea.get("status") != "pending":
 
             await interaction.response.send_message(
@@ -405,28 +489,36 @@ class RejectReasonModal(
 
         if interaction.message:
 
-            old_embed = interaction.message.embeds[0]
+            if interaction.message.embeds:
 
-            embed = old_embed.copy()
-
-            embed.color = discord.Color.red()
-
-            embed.set_footer(
-                text=(
-                    f"🔴 حالة المساهمة: مرفوضة "
-                    f"• بواسطة {interaction.user}"
+                old_embed = (
+                    interaction.message.embeds[0]
                 )
-            )
 
-            await interaction.message.edit(
-                embed=embed,
-                view=IdeaReviewView(
-                    disabled=True
+                embed = old_embed.copy()
+
+                embed.color = (
+                    discord.Color.red()
                 )
-            )
+
+                embed.set_footer(
+                    text=(
+                        f"🔴 حالة المساهمة: مرفوضة "
+                        f"• بواسطة {interaction.user}"
+                    )
+                )
+
+                await interaction.message.edit(
+
+                    embed=embed,
+
+                    view=IdeaReviewView(
+                        disabled=True
+                    )
+                )
 
         # =====================================================
-        # إرسال سبب الرفض لصاحب الفكرة
+        # إرسال سبب الرفض
         # =====================================================
 
         try:
@@ -488,7 +580,10 @@ class EditRequestModal(
         max_length=1500
     )
 
-    def __init__(self, idea):
+    def __init__(
+        self,
+        idea
+    ):
 
         super().__init__()
 
@@ -549,25 +644,33 @@ class EditRequestModal(
 
         if interaction.message:
 
-            old_embed = interaction.message.embeds[0]
+            if interaction.message.embeds:
 
-            embed = old_embed.copy()
-
-            embed.color = discord.Color.orange()
-
-            embed.set_footer(
-                text=(
-                    f"🟠 حالة المساهمة: تحتاج تعديل "
-                    f"• بواسطة {interaction.user}"
+                old_embed = (
+                    interaction.message.embeds[0]
                 )
-            )
 
-            await interaction.message.edit(
-                embed=embed,
-                view=IdeaReviewView(
-                    disabled=True
+                embed = old_embed.copy()
+
+                embed.color = (
+                    discord.Color.orange()
                 )
-            )
+
+                embed.set_footer(
+                    text=(
+                        f"🟠 حالة المساهمة: تحتاج تعديل "
+                        f"• بواسطة {interaction.user}"
+                    )
+                )
+
+                await interaction.message.edit(
+
+                    embed=embed,
+
+                    view=IdeaReviewView(
+                        disabled=True
+                    )
+                )
 
         # =====================================================
         # إرسال الطلب لصاحب الفكرة
@@ -611,7 +714,7 @@ class EditRequestModal(
             )
 
         await interaction.response.send_message(
-            "🟠 تم إرسال طلب التعديل لصاحب الفكرة.",
+            "🟠 تم إرسال طلب التعديل لصاحبها.",
             ephemeral=True
         )
 
@@ -637,6 +740,7 @@ class IdeaReviewView(ui.View):
                 child,
                 discord.ui.Button
             ):
+
                 child.disabled = disabled
 
     # =====================================================
@@ -655,7 +759,7 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_allowed_role(
+        if not has_setup_role(
             interaction.user
         ):
 
@@ -689,9 +793,9 @@ class IdeaReviewView(ui.View):
 
             return
 
-        # =================================================
-        # تحديث قاعدة البيانات
-        # =================================================
+        # =====================================================
+        # تحديث
+        # =====================================================
 
         ideas_collection.update_one(
 
@@ -715,15 +819,19 @@ class IdeaReviewView(ui.View):
             }
         )
 
-        # =================================================
+        # =====================================================
         # تعديل Embed
-        # =================================================
+        # =====================================================
 
-        old_embed = interaction.message.embeds[0]
+        old_embed = (
+            interaction.message.embeds[0]
+        )
 
         embed = old_embed.copy()
 
-        embed.color = discord.Color.green()
+        embed.color = (
+            discord.Color.green()
+        )
 
         embed.set_footer(
             text=(
@@ -741,9 +849,9 @@ class IdeaReviewView(ui.View):
             )
         )
 
-        # =================================================
-        # DM لصاحب الفكرة
-        # =================================================
+        # =====================================================
+        # DM
+        # =====================================================
 
         try:
 
@@ -800,7 +908,7 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_allowed_role(
+        if not has_setup_role(
             interaction.user
         ):
 
@@ -834,7 +942,6 @@ class IdeaReviewView(ui.View):
 
             return
 
-        # فتح Modal سبب الرفض
         await interaction.response.send_modal(
             RejectReasonModal(idea)
         )
@@ -855,7 +962,7 @@ class IdeaReviewView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_allowed_role(
+        if not has_setup_role(
             interaction.user
         ):
 
@@ -929,7 +1036,7 @@ class BroadcastConfirmView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_allowed_role(
+        if not has_setup_role(
             interaction.user
         ):
 
@@ -960,6 +1067,7 @@ class BroadcastConfirmView(ui.View):
                 child,
                 discord.ui.Button
             ):
+
                 child.disabled = True
 
         await interaction.response.edit_message(
@@ -974,12 +1082,14 @@ class BroadcastConfirmView(ui.View):
             view=self
         )
 
-        # =================================================
-        # بدء الإرسال
-        # =================================================
+        # =====================================================
+        # الإرسال
+        # =====================================================
 
-        sent, failed = await self.cog.broadcast_to_server(
-            guild
+        sent, failed = (
+            await self.cog.broadcast_to_server(
+                guild
+            )
         )
 
         await interaction.edit_original_response(
@@ -1013,7 +1123,7 @@ class BroadcastConfirmView(ui.View):
         button: discord.ui.Button
     ):
 
-        if not has_allowed_role(
+        if not has_setup_role(
             interaction.user
         ):
 
@@ -1056,18 +1166,141 @@ class IdeasCog(commands.Cog):
 
     async def cog_load(self):
 
+        # =====================================================
         # زر الـ DM
+        # =====================================================
+
         self.bot.add_view(
             IdeaDMView()
         )
 
-        # أزرار مراجعة الأفكار
+        # =====================================================
+        # أزرار المراجعة
+        # =====================================================
+
         self.bot.add_view(
             IdeaReviewView()
         )
 
     # =====================================================
-    # أمر -ساهم
+    # أمر تحديد لوق المساهمات
+    #
+    # الاستخدام:
+    # تحديد-لوق-المساهمات #الروم
+    #
+    # أو:
+    # تحديد-لوق-المساهمات 123456789
+    # =====================================================
+
+    @commands.command(
+        name="تحديد-لوق-المساهمات"
+    )
+    async def set_idea_log(
+        self,
+        ctx: commands.Context,
+        channel: discord.TextChannel = None
+    ):
+
+        # =====================================================
+        # التحقق من الرتبة
+        # =====================================================
+
+        if not has_setup_role(
+            ctx.author
+        ):
+
+            return
+
+        # =====================================================
+        # التأكد من تحديد الروم
+        # =====================================================
+
+        if channel is None:
+
+            await ctx.send(
+                "❌ **حدد روم استقبال المساهمات.**\n\n"
+                "مثال:\n"
+                "`تحديد-لوق-المساهمات #مساهمات`\n\n"
+                "أو أرسل رقم الروم."
+            )
+
+            return
+
+        # =====================================================
+        # حفظ الروم
+        # =====================================================
+
+        set_idea_log_channel(
+            ctx.guild.id,
+            channel.id
+        )
+
+        await ctx.send(
+            "✅ **تم تحديد لوق المساهمات بنجاح!**\n\n"
+            f"📥 روم استقبال المساهمات: {channel.mention}",
+            allowed_mentions=
+            discord.AllowedMentions.none()
+        )
+
+    # =====================================================
+    # أمر عرض لوق المساهمات
+    # =====================================================
+
+    @commands.command(
+        name="لوق-المساهمات"
+    )
+    async def show_idea_log(
+        self,
+        ctx
+    ):
+
+        if not has_setup_role(
+            ctx.author
+        ):
+
+            return
+
+        channel_id = get_idea_log_channel_id(
+            ctx.guild.id
+        )
+
+        if not channel_id:
+
+            await ctx.send(
+                "⚠️ لم يتم تحديد لوق المساهمات لهذا السيرفر."
+            )
+
+            return
+
+        channel = ctx.guild.get_channel(
+            int(channel_id)
+        )
+
+        if channel is None:
+
+            await ctx.send(
+                "❌ الروم المحفوظ للمساهمات لم يعد موجودًا."
+            )
+
+            return
+
+        await ctx.send(
+            "📥 **لوق المساهمات الحالي:**\n"
+            f"{channel.mention}",
+            allowed_mentions=
+            discord.AllowedMentions.none()
+        )
+
+    # =====================================================
+    # أمر ساهم
+    #
+    # هذا الأمر أصبح خاضعًا لنظام الموقع
+    # WebsiteCommands يتحكم في:
+    #
+    # - تفعيل / تعطيل الأمر
+    # - الروم
+    # - الرتب
+    #
     # =====================================================
 
     @commands.command(
@@ -1079,18 +1312,42 @@ class IdeasCog(commands.Cog):
         *args
     ):
 
-        # =================================================
-        # التحقق من الرتبة
-        # =================================================
+        # =====================================================
+        # مهم:
+        #
+        # لا نضع هنا ALLOWED_ROLE_ID
+        # لأن WebsiteCommands يتحكم بصلاحيات الأمر.
+        #
+        # =====================================================
 
-        if not has_allowed_role(
-            ctx.author
-        ):
+        # =====================================================
+        # التأكد من السيرفر
+        # =====================================================
+
+        if ctx.guild is None:
+
             return
 
-        # =================================================
+        # =====================================================
+        # التأكد من وجود لوق
+        # =====================================================
+
+        log_channel_id = get_idea_log_channel_id(
+            ctx.guild.id
+        )
+
+        if not log_channel_id:
+
+            await ctx.send(
+                "❌ لم يتم تحديد **لوق المساهمات** لهذا السيرفر.\n"
+                "يجب على الإدارة تحديده أولًا."
+            )
+
+            return
+
+        # =====================================================
         # أكثر من منشن
-        # =================================================
+        # =====================================================
 
         if len(ctx.message.mentions) > 1:
 
@@ -1100,39 +1357,40 @@ class IdeasCog(commands.Cog):
                 "استخدم أحد الشكلين:\n\n"
 
                 "📢 إرسال للجميع:\n"
-                "`-ساهم`\n\n"
+                "`ساهم`\n\n"
 
                 "🧪 إرسال لشخص واحد للتجربة:\n"
-                "`-ساهم @الشخص`"
+                "`ساهم @الشخص`"
             )
 
             return
 
-        # =================================================
-        # إذا كتب كلام بعد الأمر بدون منشن
-        # =================================================
+        # =====================================================
+        # كلام إضافي بدون منشن
+        # =====================================================
 
-        if len(args) > 0 and len(
-            ctx.message.mentions
-        ) == 0:
+        if (
+            len(args) > 0
+            and len(ctx.message.mentions) == 0
+        ):
 
             await ctx.send(
                 "❌ **طريقة الاستخدام خاطئة.**\n\n"
 
                 "📢 لإرسال فعالية المساهمات للجميع:\n"
-                "`-ساهم`\n\n"
+                "`ساهم`\n\n"
 
                 "🧪 لإرسالها لشخص واحد للتجربة:\n"
-                "`-ساهم @الشخص`\n\n"
+                "`ساهم @الشخص`\n\n"
 
                 "⚠️ لا تكتب أي نص إضافي بعد الأمر."
             )
 
             return
 
-        # =================================================
+        # =====================================================
         # شخص واحد
-        # =================================================
+        # =====================================================
 
         if len(ctx.message.mentions) == 1:
 
@@ -1170,9 +1428,9 @@ class IdeasCog(commands.Cog):
 
             return
 
-        # =================================================
-        # -ساهم لوحده
-        # =================================================
+        # =====================================================
+        # إرسال للجميع
+        # =====================================================
 
         embed = discord.Embed(
 
@@ -1213,6 +1471,7 @@ class IdeasCog(commands.Cog):
     ):
 
         if member.bot:
+
             return False
 
         embed = discord.Embed(
@@ -1322,7 +1581,6 @@ class IdeasCog(commands.Cog):
 
                 failed += 1
 
-            # تأخير بين الرسائل
             await asyncio.sleep(
                 DM_DELAY
             )
@@ -1341,28 +1599,56 @@ class IdeasCog(commands.Cog):
         ctx
     ):
 
-        if not has_allowed_role(
+        # نفس صلاحية الإعدادات القديمة
+        if not has_setup_role(
             ctx.author
         ):
+
             return
 
+        # =====================================================
+        # الإحصائيات لهذا السيرفر فقط
+        # =====================================================
+
+        guild_filter = {
+            "guild_id": ctx.guild.id
+        }
+
         pending = ideas_collection.count_documents({
+
+            **guild_filter,
+
             "status": "pending"
         })
 
         accepted = ideas_collection.count_documents({
+
+            **guild_filter,
+
             "status": "accepted"
         })
 
         rejected = ideas_collection.count_documents({
+
+            **guild_filter,
+
             "status": "rejected"
         })
 
         needs_edit = ideas_collection.count_documents({
+
+            **guild_filter,
+
             "status": "needs_edit"
         })
 
-        total = ideas_collection.count_documents({})
+        total = ideas_collection.count_documents(
+            guild_filter
+        )
+
+        # =====================================================
+        # Embed
+        # =====================================================
 
         embed = discord.Embed(
 
