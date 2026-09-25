@@ -6,3 +6,5 @@ groq
 motor
 folium
 Pillow
+arabic-reshaper
+python-bidi
