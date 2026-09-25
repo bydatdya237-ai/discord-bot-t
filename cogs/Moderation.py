@@ -20,6 +20,7 @@ db = mongo_client["discord_bot_db"]
 
 moderation_reasons_collection = db["moderation_reasons"]
 moderation_warnings_collection = db["moderation_warnings"]
+moderation_mutes_collection = db["moderation_mutes"]
 
 
 # =========================================================
@@ -71,6 +72,8 @@ COMMAND_KICK = "طرد"
 COMMAND_WARN = "تحذير"
 COMMAND_WARNS = "تحذيرات"
 COMMAND_CLEAR_WARNS = "مسح-تحذيرات"
+COMMAND_MUTES = "اسكاتات"
+COMMAND_CLEAR = "مسح"
 
 
 # =========================================================
@@ -194,7 +197,6 @@ async def website_permission_allowed(
         []
     )
 
-    # لازم يتم تحديد رتبة من الموقع
     if not role_ids:
         return False
 
@@ -208,7 +210,6 @@ async def website_permission_allowed(
         for role in member.roles
     }
 
-    # يجب أن يملك العضو واحدة على الأقل من الرتب
     if not allowed_role_ids.intersection(
         user_role_ids
     ):
@@ -223,7 +224,6 @@ async def website_permission_allowed(
         []
     )
 
-    # لازم يتم تحديد روم من الموقع
     if not channel_ids:
         return False
 
@@ -232,13 +232,8 @@ async def website_permission_allowed(
         for channel_id in channel_ids
     }
 
-    # يجب أن يكون الأمر في روم مسموح
     if str(channel_id) not in allowed_channel_ids:
         return False
-
-    # =====================================================
-    # كل الشروط صحيحة
-    # =====================================================
 
     return True
 
@@ -321,6 +316,14 @@ def add_reason(
 
 # =========================================================
 # تحويل المدة
+#
+# يدعم:
+# 5m20s
+# 1h30m
+# 2d5h20m10s
+# 1w2d3h4m5s
+# 100s
+# 90m
 # =========================================================
 
 def parse_duration(value: str):
@@ -330,82 +333,139 @@ def parse_duration(value: str):
 
     value = value.strip().lower()
 
-    match = re.fullmatch(
-        r"(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)",
+    if not value:
+        return None
+
+    # =====================================================
+    # المدة المركبة
+    # مثال:
+    # 5m20s
+    # 1h30m
+    # 2d5h20m10s
+    # =====================================================
+
+    pattern = re.compile(
+        r"(\d+(?:\.\d+)?)\s*"
+        r"(w|week|weeks|"
+        r"d|day|days|"
+        r"h|hr|hrs|hour|hours|"
+        r"m|min|mins|minute|minutes|"
+        r"s|sec|secs|second|seconds)"
+    )
+
+    matches = list(
+        pattern.finditer(value)
+    )
+
+    if not matches:
+        return None
+
+    # يجب أن يغطي الـ regex كامل النص
+    rebuilt = "".join(
+        match.group(0)
+        for match in matches
+    )
+
+    normalized_input = re.sub(
+        r"\s+",
+        "",
         value
     )
 
-    if not match:
-        return None
-
-    amount = float(
-        match.group(1)
+    normalized_rebuilt = re.sub(
+        r"\s+",
+        "",
+        rebuilt
     )
 
-    unit = match.group(2)
-
-    if amount <= 0:
+    if normalized_input != normalized_rebuilt:
         return None
 
-    if unit in {
-        "s",
-        "sec",
-        "secs",
-        "second",
-        "seconds"
-    }:
+    total_seconds = 0.0
 
-        seconds = amount
+    for match in matches:
 
-    elif unit in {
-        "m",
-        "min",
-        "mins",
-        "minute",
-        "minutes"
-    }:
+        amount = float(
+            match.group(1)
+        )
 
-        seconds = amount * 60
+        unit = match.group(2)
 
-    elif unit in {
-        "h",
-        "hr",
-        "hrs",
-        "hour",
-        "hours"
-    }:
+        if amount <= 0:
+            return None
 
-        seconds = amount * 60 * 60
+        if unit in {
+            "w",
+            "week",
+            "weeks"
+        }:
 
-    elif unit in {
-        "d",
-        "day",
-        "days"
-    }:
+            total_seconds += (
+                amount * 7 * 24 * 60 * 60
+            )
 
-        seconds = amount * 60 * 60 * 24
+        elif unit in {
+            "d",
+            "day",
+            "days"
+        }:
 
-    elif unit in {
-        "w",
-        "week",
-        "weeks"
-    }:
+            total_seconds += (
+                amount * 24 * 60 * 60
+            )
 
-        seconds = amount * 60 * 60 * 24 * 7
+        elif unit in {
+            "h",
+            "hr",
+            "hrs",
+            "hour",
+            "hours"
+        }:
 
-    else:
+            total_seconds += (
+                amount * 60 * 60
+            )
 
-        return None
+        elif unit in {
+            "m",
+            "min",
+            "mins",
+            "minute",
+            "minutes"
+        }:
 
+            total_seconds += (
+                amount * 60
+            )
+
+        elif unit in {
+            "s",
+            "sec",
+            "secs",
+            "second",
+            "seconds"
+        }:
+
+            total_seconds += amount
+
+        else:
+
+            return None
+
+    # =====================================================
     # Discord timeout maximum = 28 days
+    # =====================================================
 
     max_seconds = 28 * 24 * 60 * 60
 
-    if seconds > max_seconds:
+    if total_seconds > max_seconds:
+        return None
+
+    if total_seconds <= 0:
         return None
 
     return timedelta(
-        seconds=seconds
+        seconds=total_seconds
     )
 
 
@@ -524,7 +584,7 @@ def save_warning(
     reason: str
 ):
 
-    moderation_warnings_collection.insert_one(
+    result = moderation_warnings_collection.insert_one(
         {
             "guild_id": guild_id,
             "user_id": user_id,
@@ -534,6 +594,8 @@ def save_warning(
         }
     )
 
+    return result.inserted_id
+
 
 def get_warnings(
     guild_id: int,
@@ -542,6 +604,58 @@ def get_warnings(
 
     return list(
         moderation_warnings_collection.find(
+            {
+                "guild_id": guild_id,
+                "user_id": user_id
+            }
+        ).sort(
+            [
+                ("created_at", -1)
+            ]
+        )
+    )
+
+
+# =========================================================
+# الإسكاتات
+# =========================================================
+
+def save_mute(
+    guild_id: int,
+    user_id: int,
+    moderator_id: int,
+    reason: str,
+    duration: timedelta
+):
+
+    now = discord.utils.utcnow()
+
+    expires_at = now + duration
+
+    result = moderation_mutes_collection.insert_one(
+        {
+            "guild_id": guild_id,
+            "user_id": user_id,
+            "moderator_id": moderator_id,
+            "reason": reason,
+            "duration_seconds": int(
+                duration.total_seconds()
+            ),
+            "created_at": now,
+            "expires_at": expires_at
+        }
+    )
+
+    return result.inserted_id
+
+
+def get_mutes(
+    guild_id: int,
+    user_id: int
+):
+
+    return list(
+        moderation_mutes_collection.find(
             {
                 "guild_id": guild_id,
                 "user_id": user_id
@@ -587,10 +701,6 @@ class AddReasonModal(ui.Modal):
         interaction: discord.Interaction
     ):
 
-        # =================================================
-        # التأكد من السيرفر
-        # =================================================
-
         if interaction.guild is None:
 
             await interaction.response.send_message(
@@ -599,10 +709,6 @@ class AddReasonModal(ui.Modal):
             )
 
             return
-
-        # =================================================
-        # صلاحية الموقع
-        # =================================================
 
         allowed = await website_permission_allowed(
             interaction.user,
@@ -649,10 +755,6 @@ class AddReasonModal(ui.Modal):
             ephemeral=True
         )
 
-        # =================================================
-        # إرسال قائمة المدة
-        # =================================================
-
         try:
 
             await interaction.followup.send(
@@ -692,8 +794,8 @@ class CustomDurationModal(ui.Modal):
 
         self.duration_input = ui.TextInput(
             label="المدة",
-            placeholder="مثال: 30s أو 10m أو 2h أو 1d",
-            max_length=30,
+            placeholder="مثال: 5m20s أو 1h30m أو 2d5h",
+            max_length=50,
             required=True
         )
 
@@ -706,10 +808,6 @@ class CustomDurationModal(ui.Modal):
         interaction: discord.Interaction
     ):
 
-        # =================================================
-        # التأكد من السيرفر
-        # =================================================
-
         if interaction.guild is None:
 
             await interaction.response.send_message(
@@ -718,10 +816,6 @@ class CustomDurationModal(ui.Modal):
             )
 
             return
-
-        # =================================================
-        # صلاحية الموقع
-        # =================================================
 
         allowed = await website_permission_allowed(
             interaction.user,
@@ -747,10 +841,10 @@ class CustomDurationModal(ui.Modal):
             await interaction.response.send_message(
                 "❌ المدة غير صحيحة.\n\n"
                 "أمثلة:\n"
-                "`30s`\n"
-                "`10m`\n"
-                "`2h`\n"
-                "`1d`\n\n"
+                "`5m20s`\n"
+                "`1h30m`\n"
+                "`2d5h20m10s`\n"
+                "`1w2d3h`\n\n"
                 "الحد الأقصى 28 يوم.",
                 ephemeral=True
             )
@@ -1138,6 +1232,152 @@ class ReasonView(ui.View):
 
 
 # =========================================================
+# زر حذف سجل
+# =========================================================
+
+class DeleteModerationButton(ui.Button):
+
+    def __init__(
+        self,
+        cog,
+        record_type,
+        record_id,
+        target_id
+    ):
+
+        super().__init__(
+            label="حذف هذا السجل",
+            style=discord.ButtonStyle.danger
+        )
+
+        self.cog = cog
+        self.record_type = record_type
+        self.record_id = record_id
+        self.target_id = target_id
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        command_name = COMMAND_MUTES
+
+        if self.record_type == "warning":
+            command_name = COMMAND_MUTES
+
+        allowed = await website_permission_allowed(
+            interaction.user,
+            command_name,
+            interaction.channel.id
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ ما عندك صلاحية حذف هذا السجل.",
+                ephemeral=True
+            )
+
+            return
+
+        collection = (
+            moderation_warnings_collection
+            if self.record_type == "warning"
+            else moderation_mutes_collection
+        )
+
+        result = collection.delete_one(
+            {
+                "_id": self.record_id,
+                "guild_id": interaction.guild.id,
+                "user_id": self.target_id
+            }
+        )
+
+        if result.deleted_count == 0:
+
+            await interaction.response.send_message(
+                "⚠️ هذا السجل محذوف مسبقًا.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # إذا كان السجل إسكاتًا
+        # نحاول فك الإسكات الحالي أيضًا
+        # =================================================
+
+        if self.record_type == "mute":
+
+            member = interaction.guild.get_member(
+                self.target_id
+            )
+
+            if member:
+
+                try:
+
+                    await member.timeout(
+                        None,
+                        reason="حذف سجل الإسكات"
+                    )
+
+                except (
+                    discord.Forbidden,
+                    discord.HTTPException
+                ):
+
+                    pass
+
+        await interaction.response.send_message(
+            "✅ تم حذف السجل بنجاح.",
+            ephemeral=True
+        )
+
+        try:
+
+            await interaction.message.edit(
+                view=None
+            )
+
+        except (
+            discord.NotFound,
+            discord.HTTPException
+        ):
+
+            pass
+
+
+# =========================================================
+# View سجل الإسكات / التحذير
+# =========================================================
+
+class ModerationRecordView(ui.View):
+
+    def __init__(
+        self,
+        cog,
+        record_type,
+        record_id,
+        target_id
+    ):
+
+        super().__init__(
+            timeout=300
+        )
+
+        self.add_item(
+            DeleteModerationButton(
+                cog=cog,
+                record_type=record_type,
+                record_id=record_id,
+                target_id=target_id
+            )
+        )
+
+
+# =========================================================
 # Cog
 # =========================================================
 
@@ -1202,6 +1442,18 @@ class ModerationCog(commands.Cog):
             )
 
             return
+
+        # =================================================
+        # حفظ الإسكات في MongoDB
+        # =================================================
+
+        save_mute(
+            guild_id=interaction.guild.id,
+            user_id=target.id,
+            moderator_id=moderator.id,
+            reason=reason,
+            duration=duration
+        )
 
         await interaction.response.send_message(
             f"🔇 تم إسكات {target.mention}\n"
@@ -1270,10 +1522,10 @@ class ModerationCog(commands.Cog):
                     "❌ المدة غير صحيحة.\n\n"
                     "أمثلة:\n"
                     "`10s`\n"
-                    "`100s`\n"
-                    "`10m`\n"
-                    "`2h`\n"
-                    "`1d`\n\n"
+                    "`5m20s`\n"
+                    "`1h30m`\n"
+                    "`2d5h20m10s`\n"
+                    "`1w2d3h`\n\n"
                     "الحد الأقصى 28 يوم."
                 )
 
@@ -1302,6 +1554,18 @@ class ModerationCog(commands.Cog):
                 )
 
                 return
+
+            # =================================================
+            # حفظ الإسكات
+            # =================================================
+
+            save_mute(
+                guild_id=ctx.guild.id,
+                user_id=member.id,
+                moderator_id=ctx.author.id,
+                reason="إسكات يدوي",
+                duration=duration
+            )
 
             await ctx.send(
                 f"🔇 تم إسكات {member.mention}\n"
@@ -1496,10 +1760,6 @@ class ModerationCog(commands.Cog):
             )
 
             return
-
-        # =================================================
-        # استخراج ID
-        # =================================================
 
         user_id_match = re.search(
             r"\d{15,25}",
@@ -1807,19 +2067,258 @@ class ModerationCog(commands.Cog):
 
                 time_text = "غير معروف"
 
-            embed.add_field(
-                name=f"التحذير #{index}",
-                value=(
-                    f"**السبب:** {reason}\n"
-                    f"**بواسطة:** {moderator_name}\n"
-                    f"**الوقت:** {time_text}"
-                ),
-                inline=False
+            warning_id = warning.get("_id")
+
+            view = ModerationRecordView(
+                self,
+                "warning",
+                warning_id,
+                member.id
             )
+
+            await ctx.send(
+                embed=discord.Embed(
+                    title=f"⚠️ التحذير #{index}",
+                    description=(
+                        f"👤 **الشخص:** {member.mention}\n"
+                        f"📝 **السبب:** {reason}\n"
+                        f"👮 **بواسطة:** {moderator_name}\n"
+                        f"🕐 **الوقت:** {time_text}"
+                    ),
+                    color=discord.Color.orange()
+                ),
+                view=view
+            )
+
+        # =================================================
+        # ملخص
+        # =================================================
+
+        if len(warnings) > 10:
+
+            await ctx.send(
+                f"ℹ️ يوجد **{len(warnings)}** تحذير، "
+                "لكن يتم عرض آخر 10 فقط."
+            )
+
+    # =====================================================
+    # اسكاتات
+    # =====================================================
+
+    @commands.command(
+        name="اسكاتات"
+    )
+    async def mutes_command(
+        self,
+        ctx,
+        member: discord.Member = None
+    ):
+
+        if not await website_permission_allowed(
+            ctx.author,
+            COMMAND_MUTES,
+            ctx.channel.id
+        ):
+
+            return
+
+        if member is None:
+
+            await ctx.send(
+                "❌ استخدم الأمر هكذا:\n"
+                "`اسكاتات @الشخص`"
+            )
+
+            return
+
+        warnings = get_warnings(
+            ctx.guild.id,
+            member.id
+        )
+
+        mutes = get_mutes(
+            ctx.guild.id,
+            member.id
+        )
+
+        if not warnings and not mutes:
+
+            await ctx.send(
+                f"✅ {member.mention} ما عليه أي "
+                "تحذيرات أو إسكاتات محفوظة."
+            )
+
+            return
+
+        # =================================================
+        # Embed رئيسي
+        # =================================================
+
+        embed = discord.Embed(
+            title=f"📋 سجل العقوبات — {member}",
+            description=(
+                f"👤 **العضو:** {member.mention}\n"
+                f"⚠️ **التحذيرات:** {len(warnings)}\n"
+                f"🔇 **الإسكاتات:** {len(mutes)}"
+            ),
+            color=discord.Color.blurple()
+        )
 
         await ctx.send(
             embed=embed
         )
+
+        # =================================================
+        # التحذيرات
+        # =================================================
+
+        for index, warning in enumerate(
+            warnings[:10],
+            start=1
+        ):
+
+            moderator = ctx.guild.get_member(
+                warning.get("moderator_id")
+            )
+
+            moderator_name = (
+                moderator.mention
+                if moderator
+                else f"`{warning.get('moderator_id')}`"
+            )
+
+            reason = warning.get(
+                "reason",
+                "لا يوجد سبب"
+            )
+
+            created_at = warning.get(
+                "created_at"
+            )
+
+            if created_at:
+
+                time_text = discord.utils.format_dt(
+                    created_at,
+                    style="R"
+                )
+
+            else:
+
+                time_text = "غير معروف"
+
+            record_embed = discord.Embed(
+                title=f"⚠️ تحذير #{index}",
+                description=(
+                    f"👤 **الشخص:** {member.mention}\n"
+                    f"📝 **السبب:** {reason}\n"
+                    f"👮 **بواسطة:** {moderator_name}\n"
+                    f"🕐 **الوقت:** {time_text}"
+                ),
+                color=discord.Color.orange()
+            )
+
+            view = ModerationRecordView(
+                self,
+                "warning",
+                warning.get("_id"),
+                member.id
+            )
+
+            await ctx.send(
+                embed=record_embed,
+                view=view
+            )
+
+        # =================================================
+        # الإسكاتات
+        # =================================================
+
+        for index, mute in enumerate(
+            mutes[:10],
+            start=1
+        ):
+
+            moderator = ctx.guild.get_member(
+                mute.get("moderator_id")
+            )
+
+            moderator_name = (
+                moderator.mention
+                if moderator
+                else f"`{mute.get('moderator_id')}`"
+            )
+
+            reason = mute.get(
+                "reason",
+                "لا يوجد سبب"
+            )
+
+            created_at = mute.get(
+                "created_at"
+            )
+
+            expires_at = mute.get(
+                "expires_at"
+            )
+
+            duration_seconds = mute.get(
+                "duration_seconds",
+                0
+            )
+
+            duration = timedelta(
+                seconds=int(
+                    duration_seconds
+                )
+            )
+
+            if created_at:
+
+                time_text = discord.utils.format_dt(
+                    created_at,
+                    style="R"
+                )
+
+            else:
+
+                time_text = "غير معروف"
+
+            if expires_at:
+
+                expires_text = discord.utils.format_dt(
+                    expires_at,
+                    style="R"
+                )
+
+            else:
+
+                expires_text = "غير معروف"
+
+            record_embed = discord.Embed(
+                title=f"🔇 إسكات #{index}",
+                description=(
+                    f"👤 **الشخص:** {member.mention}\n"
+                    f"📝 **السبب:** {reason}\n"
+                    f"⏱️ **المدة:** {format_duration(duration)}\n"
+                    f"👮 **بواسطة:** {moderator_name}\n"
+                    f"🕐 **بدأ:** {time_text}\n"
+                    f"⏳ **ينتهي:** {expires_text}"
+                ),
+                color=discord.Color.red()
+            )
+
+            view = ModerationRecordView(
+                self,
+                "mute",
+                mute.get("_id"),
+                member.id
+            )
+
+            await ctx.send(
+                embed=record_embed,
+                view=view
+            )
 
     # =====================================================
     # مسح التحذيرات
@@ -1862,6 +2361,280 @@ class ModerationCog(commands.Cog):
             f"🧹 تم مسح **{deleted.deleted_count}** "
             f"تحذير عن {member.mention}."
         )
+
+    # =====================================================
+    # مسح الرسائل
+    # =====================================================
+
+    @commands.command(
+        name="مسح"
+    )
+    async def clear_messages_command(
+        self,
+        ctx,
+        amount: int = None
+    ):
+
+        if not await website_permission_allowed(
+            ctx.author,
+            COMMAND_CLEAR,
+            ctx.channel.id
+        ):
+
+            return
+
+        if amount is None:
+
+            await ctx.send(
+                "❌ استخدم الأمر هكذا:\n"
+                "`مسح 100`"
+            )
+
+            return
+
+        if amount <= 0:
+
+            await ctx.send(
+                "❌ لازم تكتب رقم أكبر من 0."
+            )
+
+            return
+
+        # =================================================
+        # صلاحية Discord
+        # =================================================
+
+        if not ctx.channel.permissions_for(
+            ctx.guild.me
+        ).manage_messages:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية **Manage Messages** في هذا الروم."
+            )
+
+            return
+
+        # =================================================
+        # حماية من أرقام غير منطقية
+        # =================================================
+
+        # Discord يسمح بطلب عدد كبير، لكن التنفيذ يتم
+        # على دفعات حتى لا يحصل ضغط على API.
+        amount = min(
+            amount,
+            100000
+        )
+
+        status_message = await ctx.send(
+            f"🧹 جاري مسح **{amount:,}** رسالة..."
+        )
+
+        try:
+
+            # =================================================
+            # جلب الرسائل
+            # =================================================
+
+            messages = []
+
+            async for message in ctx.channel.history(
+                limit=amount
+            ):
+
+                messages.append(
+                    message
+                )
+
+            if not messages:
+
+                await status_message.edit(
+                    content="ℹ️ ما لقيت أي رسائل لمسحها."
+                )
+
+                return
+
+            # =================================================
+            # Discord bulk delete:
+            # الرسائل الأقدم من 14 يوم لا يمكن حذفها
+            # باستخدام bulk delete.
+            # =================================================
+
+            now = discord.utils.utcnow()
+
+            fourteen_days = timedelta(
+                days=14
+            )
+
+            recent_messages = []
+            old_messages = []
+
+            for message in messages:
+
+                age = now - message.created_at
+
+                if age < fourteen_days:
+
+                    recent_messages.append(
+                        message
+                    )
+
+                else:
+
+                    old_messages.append(
+                        message
+                    )
+
+            deleted_count = 0
+
+            # =================================================
+            # حذف الرسائل الحديثة
+            # دفعات 100
+            # =================================================
+
+            for index in range(
+                0,
+                len(recent_messages),
+                100
+            ):
+
+                chunk = recent_messages[
+                    index:index + 100
+                ]
+
+                if not chunk:
+                    continue
+
+                try:
+
+                    if len(chunk) == 1:
+
+                        await chunk[0].delete()
+
+                    else:
+
+                        await ctx.channel.delete_messages(
+                            chunk
+                        )
+
+                    deleted_count += len(
+                        chunk
+                    )
+
+                except discord.HTTPException:
+
+                    # محاولة حذف فردي إذا فشل bulk
+                    for message in chunk:
+
+                        try:
+
+                            await message.delete()
+
+                            deleted_count += 1
+
+                        except (
+                            discord.NotFound,
+                            discord.Forbidden,
+                            discord.HTTPException
+                        ):
+
+                            pass
+
+            # =================================================
+            # حذف الرسائل القديمة فرديًا
+            # =================================================
+
+            for message in old_messages:
+
+                try:
+
+                    await message.delete()
+
+                    deleted_count += 1
+
+                except (
+                    discord.NotFound,
+                    discord.Forbidden,
+                    discord.HTTPException
+                ):
+
+                    pass
+
+            # =================================================
+            # حذف رسالة الأمر نفسها إذا لم تكن ضمن الرسائل
+            # =================================================
+
+            try:
+
+                if ctx.message.id not in {
+                    message.id
+                    for message in messages
+                }:
+
+                    await ctx.message.delete()
+
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException
+            ):
+
+                pass
+
+            # =================================================
+            # النتيجة
+            # =================================================
+
+            await status_message.edit(
+                content=(
+                    f"🧹 **تم الانتهاء من المسح!**\n\n"
+                    f"🗑️ تم حذف: **{deleted_count:,}** رسالة."
+                )
+            )
+
+            try:
+
+                await asyncio.sleep(
+                    5
+                )
+
+                await status_message.delete()
+
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException
+            ):
+
+                pass
+
+        except discord.Forbidden:
+
+            await status_message.edit(
+                content=(
+                    "❌ البوت ما عنده صلاحية حذف الرسائل."
+                )
+            )
+
+        except discord.HTTPException:
+
+            await status_message.edit(
+                content=(
+                    "❌ حصل خطأ من Discord أثناء مسح الرسائل.\n"
+                    "إذا كان العدد ضخم جدًا حاول تقسيمه على أكثر من عملية."
+                )
+            )
+
+        except Exception as error:
+
+            print(
+                f"[CLEAR ERROR] {error}"
+            )
+
+            await status_message.edit(
+                content=(
+                    "❌ حصل خطأ غير متوقع أثناء مسح الرسائل."
+                )
+            )
 
 
 # =========================================================
