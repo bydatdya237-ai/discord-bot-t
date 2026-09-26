@@ -95,7 +95,7 @@ PROTECTION_MESSAGES = [
     "😮 كانت بتروح عليك!",
     "🍀 اليوم الحظ واقف معك.",
     "💀 اللغم حاول... بس فشل.",
-    "😂 دفعت 35 قبل شوي وأنقذتك بـ35 ثانية!",
+    "😂 اللغم انصدم من الحماية!",
 ]
 
 
@@ -126,6 +126,11 @@ class MinesView(discord.ui.View):
 
         self.game_over = False
         self.revealed = set()
+
+        # الألغام التي تم تفجيرها بالحماية
+        # لا تعتبر خانات آمنة
+        self.protected_mines = set()
+
         self.processing = False
 
         self.message = None
@@ -353,6 +358,26 @@ class MinesView(discord.ui.View):
 
                 continue
 
+            # =================================================
+            # لغم تم إنقاذه بالحماية
+            # =================================================
+
+            if index in self.protected_mines:
+
+                child.disabled = True
+
+                child.style = (
+                    discord.ButtonStyle.success
+                )
+
+                child.label = "🛡️"
+
+                continue
+
+            # =================================================
+            # خانة آمنة مفتوحة
+            # =================================================
+
             if index in self.revealed:
 
                 child.disabled = True
@@ -367,7 +392,8 @@ class MinesView(discord.ui.View):
                         discord.ButtonStyle.success
                     )
 
-                    child.label = " "
+                    # مربع أخضر بدل 0
+                    child.label = "🟩"
 
                 else:
 
@@ -414,6 +440,16 @@ class MinesView(discord.ui.View):
                 ValueError,
                 IndexError
             ):
+
+                continue
+
+            if index in self.protected_mines:
+
+                child.style = (
+                    discord.ButtonStyle.success
+                )
+
+                child.label = "🛡️"
 
                 continue
 
@@ -545,7 +581,7 @@ class MinesView(discord.ui.View):
                 return
 
             # =================================================
-            # الخانة مفتوحة
+            # الخانة الآمنة المفتوحة
             # =================================================
 
             if index in self.revealed:
@@ -558,13 +594,26 @@ class MinesView(discord.ui.View):
                 return
 
             # =================================================
+            # لغم تم إنقاذه مسبقًا
+            # =================================================
+
+            if index in self.protected_mines:
+
+                await interaction.response.send_message(
+                    "🛡️ هذا اللغم تم إيقافه بالحماية.",
+                    ephemeral=True
+                )
+
+                return
+
+            # =================================================
             # لغم
             # =================================================
 
             if index in self.mines:
 
                 # =============================================
-                # فحص الحماية
+                # فحص الحماية واستهلاكها ذريًا
                 # =============================================
 
                 protection_used = (
@@ -576,21 +625,15 @@ class MinesView(discord.ui.View):
 
                 if protection_used:
 
-                    self.revealed.add(
+                    # مهم:
+                    # لا نضيف اللغم إلى self.revealed
+                    # حتى لا يتم احتسابه كخانة آمنة.
+
+                    self.protected_mines.add(
                         index
                     )
 
-                    for child in self.children:
-
-                        if child.custom_id == f"mine_{index}":
-
-                            child.disabled = True
-                            child.style = (
-                                discord.ButtonStyle.success
-                            )
-                            child.label = "🛡️"
-
-                            break
+                    self.update_buttons()
 
                     protection_message = random.choice(
                         PROTECTION_MESSAGES
@@ -609,7 +652,8 @@ class MinesView(discord.ui.View):
                             f"{protection_message}\n\n"
                             "💣 ضغطت على لغم، لكن الحماية أنقذتك.\n"
                             "🛡️ تم استهلاك حماية واحدة.\n\n"
-                            f"🛡️ الحماية المتبقية: **{remaining_protection}/{MAX_PROTECTIONS}**\n"
+                            f"🛡️ الحماية المتبقية: "
+                            f"**{remaining_protection}/{MAX_PROTECTIONS}**\n\n"
                             "🎮 أكمل اللعبة!"
                         ),
                         color=0x2ECC71
@@ -646,8 +690,10 @@ class MinesView(discord.ui.View):
                     title="💥 انفجر اللغم!",
                     description=(
                         f"{loss_message}\n\n"
-                        f"💰 الذهب المخصوم: **-{LOSS_GOLD:,}**\n"
-                        f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
+                        f"💰 الذهب المخصوم: "
+                        f"**-{LOSS_GOLD:,}**\n"
+                        f"💳 رصيدك الحالي: "
+                        f"**{new_gold:,} ذهب**"
                     ),
                     color=0xE74C3C
                 )
@@ -717,8 +763,10 @@ class MinesView(discord.ui.View):
                     title="🏆 فوز!",
                     description=(
                         f"{win_message}\n\n"
-                        f"💰 الجائزة: **+{WIN_GOLD:,} ذهب**\n"
-                        f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
+                        f"💰 الجائزة: "
+                        f"**+{WIN_GOLD:,} ذهب**\n"
+                        f"💳 رصيدك الحالي: "
+                        f"**{new_gold:,} ذهب**"
                     ),
                     color=0x2ECC71
                 )
@@ -787,16 +835,16 @@ class ProtectionView(discord.ui.View):
         self.guild_id = guild_id
         self.user_id = user_id
 
-        button = discord.ui.Button(
+        self.buy_button = discord.ui.Button(
             style=discord.ButtonStyle.success,
             label="🛡️ شراء حماية",
             custom_id="buy_mines_protection"
         )
 
-        button.callback = self.buy_protection
+        self.buy_button.callback = self.buy_protection
 
         self.add_item(
-            button
+            self.buy_button
         )
 
     # =====================================================
@@ -818,7 +866,7 @@ class ProtectionView(discord.ui.View):
             return
 
         # =================================================
-        # التأكد من صلاحية الأمر من الموقع
+        # تحكم الموقع
         # =================================================
 
         if not await self.cog.has_command_permission(
@@ -834,60 +882,125 @@ class ProtectionView(discord.ui.View):
 
             return
 
-        # =================================================
-        # محاولة الشراء بشكل ذري
-        # =================================================
+        try:
 
-        result = await self.cog.buy_protection(
-            self.guild_id,
-            self.user_id
-        )
+            # =================================================
+            # محاولة الشراء
+            # =================================================
 
-        if result["status"] == "max":
+            result = await self.cog.buy_protection(
+                self.guild_id,
+                self.user_id
+            )
+
+            status = result.get(
+                "status"
+            )
+
+            # =================================================
+            # الحد الأقصى
+            # =================================================
+
+            if status == "max":
+
+                self.buy_button.disabled = True
+
+                await interaction.response.send_message(
+                    f"🛡️ لديك الحد الأقصى من الحماية بالفعل: "
+                    f"**{MAX_PROTECTIONS}/{MAX_PROTECTIONS}**.",
+                    ephemeral=True
+                )
+
+                return
+
+            # =================================================
+            # الذهب غير كافٍ
+            # =================================================
+
+            if status == "insufficient":
+
+                current_gold = await self.cog.get_balance(
+                    self.guild_id,
+                    self.user_id
+                )
+
+                await interaction.response.send_message(
+                    f"❌ تحتاج إلى **{PROTECTION_PRICE:,} ذهب** "
+                    f"لشراء الحماية.\n"
+                    f"💳 رصيدك الحالي: **{current_gold:,} ذهب**",
+                    ephemeral=True
+                )
+
+                return
+
+            # =================================================
+            # نجاح الشراء
+            # =================================================
+
+            if status == "success":
+
+                remaining = result.get(
+                    "protection",
+                    0
+                )
+
+                new_gold = result.get(
+                    "gold",
+                    0
+                )
+
+                if remaining >= MAX_PROTECTIONS:
+
+                    self.buy_button.disabled = True
+
+                embed = discord.Embed(
+                    title="🛡️ تم شراء الحماية",
+                    description=(
+                        "✅ تمت عملية الشراء بنجاح!\n\n"
+                        f"🛡️ الحماية: "
+                        f"**{remaining}/{MAX_PROTECTIONS}**\n"
+                        f"💰 السعر: "
+                        f"**-{PROTECTION_PRICE:,} ذهب**\n"
+                        f"💳 رصيدك الحالي: "
+                        f"**{new_gold:,} ذهب**"
+                    ),
+                    color=0x2ECC71
+                )
+
+                await interaction.response.edit_message(
+                    embed=embed,
+                    view=self
+                )
+
+                return
+
+            # =================================================
+            # خطأ غير معروف
+            # =================================================
 
             await interaction.response.send_message(
-                f"🛡️ لديك الحد الأقصى من الحماية بالفعل: **{MAX_PROTECTIONS}/{MAX_PROTECTIONS}**.",
+                "❌ حدث خطأ أثناء شراء الحماية.",
                 ephemeral=True
             )
 
-            return
+        except Exception as error:
 
-        if result["status"] == "insufficient":
-
-            await interaction.response.send_message(
-                f"❌ تحتاج إلى **{PROTECTION_PRICE:,} ذهب** لشراء الحماية.",
-                ephemeral=True
+            print(
+                f"[MinesGame] Protection Purchase Error: {error}"
             )
 
-            return
+            try:
 
-        if result["status"] == "success":
+                if not interaction.response.is_done():
 
-            remaining = result["protection"]
-            new_gold = result["gold"]
+                    await interaction.response.send_message(
+                        "❌ حدث خطأ أثناء شراء الحماية.",
+                        ephemeral=True
+                    )
 
-            embed = discord.Embed(
-                title="🛡️ تم شراء الحماية",
-                description=(
-                    "✅ تمت عملية الشراء بنجاح!\n\n"
-                    f"🛡️ الحماية: **{remaining}/{MAX_PROTECTIONS}**\n"
-                    f"💰 السعر: **-{PROTECTION_PRICE:,} ذهب**\n"
-                    f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
-                ),
-                color=0x2ECC71
-            )
+            except Exception:
 
-            await interaction.response.edit_message(
-                embed=embed,
-                view=self
-            )
-
-            return
-
-        await interaction.response.send_message(
-            "❌ حدث خطأ أثناء شراء الحماية.",
-            ephemeral=True
-        )
+                pass
 
 
 # =========================================================
@@ -1186,7 +1299,31 @@ class MinesGame(commands.Cog):
             }
         )
 
+        # =================================================
+        # لاعب موجود
+        # =================================================
+
         if document is not None:
+
+            # =================================================
+            # إصلاح البيانات القديمة
+            # =================================================
+
+            if "protection" not in document:
+
+                await self.game_data.update_one(
+                    {
+                        "_id": document["_id"]
+                    },
+                    {
+                        "$set": {
+                            "protection": 0
+                        }
+                    }
+                )
+
+                document["protection"] = 0
+
             return document
 
         # =================================================
@@ -1229,6 +1366,22 @@ class MinesGame(commands.Cog):
             )
 
             if document is not None:
+
+                if "protection" not in document:
+
+                    await self.game_data.update_one(
+                        {
+                            "_id": document["_id"]
+                        },
+                        {
+                            "$set": {
+                                "protection": 0
+                            }
+                        }
+                    )
+
+                    document["protection"] = 0
+
                 return document
 
         return document
@@ -1396,6 +1549,12 @@ class MinesGame(commands.Cog):
         user_id
     ):
 
+        # =================================================
+        # مهم جدًا:
+        # هذا يصلح بيانات اللاعبين القديمة
+        # ويضمن وجود protection قبل عملية الشراء
+        # =================================================
+
         await self.get_user_data(
             guild_id,
             user_id
@@ -1404,6 +1563,10 @@ class MinesGame(commands.Cog):
         guild_ids = self.guild_id_variants(
             guild_id
         )
+
+        # =================================================
+        # محاولة الشراء بشكل ذري
+        # =================================================
 
         document = await self.game_data.find_one_and_update(
             {
@@ -1429,6 +1592,10 @@ class MinesGame(commands.Cog):
             return_document=ReturnDocument.AFTER
         )
 
+        # =================================================
+        # تم الشراء
+        # =================================================
+
         if document is not None:
 
             return {
@@ -1447,6 +1614,10 @@ class MinesGame(commands.Cog):
                 )
             }
 
+        # =================================================
+        # معرفة سبب فشل الشراء
+        # =================================================
+
         current = await self.game_data.find_one(
             {
                 "guild_id": {
@@ -1463,6 +1634,25 @@ class MinesGame(commands.Cog):
             return {
                 "status": "error"
             }
+
+        # =================================================
+        # حماية قديمة بدون الحقل
+        # =================================================
+
+        if "protection" not in current:
+
+            await self.game_data.update_one(
+                {
+                    "_id": current["_id"]
+                },
+                {
+                    "$set": {
+                        "protection": 0
+                    }
+                }
+            )
+
+            current["protection"] = 0
 
         current_protection = int(
             current.get(
@@ -1663,10 +1853,6 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # =================================================
-        # تحكم الموقع
-        # =================================================
-
         if not await self.has_command_permission(
             ctx.author,
             COMMAND_MINES,
@@ -1678,18 +1864,10 @@ class MinesGame(commands.Cog):
         guild_id = ctx.guild.id
         user_id = ctx.author.id
 
-        # =================================================
-        # مفتاح اللعبة
-        # =================================================
-
         active_key = (
             guild_id,
             user_id
         )
-
-        # =================================================
-        # منع لعبة ثانية
-        # =================================================
 
         if active_key in self.active_games:
 
@@ -1699,10 +1877,6 @@ class MinesGame(commands.Cog):
             )
 
             return
-
-        # =================================================
-        # الكول داون
-        # =================================================
 
         remaining = await self.get_game_cooldown_remaining(
             guild_id,
@@ -1718,27 +1892,15 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # إنشاء بيانات اللاعب
-        # =================================================
-
         await self.get_user_data(
             guild_id,
             user_id
         )
 
-        # =================================================
-        # تسجيل بداية اللعبة
-        # =================================================
-
         await self.set_last_game_time(
             guild_id,
             user_id
         )
-
-        # =================================================
-        # إنشاء اللعبة
-        # =================================================
 
         view = MinesView(
             self,
@@ -1749,10 +1911,6 @@ class MinesGame(commands.Cog):
         self.active_games[
             active_key
         ] = view
-
-        # =================================================
-        # واجهة اللعبة
-        # =================================================
 
         embed = discord.Embed(
             title="💣 لعبة الألغام",
@@ -1872,10 +2030,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # صاحب البوت فقط
-        # =================================================
-
         if not await self.is_bot_owner(
             ctx.author.id
         ):
@@ -1886,10 +2040,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # الشخص
-        # =================================================
-
         if member is None:
 
             await ctx.send(
@@ -1899,10 +2049,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # المبلغ
-        # =================================================
-
         if amount is None:
 
             await ctx.send(
@@ -1911,10 +2057,6 @@ class MinesGame(commands.Cog):
             )
 
             return
-
-        # =================================================
-        # تنظيف الرقم
-        # =================================================
 
         gold_amount = self.parse_gold_amount(
             amount
@@ -1928,10 +2070,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # منع الصفر والسالب
-        # =================================================
-
         if gold_amount <= 0:
 
             await ctx.send(
@@ -1939,10 +2077,6 @@ class MinesGame(commands.Cog):
             )
 
             return
-
-        # =================================================
-        # إضافة الذهب
-        # =================================================
 
         new_gold = await self.change_gold(
             ctx.guild.id,
@@ -2016,6 +2150,10 @@ class MinesGame(commands.Cog):
             ctx.author.id
         )
 
+        if protection >= MAX_PROTECTIONS:
+
+            view.buy_button.disabled = True
+
         await ctx.send(
             embed=embed,
             view=view
@@ -2079,14 +2217,22 @@ class MinesGame(commands.Cog):
             "🥉"
         ]
 
-        for index, player in enumerate(
-            players,
-            start=1
-        ):
+        used_users = set()
+
+        for player in players:
 
             user_id = player.get(
                 "user_id"
             )
+
+            if user_id in used_users:
+                continue
+
+            used_users.add(
+                user_id
+            )
+
+            index = len(lines) + 1
 
             try:
 
@@ -2127,6 +2273,9 @@ class MinesGame(commands.Cog):
             lines.append(
                 f"{position} {name} — **{gold:,} ذهب**"
             )
+
+            if len(lines) >= 10:
+                break
 
         embed = discord.Embed(
             title="🏆 مين-توب",
@@ -2183,10 +2332,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # دعم كلمة كامل
-        # =================================================
-
         if amount is None:
 
             await ctx.send(
@@ -2227,24 +2372,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        sender_balance = await self.get_balance(
-            ctx.guild.id,
-            ctx.author.id
-        )
-
-        if sender_balance < gold_amount:
-
-            await ctx.send(
-                f"❌ رصيدك غير كافٍ.\n"
-                f"💳 رصيدك الحالي: **{sender_balance:,} ذهب**"
-            )
-
-            return
-
-        # =================================================
-        # خصم من المرسل بشكل ذري
-        # =================================================
-
         sender_document = await self.game_data.find_one_and_update(
             {
                 "guild_id": {
@@ -2269,8 +2396,14 @@ class MinesGame(commands.Cog):
 
         if sender_document is None:
 
+            sender_balance = await self.get_balance(
+                ctx.guild.id,
+                ctx.author.id
+            )
+
             await ctx.send(
-                "❌ لم تتم عملية التحويل لأن رصيدك غير كافٍ."
+                f"❌ رصيدك غير كافٍ.\n"
+                f"💳 رصيدك الحالي: **{sender_balance:,} ذهب**"
             )
 
             return
@@ -2346,10 +2479,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        # =================================================
-        # دعم كلمة كامل
-        # =================================================
-
         if amount is None:
 
             await ctx.send(
@@ -2390,24 +2519,6 @@ class MinesGame(commands.Cog):
 
             return
 
-        target_balance = await self.get_balance(
-            ctx.guild.id,
-            member.id
-        )
-
-        if target_balance < gold_amount:
-
-            await ctx.send(
-                f"❌ رصيد {member.mention} غير كافٍ.\n"
-                f"💳 رصيده الحالي: **{target_balance:,} ذهب**"
-            )
-
-            return
-
-        # =================================================
-        # خصم من الشخص بشكل ذري
-        # =================================================
-
         target_document = await self.game_data.find_one_and_update(
             {
                 "guild_id": {
@@ -2432,8 +2543,14 @@ class MinesGame(commands.Cog):
 
         if target_document is None:
 
+            target_balance = await self.get_balance(
+                ctx.guild.id,
+                member.id
+            )
+
             await ctx.send(
-                "❌ لم تتم العملية لأن رصيد الشخص غير كافٍ."
+                f"❌ رصيد {member.mention} غير كافٍ.\n"
+                f"💳 رصيده الحالي: **{target_balance:,} ذهب**"
             )
 
             return
@@ -2482,10 +2599,6 @@ class MinesGame(commands.Cog):
         if ctx.guild is None:
             return
 
-        # =================================================
-        # تحكم الموقع
-        # =================================================
-
         if not await self.has_command_permission(
             ctx.author,
             COMMAND_GOLDEN,
@@ -2497,18 +2610,10 @@ class MinesGame(commands.Cog):
         guild_id = ctx.guild.id
         user_id = ctx.author.id
 
-        # =================================================
-        # الحصول على بيانات اللاعب
-        # =================================================
-
         document = await self.get_user_data(
             guild_id,
             user_id
         )
-
-        # =================================================
-        # آخر استخدام
-        # =================================================
 
         last_golden_at = document.get(
             "last_golden_at"
@@ -2581,28 +2686,16 @@ class MinesGame(commands.Cog):
 
                 return
 
-        # =================================================
-        # تحديد الجائزة
-        # =================================================
-
         reward = random.randint(
             GOLDEN_MIN,
             GOLDEN_MAX
         )
-
-        # =================================================
-        # إضافة الذهب
-        # =================================================
 
         new_gold = await self.change_gold(
             guild_id,
             user_id,
             reward
         )
-
-        # =================================================
-        # تسجيل وقت الاستخدام
-        # =================================================
 
         await self.game_data.update_one(
             {
@@ -2623,10 +2716,6 @@ class MinesGame(commands.Cog):
                 }
             }
         )
-
-        # =================================================
-        # رسالة المكافأة
-        # =================================================
 
         embed = discord.Embed(
             title="✨ المكافأة الذهبية",
@@ -2649,6 +2738,7 @@ class MinesGame(commands.Cog):
 # =========================================================
 
 async def setup(bot):
+
     await bot.add_cog(
         MinesGame(bot)
     )
