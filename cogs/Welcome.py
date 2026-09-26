@@ -1,14 +1,12 @@
 import os
 import io
+import random
 import discord
 
 from discord.ext import commands
 from pymongo import MongoClient
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-
-import arabic_reshaper
-from bidi.algorithm import get_display
 
 
 # =========================================================
@@ -33,14 +31,16 @@ welcome_settings_collection = db["welcome_settings"]
 IMAGE_WIDTH = 1200
 IMAGE_HEIGHT = 500
 
-BLUE_1 = (5, 22, 55)
-BLUE_2 = (8, 55, 115)
-BLUE_3 = (15, 100, 175)
+# ألوان التصميم
+BG_1 = (8, 12, 35)
+BG_2 = (24, 35, 85)
+BG_3 = (67, 30, 125)
 
 WHITE = (255, 255, 255)
-YELLOW = (255, 210, 55)
-LIGHT_YELLOW = (255, 230, 125)
-LIGHT_BLUE = (190, 225, 255)
+GOLD = (255, 210, 65)
+LIGHT_GOLD = (255, 235, 145)
+BLUE = (90, 190, 255)
+PURPLE = (180, 100, 255)
 
 
 # =========================================================
@@ -51,38 +51,6 @@ class WelcomeCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-
-    # =====================================================
-    # معالجة النص العربي
-    # =====================================================
-
-    def shape_text(self, text):
-
-        if text is None:
-            return ""
-
-        text = str(text)
-
-        if not text:
-            return ""
-
-        try:
-            # ترتيب الحروف العربية وربطها
-            reshaped = arabic_reshaper.reshape(text)
-
-            # تحويل اتجاه العربي إلى RTL
-            return get_display(
-                reshaped,
-                base_dir="R"
-            )
-
-        except Exception as e:
-
-            print(
-                f"[WelcomeCog] Text shaping error: {e}"
-            )
-
-            return text
 
     # =====================================================
     # استبدال المتغيرات
@@ -118,16 +86,11 @@ class WelcomeCog(commands.Cog):
 
     def get_font(self, size, bold=False):
 
-        # DejaVu Sans هو أهم fallback لأنه موجود
-        # غالباً في Railway/Linux ويدعم العربية.
-
         if bold:
 
             fonts = [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
-                "/usr/share/fonts/opentype/noto/NotoSansArabic-Bold.ttf",
                 "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
             ]
 
@@ -136,8 +99,6 @@ class WelcomeCog(commands.Cog):
             fonts = [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-                "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
                 "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             ]
 
@@ -156,135 +117,10 @@ class WelcomeCog(commands.Cog):
             except Exception:
                 continue
 
-        print(
-            "[WelcomeCog] لم يتم العثور على خط مناسب، سيتم استخدام الخط الافتراضي"
-        )
-
         return ImageFont.load_default()
 
     # =====================================================
-    # اختيار حجم الخط المناسب
-    # =====================================================
-
-    def fit_font(
-        self,
-        draw,
-        text,
-        max_width,
-        start_size,
-        minimum_size=16,
-        bold=False
-    ):
-
-        shaped = self.shape_text(
-            text
-        )
-
-        for size in range(
-            start_size,
-            minimum_size - 1,
-            -2
-        ):
-
-            font = self.get_font(
-                size,
-                bold=bold
-            )
-
-            bbox = draw.textbbox(
-                (0, 0),
-                shaped,
-                font=font
-            )
-
-            width = bbox[2] - bbox[0]
-
-            if width <= max_width:
-
-                return font
-
-        return self.get_font(
-            minimum_size,
-            bold=bold
-        )
-
-    # =====================================================
-    # قياس النص
-    # =====================================================
-
-    def text_width(
-        self,
-        draw,
-        text,
-        font
-    ):
-
-        shaped = self.shape_text(
-            text
-        )
-
-        bbox = draw.textbbox(
-            (0, 0),
-            shaped,
-            font=font
-        )
-
-        return bbox[2] - bbox[0]
-
-    # =====================================================
-    # رسم نص داخل منطقة
-    # =====================================================
-
-    def draw_centered_in_area(
-        self,
-        draw,
-        text,
-        font,
-        area_left,
-        area_right,
-        y,
-        fill
-    ):
-
-        if not text:
-            return
-
-        shaped = self.shape_text(
-            text
-        )
-
-        bbox = draw.textbbox(
-            (0, 0),
-            shaped,
-            font=font
-        )
-
-        width = bbox[2] - bbox[0]
-
-        area_width = (
-            area_right - area_left
-        )
-
-        x = (
-            area_left
-            +
-            (area_width - width) / 2
-            -
-            bbox[0]
-        )
-
-        draw.text(
-            (
-                int(x),
-                y
-            ),
-            shaped,
-            font=font,
-            fill=fill
-        )
-
-    # =====================================================
-    # الخلفية
+    # الخلفية المتدرجة
     # =====================================================
 
     def create_background(self):
@@ -310,35 +146,23 @@ class WelcomeCog(commands.Cog):
                 ratio2 = ratio * 2
 
                 r = int(
-                    BLUE_1[0]
+                    BG_1[0]
                     +
-                    (
-                        BLUE_2[0]
-                        -
-                        BLUE_1[0]
-                    )
+                    (BG_2[0] - BG_1[0])
                     * ratio2
                 )
 
                 g = int(
-                    BLUE_1[1]
+                    BG_1[1]
                     +
-                    (
-                        BLUE_2[1]
-                        -
-                        BLUE_1[1]
-                    )
+                    (BG_2[1] - BG_1[1])
                     * ratio2
                 )
 
                 b = int(
-                    BLUE_1[2]
+                    BG_1[2]
                     +
-                    (
-                        BLUE_2[2]
-                        -
-                        BLUE_1[2]
-                    )
+                    (BG_2[2] - BG_1[2])
                     * ratio2
                 )
 
@@ -349,35 +173,23 @@ class WelcomeCog(commands.Cog):
                 ) * 2
 
                 r = int(
-                    BLUE_2[0]
+                    BG_2[0]
                     +
-                    (
-                        BLUE_3[0]
-                        -
-                        BLUE_2[0]
-                    )
+                    (BG_3[0] - BG_2[0])
                     * ratio2
                 )
 
                 g = int(
-                    BLUE_2[1]
+                    BG_2[1]
                     +
-                    (
-                        BLUE_3[1]
-                        -
-                        BLUE_2[1]
-                    )
+                    (BG_3[1] - BG_2[1])
                     * ratio2
                 )
 
                 b = int(
-                    BLUE_2[2]
+                    BG_2[2]
                     +
-                    (
-                        BLUE_3[2]
-                        -
-                        BLUE_2[2]
-                    )
+                    (BG_3[2] - BG_2[2])
                     * ratio2
                 )
 
@@ -392,145 +204,245 @@ class WelcomeCog(commands.Cog):
         return image
 
     # =====================================================
-    # تأثيرات الخلفية
+    # مؤثرات الخلفية
     # =====================================================
 
-    def add_background_effects(
-        self,
-        image
-    ):
+    def add_background_effects(self, image):
 
         overlay = Image.new(
             "RGBA",
             image.size,
-            (
-                0,
-                0,
-                0,
-                0
-            )
+            (0, 0, 0, 0)
         )
 
         draw = ImageDraw.Draw(
             overlay
         )
 
-        # دائرة ذهبية
+        # =================================================
+        # دوائر ضوئية كبيرة
+        # =================================================
+
         draw.ellipse(
-            (
-                -170,
-                -170,
-                300,
-                300
-            ),
-            fill=(
-                255,
-                210,
-                55,
-                35
-            )
+            (-180, -180, 420, 420),
+            fill=(90, 170, 255, 55)
         )
 
-        # دائرة زرقاء
         draw.ellipse(
-            (
-                900,
-                150,
-                1400,
-                650
-            ),
-            fill=(
-                100,
-                200,
-                255,
-                30
-            )
+            (850, -150, 1400, 400),
+            fill=(190, 80, 255, 60)
         )
 
-        # نقاط
         draw.ellipse(
-            (
-                1030,
-                55,
-                1110,
-                135
-            ),
-            fill=(
-                255,
-                210,
-                55,
-                22
-            )
+            (850, 280, 1400, 830),
+            fill=(50, 170, 255, 45)
         )
+
+        draw.ellipse(
+            (-250, 300, 350, 900),
+            fill=(180, 80, 255, 35)
+        )
+
+        # =================================================
+        # دوائر صغيرة مضيئة
+        # =================================================
+
+        circles = [
+            (70, 80, 10),
+            (160, 390, 7),
+            (275, 65, 6),
+            (1010, 80, 9),
+            (1110, 150, 6),
+            (1080, 410, 10),
+            (950, 350, 5),
+            (1160, 330, 7),
+            (760, 60, 5),
+            (680, 430, 7),
+        ]
+
+        for x, y, radius in circles:
+
+            draw.ellipse(
+                (
+                    x - radius,
+                    y - radius,
+                    x + radius,
+                    y + radius
+                ),
+                fill=(255, 220, 90, 180)
+            )
+
+        # =================================================
+        # خطوط ضوئية
+        # =================================================
+
+        draw.line(
+            (0, 95, 300, 0),
+            fill=(100, 190, 255, 70),
+            width=3
+        )
+
+        draw.line(
+            (900, 500, 1200, 390),
+            fill=(210, 110, 255, 80),
+            width=3
+        )
+
+        draw.line(
+            (980, 0, 1200, 90),
+            fill=(255, 215, 80, 70),
+            width=2
+        )
+
+        # =================================================
+        # Blur
+        # =================================================
 
         overlay = overlay.filter(
-            ImageFilter.GaussianBlur(25)
+            ImageFilter.GaussianBlur(28)
         )
 
-        return Image.alpha_composite(
+        image = Image.alpha_composite(
             image.convert("RGBA"),
             overlay
-        ).convert("RGB")
+        )
+
+        return image.convert("RGB")
 
     # =====================================================
     # زخارف التصميم
     # =====================================================
 
-    def add_design(
-        self,
-        image
-    ):
+    def add_design(self, image):
 
         draw = ImageDraw.Draw(
             image
         )
 
+        # =================================================
         # إطار خارجي
+        # =================================================
+
         draw.rounded_rectangle(
             (
-                20,
-                20,
-                IMAGE_WIDTH - 20,
-                IMAGE_HEIGHT - 20
+                18,
+                18,
+                IMAGE_WIDTH - 18,
+                IMAGE_HEIGHT - 18
             ),
-            radius=28,
-            outline=YELLOW,
+            radius=30,
+            outline=(
+                255,
+                220,
+                100
+            ),
             width=3
         )
 
-        # خط ذهبي تحت العنوان
+        # =================================================
+        # إطار داخلي خفيف
+        # =================================================
+
         draw.rounded_rectangle(
             (
-                395,
-                235,
-                1030,
-                241
+                28,
+                28,
+                IMAGE_WIDTH - 28,
+                IMAGE_HEIGHT - 28
             ),
-            radius=3,
-            fill=YELLOW
+            radius=24,
+            outline=(
+                100,
+                190,
+                255
+            ),
+            width=1
         )
 
-        # خطوط زخرفية يمين
+        # =================================================
+        # خطوط زخرفية أعلى وأسفل
+        # =================================================
+
         draw.line(
-            (
-                1050,
-                390,
-                1130,
-                390
-            ),
-            fill=YELLOW,
+            (65, 55, 250, 55),
+            fill=GOLD,
             width=3
         )
 
         draw.line(
-            (
-                1070,
-                400,
-                1150,
-                400
-            ),
-            fill=LIGHT_YELLOW,
-            width=2
+            (950, 55, 1135, 55),
+            fill=GOLD,
+            width=3
+        )
+
+        draw.line(
+            (65, 445, 250, 445),
+            fill=BLUE,
+            width=3
+        )
+
+        draw.line(
+            (950, 445, 1135, 445),
+            fill=BLUE,
+            width=3
+        )
+
+        # =================================================
+        # زوايا ذهبية
+        # =================================================
+
+        corner = 45
+
+        # أعلى يسار
+        draw.line(
+            (35, 35, 35 + corner, 35),
+            fill=GOLD,
+            width=4
+        )
+
+        draw.line(
+            (35, 35, 35, 35 + corner),
+            fill=GOLD,
+            width=4
+        )
+
+        # أعلى يمين
+        draw.line(
+            (1165, 35, 1165 - corner, 35),
+            fill=GOLD,
+            width=4
+        )
+
+        draw.line(
+            (1165, 35, 1165, 35 + corner),
+            fill=GOLD,
+            width=4
+        )
+
+        # أسفل يسار
+        draw.line(
+            (35, 465, 35 + corner, 465),
+            fill=GOLD,
+            width=4
+        )
+
+        draw.line(
+            (35, 465, 35, 465 - corner),
+            fill=GOLD,
+            width=4
+        )
+
+        # أسفل يمين
+        draw.line(
+            (1165, 465, 1165 - corner, 465),
+            fill=GOLD,
+            width=4
+        )
+
+        draw.line(
+            (1165, 465, 1165, 465 - corner),
+            fill=GOLD,
+            width=4
         )
 
         return image
@@ -539,10 +451,7 @@ class WelcomeCog(commands.Cog):
     # تحميل Avatar
     # =====================================================
 
-    async def download_avatar(
-        self,
-        member
-    ):
+    async def download_avatar(self, member):
 
         try:
 
@@ -566,13 +475,13 @@ class WelcomeCog(commands.Cog):
             return None
 
     # =====================================================
-    # Avatar دائري
+    # Avatar دائري مع توهج
     # =====================================================
 
     def make_circle_avatar(
         self,
         avatar,
-        size=225
+        size=250
     ):
 
         avatar = avatar.resize(
@@ -583,9 +492,9 @@ class WelcomeCog(commands.Cog):
             Image.Resampling.LANCZOS
         )
 
-        # -------------------------------------------------
-        # القناع
-        # -------------------------------------------------
+        # =================================================
+        # قناع دائري
+        # =================================================
 
         mask = Image.new(
             "L",
@@ -604,44 +513,40 @@ class WelcomeCog(commands.Cog):
             (
                 0,
                 0,
-                size,
-                size
+                size - 1,
+                size - 1
             ),
             fill=255
         )
 
-        # -------------------------------------------------
+        # =================================================
         # الصورة
-        # -------------------------------------------------
+        # =================================================
 
-        result = Image.new(
+        avatar_result = Image.new(
             "RGBA",
             (
                 size,
                 size
             ),
-            (
-                0,
-                0,
-                0,
-                0
-            )
+            (0, 0, 0, 0)
         )
 
-        result.paste(
+        avatar_result.paste(
             avatar,
-            (
-                0,
-                0
-            ),
+            (0, 0),
             mask
         )
 
-        # -------------------------------------------------
+        # =================================================
         # الحجم النهائي
-        # -------------------------------------------------
+        # =================================================
 
-        final_size = size + 30
+        padding = 38
+
+        final_size = size + (
+            padding * 2
+        )
 
         final = Image.new(
             "RGBA",
@@ -649,73 +554,277 @@ class WelcomeCog(commands.Cog):
                 final_size,
                 final_size
             ),
+            (0, 0, 0, 0)
+        )
+
+        # =================================================
+        # توهج
+        # =================================================
+
+        glow = Image.new(
+            "RGBA",
             (
-                0,
-                0,
-                0,
-                0
-            )
+                final_size,
+                final_size
+            ),
+            (0, 0, 0, 0)
+        )
+
+        glow_draw = ImageDraw.Draw(
+            glow
+        )
+
+        glow_draw.ellipse(
+            (
+                8,
+                8,
+                final_size - 8,
+                final_size - 8
+            ),
+            outline=(
+                255,
+                210,
+                65,
+                180
+            ),
+            width=18
+        )
+
+        glow = glow.filter(
+            ImageFilter.GaussianBlur(15)
+        )
+
+        final = Image.alpha_composite(
+            final,
+            glow
         )
 
         final_draw = ImageDraw.Draw(
             final
         )
 
+        # =================================================
         # ظل
+        # =================================================
+
         final_draw.ellipse(
             (
-                5,
-                8,
-                size + 25,
-                size + 28
+                14,
+                20,
+                final_size - 6,
+                final_size + 2
             ),
             fill=(
                 0,
                 0,
                 0,
-                100
+                120
             )
         )
 
-        # إطار ذهبي
+        # =================================================
+        # الحلقة الذهبية الخارجية
+        # =================================================
+
         final_draw.ellipse(
             (
-                2,
-                2,
-                size + 28,
-                size + 28
+                8,
+                8,
+                final_size - 8,
+                final_size - 8
             ),
-            outline=YELLOW,
-            width=7
+            outline=GOLD,
+            width=8
         )
 
-        # إطار أبيض داخلي
+        # =================================================
+        # الحلقة الزرقاء
+        # =================================================
+
         final_draw.ellipse(
             (
-                9,
-                9,
-                size + 21,
-                size + 21
+                17,
+                17,
+                final_size - 17,
+                final_size - 17
             ),
             outline=(
+                120,
+                205,
                 255,
-                255,
-                255,
-                150
+                230
             ),
-            width=2
+            width=3
         )
 
+        # =================================================
+        # وضع الصورة
+        # =================================================
+
         final.paste(
-            result,
+            avatar_result,
             (
-                15,
-                15
+                padding,
+                padding
             ),
-            result
+            avatar_result
         )
 
         return final
+
+    # =====================================================
+    # رسم WELCOME
+    # =====================================================
+
+    def draw_welcome_text(
+        self,
+        image,
+        text="WELCOME"
+    ):
+
+        draw = ImageDraw.Draw(
+            image
+        )
+
+        # =================================================
+        # الخط
+        # =================================================
+
+        font = self.get_font(
+            62,
+            bold=True
+        )
+
+        # =================================================
+        # قياس
+        # =================================================
+
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font
+        )
+
+        text_width = (
+            bbox[2] - bbox[0]
+        )
+
+        text_height = (
+            bbox[3] - bbox[1]
+        )
+
+        x = (
+            IMAGE_WIDTH
+            -
+            text_width
+        ) // 2
+
+        y = 350
+
+        # =================================================
+        # ظل النص
+        # =================================================
+
+        draw.text(
+            (
+                x + 4,
+                y + 6
+            ),
+            text,
+            font=font,
+            fill=(
+                0,
+                0,
+                0,
+                170
+            )
+        )
+
+        # =================================================
+        # توهج النص
+        # =================================================
+
+        glow = Image.new(
+            "RGBA",
+            image.size,
+            (0, 0, 0, 0)
+        )
+
+        glow_draw = ImageDraw.Draw(
+            glow
+        )
+
+        glow_draw.text(
+            (
+                x,
+                y
+            ),
+            text,
+            font=font,
+            fill=(
+                255,
+                210,
+                65,
+                170
+            )
+        )
+
+        glow = glow.filter(
+            ImageFilter.GaussianBlur(10)
+        )
+
+        image = Image.alpha_composite(
+            image.convert("RGBA"),
+            glow
+        ).convert("RGB")
+
+        draw = ImageDraw.Draw(
+            image
+        )
+
+        # =================================================
+        # النص الأساسي
+        # =================================================
+
+        draw.text(
+            (
+                x,
+                y
+            ),
+            text,
+            font=font,
+            fill=WHITE
+        )
+
+        # =================================================
+        # خط تحت WELCOME
+        # =================================================
+
+        line_width = min(
+            text_width + 30,
+            430
+        )
+
+        line_x1 = (
+            IMAGE_WIDTH - line_width
+        ) // 2
+
+        line_x2 = (
+            IMAGE_WIDTH + line_width
+        ) // 2
+
+        draw.rounded_rectangle(
+            (
+                line_x1,
+                y + text_height + 20,
+                line_x2,
+                y + text_height + 25
+            ),
+            radius=3,
+            fill=GOLD
+        )
+
+        return image
 
     # =====================================================
     # إنشاء صورة الترحيب
@@ -727,9 +836,9 @@ class WelcomeCog(commands.Cog):
         settings
     ):
 
-        # -------------------------------------------------
+        # =================================================
         # الخلفية
-        # -------------------------------------------------
+        # =================================================
 
         image = self.create_background()
 
@@ -741,13 +850,9 @@ class WelcomeCog(commands.Cog):
             image
         )
 
-        draw = ImageDraw.Draw(
-            image
-        )
-
-        # -------------------------------------------------
+        # =================================================
         # Avatar
-        # -------------------------------------------------
+        # =================================================
 
         avatar = await self.download_avatar(
             member
@@ -757,190 +862,47 @@ class WelcomeCog(commands.Cog):
 
             avatar_image = self.make_circle_avatar(
                 avatar,
-                225
+                250
             )
 
-            avatar_x = 75
-
-            avatar_y = (
-                IMAGE_HEIGHT
+            avatar_x = (
+                IMAGE_WIDTH
                 -
-                avatar_image.height
+                avatar_image.width
             ) // 2
 
-            image.paste(
+            avatar_y = 55
+
+            image = image.convert(
+                "RGBA"
+            )
+
+            image.alpha_composite(
                 avatar_image,
                 (
                     avatar_x,
                     avatar_y
-                ),
-                avatar_image
+                )
+            )
+
+            image = image.convert(
+                "RGB"
             )
 
         # =================================================
-        # النصوص
+        # كلمة الترحيب
         # =================================================
 
-        welcome_text = settings.get(
-            "image_welcome_text",
-            "WELCOME"
-        )
+        welcome_text = "WELCOME"
 
-        username_text = settings.get(
-            "image_username_text",
-            member.display_name
-        )
-
-        server_text = settings.get(
-            "image_server_text",
-            member.guild.name
-        )
-
-        members_text = settings.get(
-            "image_members_text",
-            f"Member #{member.guild.member_count}"
-        )
-
-        # -------------------------------------------------
-        # المتغيرات
-        # -------------------------------------------------
-
-        welcome_text = self.replace_variables(
-            welcome_text,
-            member
-        )
-
-        username_text = self.replace_variables(
-            username_text,
-            member
-        )
-
-        server_text = self.replace_variables(
-            server_text,
-            member
-        )
-
-        members_text = self.replace_variables(
-            members_text,
-            member
+        # نخليها إنجليزية فقط دائماً
+        image = self.draw_welcome_text(
+            image,
+            welcome_text
         )
 
         # =================================================
-        # منطقة النص
-        # =================================================
-
-        TEXT_LEFT = 390
-        TEXT_RIGHT = 1120
-
-        # =================================================
-        # WELCOME
-        # =================================================
-
-        welcome_font = self.fit_font(
-            draw,
-            welcome_text,
-            680,
-            58,
-            minimum_size=30,
-            bold=True
-        )
-
-        self.draw_centered_in_area(
-            draw,
-            welcome_text,
-            welcome_font,
-            TEXT_LEFT,
-            TEXT_RIGHT,
-            70,
-            YELLOW
-        )
-
-        # =================================================
-        # اسم العضو
-        # =================================================
-
-        username_font = self.fit_font(
-            draw,
-            username_text,
-            680,
-            44,
-            minimum_size=20,
-            bold=True
-        )
-
-        self.draw_centered_in_area(
-            draw,
-            username_text,
-            username_font,
-            TEXT_LEFT,
-            TEXT_RIGHT,
-            150,
-            WHITE
-        )
-
-        # =================================================
-        # خط فاصل
-        # =================================================
-
-        draw.rounded_rectangle(
-            (
-                460,
-                235,
-                1050,
-                241
-            ),
-            radius=3,
-            fill=YELLOW
-        )
-
-        # =================================================
-        # اسم السيرفر
-        # =================================================
-
-        server_font = self.fit_font(
-            draw,
-            server_text,
-            680,
-            31,
-            minimum_size=17,
-            bold=True
-        )
-
-        self.draw_centered_in_area(
-            draw,
-            server_text,
-            server_font,
-            TEXT_LEFT,
-            TEXT_RIGHT,
-            270,
-            LIGHT_BLUE
-        )
-
-        # =================================================
-        # عدد الأعضاء
-        # =================================================
-
-        members_font = self.fit_font(
-            draw,
-            members_text,
-            680,
-            28,
-            minimum_size=16,
-            bold=False
-        )
-
-        self.draw_centered_in_area(
-            draw,
-            members_text,
-            members_font,
-            TEXT_LEFT,
-            TEXT_RIGHT,
-            325,
-            LIGHT_YELLOW
-        )
-
-        # =================================================
-        # حفظ
+        # حفظ الصورة
         # =================================================
 
         output = io.BytesIO()
@@ -1327,3 +1289,19 @@ async def setup(bot):
     await bot.add_cog(
         WelcomeCog(bot)
     )
+
+كذا ما عاد نستخدم "arabic_reshaper" ولا "python-bidi" داخل هذا الملف نهائياً، لأن الصورة نفسها ما فيها عربي أصلاً. وتقدر تترك المكتبتين في "requirements.txt" عادي لأن أجزاء ثانية من مشروعك ممكن تحتاجها.
+
+التصميم الجديد داخل الصورة فقط:
+
+- 🖼️ صورة العضو دائرية وكبيرة
+- ✨ توهج حول الصورة
+- 🟡 حلقة ذهبية + 🔵 حلقة زرقاء
+- 🌌 خلفية متدرجة أزرق/بنفسجي
+- 💡 دوائر وإضاءات ونقاط زخرفية
+- 🖼️ إطار مزدوج وزوايا ذهبية
+- WELCOME تحت صورة العضو
+- خط زخرفي تحت كلمة WELCOME
+- لا اسم شخص ولا اسم سيرفر ولا عربي داخل الصورة
+
+والـ Embed نفسه ما لمسته؛ يعني العنوان والوصف والفوتر والصورة المصنوعة من البوت كلها تظل تشتغل من إعدادات الموقع.
