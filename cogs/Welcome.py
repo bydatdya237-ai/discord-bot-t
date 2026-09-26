@@ -1,6 +1,5 @@
 import os
 import io
-import random
 import discord
 
 from discord.ext import commands
@@ -31,7 +30,6 @@ welcome_settings_collection = db["welcome_settings"]
 IMAGE_WIDTH = 1200
 IMAGE_HEIGHT = 500
 
-# ألوان التصميم
 BG_1 = (8, 12, 35)
 BG_2 = (24, 35, 85)
 BG_3 = (67, 30, 125)
@@ -72,7 +70,6 @@ class WelcomeCog(commands.Cog):
         }
 
         for key, value in replacements.items():
-
             text = text.replace(
                 key,
                 str(value)
@@ -87,7 +84,6 @@ class WelcomeCog(commands.Cog):
     def get_font(self, size, bold=False):
 
         if bold:
-
             fonts = [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
@@ -95,7 +91,6 @@ class WelcomeCog(commands.Cog):
             ]
 
         else:
-
             fonts = [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
@@ -108,7 +103,6 @@ class WelcomeCog(commands.Cog):
                 continue
 
             try:
-
                 return ImageFont.truetype(
                     font_path,
                     size
@@ -194,7 +188,6 @@ class WelcomeCog(commands.Cog):
                 )
 
             for y in range(IMAGE_HEIGHT):
-
                 pixels[x, y] = (
                     r,
                     g,
@@ -219,10 +212,6 @@ class WelcomeCog(commands.Cog):
             overlay
         )
 
-        # =================================================
-        # دوائر ضوئية كبيرة
-        # =================================================
-
         draw.ellipse(
             (-180, -180, 420, 420),
             fill=(90, 170, 255, 55)
@@ -242,10 +231,6 @@ class WelcomeCog(commands.Cog):
             (-250, 300, 350, 900),
             fill=(180, 80, 255, 35)
         )
-
-        # =================================================
-        # دوائر صغيرة مضيئة
-        # =================================================
 
         circles = [
             (70, 80, 10),
@@ -272,10 +257,6 @@ class WelcomeCog(commands.Cog):
                 fill=(255, 220, 90, 180)
             )
 
-        # =================================================
-        # خطوط ضوئية
-        # =================================================
-
         draw.line(
             (0, 95, 300, 0),
             fill=(100, 190, 255, 70),
@@ -293,10 +274,6 @@ class WelcomeCog(commands.Cog):
             fill=(255, 215, 80, 70),
             width=2
         )
-
-        # =================================================
-        # Blur
-        # =================================================
 
         overlay = overlay.filter(
             ImageFilter.GaussianBlur(28)
@@ -319,10 +296,6 @@ class WelcomeCog(commands.Cog):
             image
         )
 
-        # =================================================
-        # إطار خارجي
-        # =================================================
-
         draw.rounded_rectangle(
             (
                 18,
@@ -339,10 +312,6 @@ class WelcomeCog(commands.Cog):
             width=3
         )
 
-        # =================================================
-        # إطار داخلي خفيف
-        # =================================================
-
         draw.rounded_rectangle(
             (
                 28,
@@ -358,10 +327,6 @@ class WelcomeCog(commands.Cog):
             ),
             width=1
         )
-
-        # =================================================
-        # خطوط زخرفية أعلى وأسفل
-        # =================================================
 
         draw.line(
             (65, 55, 250, 55),
@@ -387,13 +352,8 @@ class WelcomeCog(commands.Cog):
             width=3
         )
 
-        # =================================================
-        # زوايا ذهبية
-        # =================================================
-
         corner = 45
 
-        # أعلى يسار
         draw.line(
             (35, 35, 35 + corner, 35),
             fill=GOLD,
@@ -406,7 +366,6 @@ class WelcomeCog(commands.Cog):
             width=4
         )
 
-        # أعلى يمين
         draw.line(
             (1165, 35, 1165 - corner, 35),
             fill=GOLD,
@@ -419,7 +378,6 @@ class WelcomeCog(commands.Cog):
             width=4
         )
 
-        # أسفل يسار
         draw.line(
             (35, 465, 35 + corner, 465),
             fill=GOLD,
@@ -432,7 +390,6 @@ class WelcomeCog(commands.Cog):
             width=4
         )
 
-        # أسفل يمين
         draw.line(
             (1165, 465, 1165 - corner, 465),
             fill=GOLD,
@@ -492,10 +449,6 @@ class WelcomeCog(commands.Cog):
             Image.Resampling.LANCZOS
         )
 
-        # =================================================
-        # قناع دائري
-        # =================================================
-
         mask = Image.new(
             "L",
             (
@@ -519,10 +472,6 @@ class WelcomeCog(commands.Cog):
             fill=255
         )
 
-        # =================================================
-        # الصورة
-        # =================================================
-
         avatar_result = Image.new(
             "RGBA",
             (
@@ -538,10 +487,6 @@ class WelcomeCog(commands.Cog):
             mask
         )
 
-        # =================================================
-        # الحجم النهائي
-        # =================================================
-
         padding = 38
 
         final_size = size + (
@@ -556,10 +501,6 @@ class WelcomeCog(commands.Cog):
             ),
             (0, 0, 0, 0)
         )
-
-        # =================================================
-        # توهج
-        # =================================================
 
         glow = Image.new(
             "RGBA",
@@ -603,10 +544,6 @@ class WelcomeCog(commands.Cog):
             final
         )
 
-        # =================================================
-        # ظل
-        # =================================================
-
         final_draw.ellipse(
             (
                 14,
@@ -622,10 +559,6 @@ class WelcomeCog(commands.Cog):
             )
         )
 
-        # =================================================
-        # الحلقة الذهبية الخارجية
-        # =================================================
-
         final_draw.ellipse(
             (
                 8,
@@ -636,10 +569,6 @@ class WelcomeCog(commands.Cog):
             outline=GOLD,
             width=8
         )
-
-        # =================================================
-        # الحلقة الزرقاء
-        # =================================================
 
         final_draw.ellipse(
             (
@@ -656,10 +585,6 @@ class WelcomeCog(commands.Cog):
             ),
             width=3
         )
-
-        # =================================================
-        # وضع الصورة
-        # =================================================
 
         final.paste(
             avatar_result,
@@ -686,18 +611,10 @@ class WelcomeCog(commands.Cog):
             image
         )
 
-        # =================================================
-        # الخط
-        # =================================================
-
         font = self.get_font(
             62,
             bold=True
         )
-
-        # =================================================
-        # قياس
-        # =================================================
 
         bbox = draw.textbbox(
             (0, 0),
@@ -721,10 +638,6 @@ class WelcomeCog(commands.Cog):
 
         y = 350
 
-        # =================================================
-        # ظل النص
-        # =================================================
-
         draw.text(
             (
                 x + 4,
@@ -739,10 +652,6 @@ class WelcomeCog(commands.Cog):
                 170
             )
         )
-
-        # =================================================
-        # توهج النص
-        # =================================================
 
         glow = Image.new(
             "RGBA",
@@ -782,10 +691,6 @@ class WelcomeCog(commands.Cog):
             image
         )
 
-        # =================================================
-        # النص الأساسي
-        # =================================================
-
         draw.text(
             (
                 x,
@@ -795,10 +700,6 @@ class WelcomeCog(commands.Cog):
             font=font,
             fill=WHITE
         )
-
-        # =================================================
-        # خط تحت WELCOME
-        # =================================================
 
         line_width = min(
             text_width + 30,
@@ -836,10 +737,6 @@ class WelcomeCog(commands.Cog):
         settings
     ):
 
-        # =================================================
-        # الخلفية
-        # =================================================
-
         image = self.create_background()
 
         image = self.add_background_effects(
@@ -849,10 +746,6 @@ class WelcomeCog(commands.Cog):
         image = self.add_design(
             image
         )
-
-        # =================================================
-        # Avatar
-        # =================================================
 
         avatar = await self.download_avatar(
             member
@@ -889,21 +782,12 @@ class WelcomeCog(commands.Cog):
                 "RGB"
             )
 
-        # =================================================
-        # كلمة الترحيب
-        # =================================================
-
         welcome_text = "WELCOME"
 
-        # نخليها إنجليزية فقط دائماً
         image = self.draw_welcome_text(
             image,
             welcome_text
         )
-
-        # =================================================
-        # حفظ الصورة
-        # =================================================
 
         output = io.BytesIO()
 
@@ -1012,10 +896,6 @@ class WelcomeCog(commands.Cog):
             timestamp=discord.utils.utcnow()
         )
 
-        # =================================================
-        # Avatar
-        # =================================================
-
         if settings.get(
             "show_avatar",
             True
@@ -1030,10 +910,6 @@ class WelcomeCog(commands.Cog):
             except Exception:
                 pass
 
-        # =================================================
-        # الصورة
-        # =================================================
-
         if settings.get(
             "generated_image",
             True
@@ -1042,10 +918,6 @@ class WelcomeCog(commands.Cog):
             embed.set_image(
                 url="attachment://welcome.png"
             )
-
-        # =================================================
-        # Footer
-        # =================================================
 
         if footer:
 
@@ -1084,10 +956,6 @@ class WelcomeCog(commands.Cog):
 
         try:
 
-            # -------------------------------------------------
-            # الإعدادات
-            # -------------------------------------------------
-
             settings = welcome_settings_collection.find_one({
                 "guild_id": str(
                     member.guild.id
@@ -1097,19 +965,11 @@ class WelcomeCog(commands.Cog):
             if not settings:
                 return
 
-            # -------------------------------------------------
-            # التفعيل
-            # -------------------------------------------------
-
             if not settings.get(
                 "enabled",
                 False
             ):
                 return
-
-            # -------------------------------------------------
-            # الروم
-            # -------------------------------------------------
 
             channel_id = settings.get(
                 "channel_id"
@@ -1138,10 +998,6 @@ class WelcomeCog(commands.Cog):
             if channel is None:
                 return
 
-            # =================================================
-            # الصورة
-            # =================================================
-
             generated_image = settings.get(
                 "generated_image",
                 True
@@ -1161,10 +1017,6 @@ class WelcomeCog(commands.Cog):
                     filename="welcome.png"
                 )
 
-            # =================================================
-            # الرسالة
-            # =================================================
-
             message = settings.get(
                 "message",
                 ""
@@ -1174,10 +1026,6 @@ class WelcomeCog(commands.Cog):
                 message,
                 member
             )
-
-            # =================================================
-            # Embed
-            # =================================================
 
             embed = None
 
@@ -1190,10 +1038,6 @@ class WelcomeCog(commands.Cog):
                     member,
                     settings
                 )
-
-            # =================================================
-            # إرسال
-            # =================================================
 
             if image_file and embed:
 
@@ -1248,10 +1092,6 @@ class WelcomeCog(commands.Cog):
                     message
                 )
 
-        # =====================================================
-        # Discord Permissions
-        # =====================================================
-
         except discord.Forbidden:
 
             print(
@@ -1259,19 +1099,11 @@ class WelcomeCog(commands.Cog):
                 f"في السيرفر {member.guild.id}"
             )
 
-        # =====================================================
-        # Discord API
-        # =====================================================
-
         except discord.HTTPException as e:
 
             print(
                 f"[WelcomeCog] Discord API Error: {e}"
             )
-
-        # =====================================================
-        # أخطاء أخرى
-        # =====================================================
 
         except Exception as e:
 
@@ -1289,19 +1121,3 @@ async def setup(bot):
     await bot.add_cog(
         WelcomeCog(bot)
     )
-
-كذا ما عاد نستخدم "arabic_reshaper" ولا "python-bidi" داخل هذا الملف نهائياً، لأن الصورة نفسها ما فيها عربي أصلاً. وتقدر تترك المكتبتين في "requirements.txt" عادي لأن أجزاء ثانية من مشروعك ممكن تحتاجها.
-
-التصميم الجديد داخل الصورة فقط:
-
-- 🖼️ صورة العضو دائرية وكبيرة
-- ✨ توهج حول الصورة
-- 🟡 حلقة ذهبية + 🔵 حلقة زرقاء
-- 🌌 خلفية متدرجة أزرق/بنفسجي
-- 💡 دوائر وإضاءات ونقاط زخرفية
-- 🖼️ إطار مزدوج وزوايا ذهبية
-- WELCOME تحت صورة العضو
-- خط زخرفي تحت كلمة WELCOME
-- لا اسم شخص ولا اسم سيرفر ولا عربي داخل الصورة
-
-والـ Embed نفسه ما لمسته؛ يعني العنوان والوصف والفوتر والصورة المصنوعة من البوت كلها تظل تشتغل من إعدادات الموقع.
