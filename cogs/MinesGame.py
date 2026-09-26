@@ -37,6 +37,14 @@ LOSS_GOLD = 35
 
 
 # =========================================================
+# الحماية
+# =========================================================
+
+PROTECTION_PRICE = 35
+MAX_PROTECTIONS = 3
+
+
+# =========================================================
 # أمر ذهبي
 # =========================================================
 
@@ -53,6 +61,42 @@ COMMAND_MINES = "الغام"
 COMMAND_WALLET = "محفظتي"
 COMMAND_ADD = "ضيف"
 COMMAND_GOLDEN = "ذهبي"
+COMMAND_PROTECTION = "حمايتي"
+COMMAND_TOP = "مين-توب"
+COMMAND_GIVE_GOLD = "بعطيك-ذهب"
+COMMAND_TAKE_GOLD = "هات-مصروف"
+
+
+# =========================================================
+# رسائل عشوائية
+# =========================================================
+
+WIN_MESSAGES = [
+    "🏆 كفو! نظفت اللوحة بالكامل!",
+    "🔥 لعب نظيف! الألغام ما قدرت عليك.",
+    "👑 اليوم أنت ملك الألغام!",
+    "🎉 فوز مستحق! الحظ كان معك.",
+    "😂 الألغام حاولت... بس ما قدرت عليك.",
+    "💰 طلعت منها بربح! كفو عليك.",
+]
+
+LOSS_MESSAGES = [
+    "💀 راحت عليك!",
+    "😂 اللغم كان ينتظرك!",
+    "💣 اخترت المكان الغلط!",
+    "😭 الحظ خانك هالمرة.",
+    "🫡 وداعًا لـ 35 ذهب.",
+    "💀 اللغم قال لك: مو اليوم.",
+]
+
+PROTECTION_MESSAGES = [
+    "😂 يا حظك!",
+    "🛡️ الحماية أنقذتك في آخر لحظة!",
+    "😮 كانت بتروح عليك!",
+    "🍀 اليوم الحظ واقف معك.",
+    "💀 اللغم حاول... بس فشل.",
+    "😂 دفعت 35 قبل شوي وأنقذتك بـ35 ثانية!",
+]
 
 
 # =========================================================
@@ -109,7 +153,7 @@ class MinesView(discord.ui.View):
 
             button = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
-                label="؟",
+                label="▪️",
                 row=index // 5,
                 custom_id=f"mine_{index}"
             )
@@ -323,7 +367,7 @@ class MinesView(discord.ui.View):
                         discord.ButtonStyle.success
                     )
 
-                    child.label = "0"
+                    child.label = " "
 
                 else:
 
@@ -345,7 +389,7 @@ class MinesView(discord.ui.View):
                     discord.ButtonStyle.secondary
                 )
 
-                child.label = "؟"
+                child.label = "▪️"
 
     # =====================================================
     # إظهار الألغام عند الخسارة
@@ -519,6 +563,69 @@ class MinesView(discord.ui.View):
 
             if index in self.mines:
 
+                # =============================================
+                # فحص الحماية
+                # =============================================
+
+                protection_used = (
+                    await self.cog.use_protection(
+                        self.guild_id,
+                        self.user_id
+                    )
+                )
+
+                if protection_used:
+
+                    self.revealed.add(
+                        index
+                    )
+
+                    for child in self.children:
+
+                        if child.custom_id == f"mine_{index}":
+
+                            child.disabled = True
+                            child.style = (
+                                discord.ButtonStyle.success
+                            )
+                            child.label = "🛡️"
+
+                            break
+
+                    protection_message = random.choice(
+                        PROTECTION_MESSAGES
+                    )
+
+                    remaining_protection = (
+                        await self.cog.get_protection(
+                            self.guild_id,
+                            self.user_id
+                        )
+                    )
+
+                    embed = discord.Embed(
+                        title="🛡️ نجوت!",
+                        description=(
+                            f"{protection_message}\n\n"
+                            "💣 ضغطت على لغم، لكن الحماية أنقذتك.\n"
+                            "🛡️ تم استهلاك حماية واحدة.\n\n"
+                            f"🛡️ الحماية المتبقية: **{remaining_protection}/{MAX_PROTECTIONS}**\n"
+                            "🎮 أكمل اللعبة!"
+                        ),
+                        color=0x2ECC71
+                    )
+
+                    await interaction.response.edit_message(
+                        embed=embed,
+                        view=self
+                    )
+
+                    return
+
+                # =============================================
+                # بدون حماية
+                # =============================================
+
                 self.game_over = True
 
                 self.remove_active_game()
@@ -531,10 +638,14 @@ class MinesView(discord.ui.View):
                     -LOSS_GOLD
                 )
 
+                loss_message = random.choice(
+                    LOSS_MESSAGES
+                )
+
                 embed = discord.Embed(
                     title="💥 انفجر اللغم!",
                     description=(
-                        "💣 للأسف اخترت لغماً.\n\n"
+                        f"{loss_message}\n\n"
                         f"💰 الذهب المخصوم: **-{LOSS_GOLD:,}**\n"
                         f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
                     ),
@@ -598,10 +709,14 @@ class MinesView(discord.ui.View):
                     WIN_GOLD
                 )
 
+                win_message = random.choice(
+                    WIN_MESSAGES
+                )
+
                 embed = discord.Embed(
                     title="🏆 فوز!",
                     description=(
-                        "🎉 **مبروك! لقد فتحت جميع الخانات الآمنة.**\n\n"
+                        f"{win_message}\n\n"
                         f"💰 الجائزة: **+{WIN_GOLD:,} ذهب**\n"
                         f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
                     ),
@@ -649,6 +764,130 @@ class MinesView(discord.ui.View):
         finally:
 
             self.processing = False
+
+
+# =========================================================
+# Protection View
+# =========================================================
+
+class ProtectionView(discord.ui.View):
+
+    def __init__(
+        self,
+        cog,
+        guild_id,
+        user_id
+    ):
+
+        super().__init__(
+            timeout=120
+        )
+
+        self.cog = cog
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+        button = discord.ui.Button(
+            style=discord.ButtonStyle.success,
+            label="🛡️ شراء حماية",
+            custom_id="buy_mines_protection"
+        )
+
+        button.callback = self.buy_protection
+
+        self.add_item(
+            button
+        )
+
+    # =====================================================
+    # شراء الحماية
+    # =====================================================
+
+    async def buy_protection(
+        self,
+        interaction
+    ):
+
+        if interaction.user.id != self.user_id:
+
+            await interaction.response.send_message(
+                "❌ هذه النافذة ليست لك.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # التأكد من صلاحية الأمر من الموقع
+        # =================================================
+
+        if not await self.cog.has_command_permission(
+            interaction.user,
+            COMMAND_PROTECTION,
+            interaction.channel.id
+        ):
+
+            await interaction.response.send_message(
+                "❌ هذا الأمر غير متاح لك.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # محاولة الشراء بشكل ذري
+        # =================================================
+
+        result = await self.cog.buy_protection(
+            self.guild_id,
+            self.user_id
+        )
+
+        if result["status"] == "max":
+
+            await interaction.response.send_message(
+                f"🛡️ لديك الحد الأقصى من الحماية بالفعل: **{MAX_PROTECTIONS}/{MAX_PROTECTIONS}**.",
+                ephemeral=True
+            )
+
+            return
+
+        if result["status"] == "insufficient":
+
+            await interaction.response.send_message(
+                f"❌ تحتاج إلى **{PROTECTION_PRICE:,} ذهب** لشراء الحماية.",
+                ephemeral=True
+            )
+
+            return
+
+        if result["status"] == "success":
+
+            remaining = result["protection"]
+            new_gold = result["gold"]
+
+            embed = discord.Embed(
+                title="🛡️ تم شراء الحماية",
+                description=(
+                    "✅ تمت عملية الشراء بنجاح!\n\n"
+                    f"🛡️ الحماية: **{remaining}/{MAX_PROTECTIONS}**\n"
+                    f"💰 السعر: **-{PROTECTION_PRICE:,} ذهب**\n"
+                    f"💳 رصيدك الحالي: **{new_gold:,} ذهب**"
+                ),
+                color=0x2ECC71
+            )
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=self
+            )
+
+            return
+
+        await interaction.response.send_message(
+            "❌ حدث خطأ أثناء شراء الحماية.",
+            ephemeral=True
+        )
 
 
 # =========================================================
@@ -962,6 +1201,7 @@ class MinesGame(commands.Cog):
                 user_id
             ),
             "gold": STARTING_GOLD,
+            "protection": 0,
             "last_game_at": None,
             "last_golden_at": None,
             "created_at": datetime.now(
@@ -1122,6 +1362,180 @@ class MinesGame(commands.Cog):
         )
 
     # =====================================================
+    # الحصول على الحماية
+    # =====================================================
+
+    async def get_protection(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        document = await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        return min(
+            MAX_PROTECTIONS,
+            int(
+                document.get(
+                    "protection",
+                    0
+                )
+            )
+        )
+
+    # =====================================================
+    # شراء الحماية
+    # =====================================================
+
+    async def buy_protection(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        document = await self.game_data.find_one_and_update(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                ),
+                "gold": {
+                    "$gte": PROTECTION_PRICE
+                },
+                "protection": {
+                    "$lt": MAX_PROTECTIONS
+                }
+            },
+            {
+                "$inc": {
+                    "gold": -PROTECTION_PRICE,
+                    "protection": 1
+                }
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        if document is not None:
+
+            return {
+                "status": "success",
+                "gold": int(
+                    document.get(
+                        "gold",
+                        0
+                    )
+                ),
+                "protection": int(
+                    document.get(
+                        "protection",
+                        0
+                    )
+                )
+            }
+
+        current = await self.game_data.find_one(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                )
+            }
+        )
+
+        if current is None:
+
+            return {
+                "status": "error"
+            }
+
+        current_protection = int(
+            current.get(
+                "protection",
+                0
+            )
+        )
+
+        current_gold = int(
+            current.get(
+                "gold",
+                0
+            )
+        )
+
+        if current_protection >= MAX_PROTECTIONS:
+
+            return {
+                "status": "max"
+            }
+
+        if current_gold < PROTECTION_PRICE:
+
+            return {
+                "status": "insufficient"
+            }
+
+        return {
+            "status": "error"
+        }
+
+    # =====================================================
+    # استخدام حماية واحدة
+    # =====================================================
+
+    async def use_protection(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        await self.get_user_data(
+            guild_id,
+            user_id
+        )
+
+        guild_ids = self.guild_id_variants(
+            guild_id
+        )
+
+        document = await self.game_data.find_one_and_update(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                },
+                "user_id": str(
+                    user_id
+                ),
+                "protection": {
+                    "$gt": 0
+                }
+            },
+            {
+                "$inc": {
+                    "protection": -1
+                }
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        return document is not None
+
+    # =====================================================
     # تسجيل وقت آخر لعبة
     # =====================================================
 
@@ -1200,6 +1614,39 @@ class MinesGame(commands.Cog):
             1,
             int(remaining)
         )
+
+    # =====================================================
+    # تحويل مبلغ الإدخال
+    # =====================================================
+
+    def parse_gold_amount(
+        self,
+        amount
+    ):
+
+        if amount is None:
+            return None
+
+        clean_amount = (
+            str(amount)
+            .replace(",", "")
+            .replace("٬", "")
+            .replace("_", "")
+            .strip()
+        )
+
+        if not clean_amount:
+            return None
+
+        try:
+
+            return int(
+                clean_amount
+            )
+
+        except ValueError:
+
+            return None
 
     # =====================================================
     # أمر الغام
@@ -1321,6 +1768,11 @@ class MinesGame(commands.Cog):
                 "إذا فتحت خانة رقمها 0، سيتم فتح المنطقة "
                 "الآمنة المتصلة بها تلقائياً.\n\n"
 
+                "🛡️ **الحماية**\n"
+                f"يمكنك شراء الحماية من أمر **{COMMAND_PROTECTION}** "
+                f"بسعر **{PROTECTION_PRICE:,} ذهب**، "
+                f"وبحد أقصى **{MAX_PROTECTIONS}**.\n\n"
+
                 "💰 **المكافآت**\n"
                 f"🏆 الفوز: **+{WIN_GOLD:,} ذهب**\n"
                 f"💥 الخسارة: **-{LOSS_GOLD:,} ذهب**\n\n"
@@ -1376,11 +1828,17 @@ class MinesGame(commands.Cog):
             ctx.author.id
         )
 
+        protection = await self.get_protection(
+            ctx.guild.id,
+            ctx.author.id
+        )
+
         embed = discord.Embed(
             title="💰 محفظتي",
             description=(
                 f"👤 اللاعب: {ctx.author.mention}\n\n"
-                f"💰 رصيدك: **{gold:,} ذهب**"
+                f"💰 رصيدك: **{gold:,} ذهب**\n"
+                f"🛡️ الحماية: **{protection}/{MAX_PROTECTIONS}**"
             ),
             color=0xF1C40F
         )
@@ -1458,21 +1916,11 @@ class MinesGame(commands.Cog):
         # تنظيف الرقم
         # =================================================
 
-        clean_amount = (
+        gold_amount = self.parse_gold_amount(
             amount
-            .replace(",", "")
-            .replace("٬", "")
-            .replace("_", "")
-            .strip()
         )
 
-        try:
-
-            gold_amount = int(
-                clean_amount
-            )
-
-        except ValueError:
+        if gold_amount is None:
 
             await ctx.send(
                 "❌ المبلغ يجب أن يكون رقماً صحيحاً."
@@ -1510,6 +1958,509 @@ class MinesGame(commands.Cog):
                 f"💳 الرصيد الجديد: **{new_gold:,} ذهب**"
             ),
             color=0xF1C40F
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # أمر حمايتي
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_PROTECTION
+    )
+    async def my_protection(
+        self,
+        ctx
+    ):
+
+        if ctx.guild is None:
+            return
+
+        if not await self.has_command_permission(
+            ctx.author,
+            COMMAND_PROTECTION,
+            ctx.channel.id
+        ):
+
+            return
+
+        gold = await self.get_balance(
+            ctx.guild.id,
+            ctx.author.id
+        )
+
+        protection = await self.get_protection(
+            ctx.guild.id,
+            ctx.author.id
+        )
+
+        embed = discord.Embed(
+            title="🛡️ الحماية",
+            description=(
+                "احمِ نفسك من لغم واحد عند استخدام اللعبة.\n\n"
+                f"🛡️ الحماية الحالية: **{protection}/{MAX_PROTECTIONS}**\n"
+                f"💰 سعر الحماية الواحدة: **{PROTECTION_PRICE:,} ذهب**\n"
+                f"💳 رصيدك الحالي: **{gold:,} ذهب**\n\n"
+                "عند الضغط على لغم، سيتم استهلاك حماية واحدة "
+                "بدلاً من خسارة الذهب."
+            ),
+            color=0x3498DB
+        )
+
+        view = ProtectionView(
+            self,
+            ctx.guild.id,
+            ctx.author.id
+        )
+
+        await ctx.send(
+            embed=embed,
+            view=view
+        )
+
+    # =====================================================
+    # أمر مين-توب
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_TOP
+    )
+    async def mines_top(
+        self,
+        ctx
+    ):
+
+        if ctx.guild is None:
+            return
+
+        if not await self.has_command_permission(
+            ctx.author,
+            COMMAND_TOP,
+            ctx.channel.id
+        ):
+
+            return
+
+        guild_ids = self.guild_id_variants(
+            ctx.guild.id
+        )
+
+        cursor = self.game_data.find(
+            {
+                "guild_id": {
+                    "$in": guild_ids
+                }
+            }
+        ).sort(
+            "gold",
+            -1
+        ).limit(10)
+
+        players = await cursor.to_list(
+            length=10
+        )
+
+        if not players:
+
+            await ctx.send(
+                "❌ لا يوجد لاعبين لديهم رصيد حتى الآن."
+            )
+
+            return
+
+        lines = []
+
+        medals = [
+            "🥇",
+            "🥈",
+            "🥉"
+        ]
+
+        for index, player in enumerate(
+            players,
+            start=1
+        ):
+
+            user_id = player.get(
+                "user_id"
+            )
+
+            try:
+
+                member = ctx.guild.get_member(
+                    int(user_id)
+                )
+
+            except (
+                TypeError,
+                ValueError
+            ):
+
+                member = None
+
+            if member is not None:
+
+                name = member.mention
+
+            else:
+
+                name = f"<@{user_id}>"
+
+            gold = int(
+                player.get(
+                    "gold",
+                    0
+                )
+            )
+
+            if index <= 3:
+
+                position = medals[index - 1]
+
+            else:
+
+                position = f"**{index}.**"
+
+            lines.append(
+                f"{position} {name} — **{gold:,} ذهب**"
+            )
+
+        embed = discord.Embed(
+            title="🏆 مين-توب",
+            description=(
+                "💰 **أغنى اللاعبين في السيرفر**\n\n"
+                + "\n".join(lines)
+            ),
+            color=0xF1C40F
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # أمر بعطيك-ذهب
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_GIVE_GOLD
+    )
+    async def give_gold(
+        self,
+        ctx,
+        member: discord.Member = None,
+        amount: str = None
+    ):
+
+        if ctx.guild is None:
+            return
+
+        if not await self.has_command_permission(
+            ctx.author,
+            COMMAND_GIVE_GOLD,
+            ctx.channel.id
+        ):
+
+            return
+
+        if member is None:
+
+            await ctx.send(
+                "❌ الاستخدام الصحيح:\n"
+                "`بعطيك-ذهب @الشخص 1000`"
+            )
+
+            return
+
+        if member.id == ctx.author.id:
+
+            await ctx.send(
+                "❌ ما تقدر تحول الذهب لنفسك."
+            )
+
+            return
+
+        # =================================================
+        # دعم كلمة كامل
+        # =================================================
+
+        if amount is None:
+
+            await ctx.send(
+                "❌ الاستخدام الصحيح:\n"
+                "`بعطيك-ذهب @الشخص 1000`\n"
+                "أو\n"
+                "`بعطيك-ذهب @الشخص كامل`"
+            )
+
+            return
+
+        if str(amount).strip().lower() == "كامل":
+
+            gold_amount = await self.get_balance(
+                ctx.guild.id,
+                ctx.author.id
+            )
+
+        else:
+
+            gold_amount = self.parse_gold_amount(
+                amount
+            )
+
+        if gold_amount is None:
+
+            await ctx.send(
+                "❌ المبلغ يجب أن يكون رقماً صحيحاً أو `كامل`."
+            )
+
+            return
+
+        if gold_amount <= 0:
+
+            await ctx.send(
+                "❌ يجب أن يكون المبلغ أكبر من صفر."
+            )
+
+            return
+
+        sender_balance = await self.get_balance(
+            ctx.guild.id,
+            ctx.author.id
+        )
+
+        if sender_balance < gold_amount:
+
+            await ctx.send(
+                f"❌ رصيدك غير كافٍ.\n"
+                f"💳 رصيدك الحالي: **{sender_balance:,} ذهب**"
+            )
+
+            return
+
+        # =================================================
+        # خصم من المرسل بشكل ذري
+        # =================================================
+
+        sender_document = await self.game_data.find_one_and_update(
+            {
+                "guild_id": {
+                    "$in": self.guild_id_variants(
+                        ctx.guild.id
+                    )
+                },
+                "user_id": str(
+                    ctx.author.id
+                ),
+                "gold": {
+                    "$gte": gold_amount
+                }
+            },
+            {
+                "$inc": {
+                    "gold": -gold_amount
+                }
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        if sender_document is None:
+
+            await ctx.send(
+                "❌ لم تتم عملية التحويل لأن رصيدك غير كافٍ."
+            )
+
+            return
+
+        new_sender_gold = int(
+            sender_document.get(
+                "gold",
+                0
+            )
+        )
+
+        new_member_gold = await self.change_gold(
+            ctx.guild.id,
+            member.id,
+            gold_amount
+        )
+
+        embed = discord.Embed(
+            title="💰 تم تحويل الذهب",
+            description=(
+                f"👤 المرسل: {ctx.author.mention}\n"
+                f"👤 المستلم: {member.mention}\n\n"
+                f"💰 المبلغ: **{gold_amount:,} ذهب**\n"
+                f"💳 رصيدك الحالي: **{new_sender_gold:,} ذهب**\n"
+                f"💳 رصيد المستلم: **{new_member_gold:,} ذهب**"
+            ),
+            color=0x2ECC71
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # أمر هات-مصروف
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_TAKE_GOLD
+    )
+    async def take_gold(
+        self,
+        ctx,
+        member: discord.Member = None,
+        amount: str = None
+    ):
+
+        if ctx.guild is None:
+            return
+
+        if not await self.has_command_permission(
+            ctx.author,
+            COMMAND_TAKE_GOLD,
+            ctx.channel.id
+        ):
+
+            return
+
+        if member is None:
+
+            await ctx.send(
+                "❌ الاستخدام الصحيح:\n"
+                "`هات-مصروف @الشخص 1000`"
+            )
+
+            return
+
+        if member.id == ctx.author.id:
+
+            await ctx.send(
+                "❌ ما تقدر تسحب الذهب من نفسك."
+            )
+
+            return
+
+        # =================================================
+        # دعم كلمة كامل
+        # =================================================
+
+        if amount is None:
+
+            await ctx.send(
+                "❌ الاستخدام الصحيح:\n"
+                "`هات-مصروف @الشخص 1000`\n"
+                "أو\n"
+                "`هات-مصروف @الشخص كامل`"
+            )
+
+            return
+
+        if str(amount).strip().lower() == "كامل":
+
+            gold_amount = await self.get_balance(
+                ctx.guild.id,
+                member.id
+            )
+
+        else:
+
+            gold_amount = self.parse_gold_amount(
+                amount
+            )
+
+        if gold_amount is None:
+
+            await ctx.send(
+                "❌ المبلغ يجب أن يكون رقماً صحيحاً أو `كامل`."
+            )
+
+            return
+
+        if gold_amount <= 0:
+
+            await ctx.send(
+                "❌ يجب أن يكون المبلغ أكبر من صفر."
+            )
+
+            return
+
+        target_balance = await self.get_balance(
+            ctx.guild.id,
+            member.id
+        )
+
+        if target_balance < gold_amount:
+
+            await ctx.send(
+                f"❌ رصيد {member.mention} غير كافٍ.\n"
+                f"💳 رصيده الحالي: **{target_balance:,} ذهب**"
+            )
+
+            return
+
+        # =================================================
+        # خصم من الشخص بشكل ذري
+        # =================================================
+
+        target_document = await self.game_data.find_one_and_update(
+            {
+                "guild_id": {
+                    "$in": self.guild_id_variants(
+                        ctx.guild.id
+                    )
+                },
+                "user_id": str(
+                    member.id
+                ),
+                "gold": {
+                    "$gte": gold_amount
+                }
+            },
+            {
+                "$inc": {
+                    "gold": -gold_amount
+                }
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        if target_document is None:
+
+            await ctx.send(
+                "❌ لم تتم العملية لأن رصيد الشخص غير كافٍ."
+            )
+
+            return
+
+        new_target_gold = int(
+            target_document.get(
+                "gold",
+                0
+            )
+        )
+
+        new_sender_gold = await self.change_gold(
+            ctx.guild.id,
+            ctx.author.id,
+            gold_amount
+        )
+
+        embed = discord.Embed(
+            title="💸 تم سحب المصروف",
+            description=(
+                f"👤 الشخص: {member.mention}\n"
+                f"👤 المستلم: {ctx.author.mention}\n\n"
+                f"💰 المبلغ المسحوب: **{gold_amount:,} ذهب**\n"
+                f"💳 رصيد الشخص: **{new_target_gold:,} ذهب**\n"
+                f"💳 رصيدك الحالي: **{new_sender_gold:,} ذهب**"
+            ),
+            color=0xE67E22
         )
 
         await ctx.send(
