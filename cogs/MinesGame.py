@@ -42,7 +42,10 @@ LOSS_GOLD = 35
 
 PROTECTION_PRICE = 35
 
-# أقصى عدد مرات شراء الحماية في اللعبة الواحدة
+# أقصى عدد حمايات يمكن أن يمتلكها اللاعب
+MAX_PROTECTIONS = 3
+
+# أقصى عدد مرات شراء في اللعبة الواحدة
 MAX_PROTECTION_PURCHASES_PER_GAME = 3
 
 
@@ -111,7 +114,8 @@ class MinesView(discord.ui.View):
         self,
         cog,
         guild_id,
-        user_id
+        user_id,
+        starting_protections=0
     ):
 
         super().__init__(
@@ -130,16 +134,38 @@ class MinesView(discord.ui.View):
         self.revealed = set()
 
         # =================================================
-        # حماية هذه اللعبة فقط
+        # الحماية
         # =================================================
 
         # عدد مرات شراء الحماية في هذه اللعبة
         self.protection_purchases = 0
 
-        # عدد الحمايات المتبقية للاستخدام في هذه اللعبة
-        self.protections = 0
+        # الحمايات التي دخل بها اللاعب هذه اللعبة
+        # أو اشتراها أثناء اللعبة
+        self.protections = max(
+            0,
+            min(
+                int(starting_protections),
+                MAX_PROTECTIONS
+            )
+        )
 
+        # =================================================
+        # مهم جداً:
+        #
+        # إذا استخدم اللاعب أي حماية في هذه اللعبة
+        # يمنع شراء حماية جديدة حتى تنتهي اللعبة.
+        #
+        # هذا يمنع القلتش:
+        # حماية -> يخسرها -> حمايتي -> شراء جديدة
+        # =================================================
+
+        self.protection_used_this_game = False
+
+        # =================================================
         # الألغام التي تم إنقاذها بالحماية
+        # =================================================
+
         self.protected_mines = set()
 
         # =================================================
@@ -175,7 +201,7 @@ class MinesView(discord.ui.View):
 
             button = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
-                label="▪️",
+                label="▪",
                 row=index // 5,
                 custom_id=f"mine_{index}"
             )
@@ -203,12 +229,26 @@ class MinesView(discord.ui.View):
 
     def can_buy_protection(self):
 
-        return (
-            not self.game_over
-            and
+        if self.game_over:
+            return False
+
+        # إذا تم استخدام حماية، لا يوجد شراء إضافي
+        # حتى تنتهي اللعبة.
+        if self.protection_used_this_game:
+            return False
+
+        # لا يمكن تجاوز 3 مشتريات في الجولة
+        if (
             self.protection_purchases
-            < MAX_PROTECTION_PURCHASES_PER_GAME
-        )
+            >= MAX_PROTECTION_PURCHASES_PER_GAME
+        ):
+            return False
+
+        # لا يمكن تجاوز 3 حمايات محفوظة
+        if self.protections >= MAX_PROTECTIONS:
+            return False
+
+        return True
 
     # =====================================================
     # شراء حماية لهذه اللعبة
@@ -224,13 +264,38 @@ class MinesView(discord.ui.View):
                     "status": "game_over"
                 }
 
+            # =================================================
+            # إذا استخدم حماية من قبل
+            # =================================================
+
+            if self.protection_used_this_game:
+
+                return {
+                    "status": "used"
+                }
+
+            # =================================================
+            # عدد المشتريات
+            # =================================================
+
             if (
                 self.protection_purchases
                 >= MAX_PROTECTION_PURCHASES_PER_GAME
             ):
 
                 return {
-                    "status": "max"
+                    "status": "max_purchases"
+                }
+
+            # =================================================
+            # الحد الأقصى للحمايات
+            # =================================================
+
+            if self.protections >= MAX_PROTECTIONS:
+
+                return {
+                    "status": "max_protections",
+                    "protections": self.protections
                 }
 
             # =================================================
@@ -250,7 +315,7 @@ class MinesView(discord.ui.View):
                 }
 
             # =================================================
-            # خصم السعر بشكل ذري
+            # خصم السعر وإضافة الحماية بشكل ذري
             # =================================================
 
             guild_ids = self.cog.guild_id_variants(
@@ -267,11 +332,15 @@ class MinesView(discord.ui.View):
                     ),
                     "gold": {
                         "$gte": PROTECTION_PRICE
+                    },
+                    "protection": {
+                        "$lt": MAX_PROTECTIONS
                     }
                 },
                 {
                     "$inc": {
-                        "gold": -PROTECTION_PRICE
+                        "gold": -PROTECTION_PRICE,
+                        "protection": 1
                     }
                 },
                 return_document=ReturnDocument.AFTER
@@ -284,6 +353,25 @@ class MinesView(discord.ui.View):
                     self.user_id
                 )
 
+                current_data = await self.cog.get_user_data(
+                    self.guild_id,
+                    self.user_id
+                )
+
+                current_protection = int(
+                    current_data.get(
+                        "protection",
+                        0
+                    )
+                )
+
+                if current_protection >= MAX_PROTECTIONS:
+
+                    return {
+                        "status": "max_protections",
+                        "protections": current_protection
+                    }
+
                 return {
                     "status": "insufficient",
                     "gold": current_gold
@@ -295,6 +383,12 @@ class MinesView(discord.ui.View):
 
             self.protection_purchases += 1
             self.protections += 1
+
+            # حماية إضافية من تجاوز الحد
+            self.protections = min(
+                self.protections,
+                MAX_PROTECTIONS
+            )
 
             new_gold = int(
                 document.get(
@@ -319,9 +413,52 @@ class MinesView(discord.ui.View):
         async with self.protection_lock:
 
             if self.protections <= 0:
+
                 return False
 
-            self.protections -= 1
+            guild_ids = self.cog.guild_id_variants(
+                self.guild_id
+            )
+
+            document = await self.cog.game_data.find_one_and_update(
+                {
+                    "guild_id": {
+                        "$in": guild_ids
+                    },
+                    "user_id": str(
+                        self.user_id
+                    ),
+                    "protection": {
+                        "$gt": 0
+                    }
+                },
+                {
+                    "$inc": {
+                        "protection": -1
+                    }
+                },
+                return_document=ReturnDocument.AFTER
+            )
+
+            if document is None:
+
+                self.protections = 0
+
+                return False
+
+            self.protections = max(
+                0,
+                self.protections - 1
+            )
+
+            # =================================================
+            # مهم جداً
+            #
+            # بمجرد استخدام حماية واحدة:
+            # لا يمكن شراء أي حماية أخرى في نفس اللعبة.
+            # =================================================
+
+            self.protection_used_this_game = True
 
             return True
 
@@ -548,7 +685,7 @@ class MinesView(discord.ui.View):
                         discord.ButtonStyle.success
                     )
 
-                    # رمز صغير قريب من حجم الأرقام
+                    # مربع صغير حتى لا يكبر في الشات
                     child.label = "■"
 
                 else:
@@ -571,7 +708,7 @@ class MinesView(discord.ui.View):
                     discord.ButtonStyle.secondary
                 )
 
-                child.label = "▪️"
+                child.label = "▪"
 
     # =====================================================
     # إظهار الألغام عند الخسارة
@@ -642,7 +779,9 @@ class MinesView(discord.ui.View):
                 "⏰ **انتهى الوقت!**\n\n"
                 "انتهت اللعبة بسبب انتهاء الوقت.\n"
                 "لم يتم إضافة أو خصم أي ذهب.\n\n"
-                "🛡️ الحمايات المتبقية انتهت مع اللعبة."
+                f"🛡️ الحمايات المتبقية: "
+                f"**{self.protections}**\n"
+                "💾 الحمايات المتبقية محفوظة للجولة القادمة."
             ),
             color=0x808080
         )
@@ -779,10 +918,6 @@ class MinesView(discord.ui.View):
 
                 if protection_used:
 
-                    # مهم:
-                    # لا نضيف اللغم إلى revealed
-                    # لأنه ليس خانة آمنة.
-
                     self.protected_mines.add(
                         index
                     )
@@ -803,8 +938,9 @@ class MinesView(discord.ui.View):
                             f"{protection_message}\n\n"
                             "💣 ضغطت على لغم، لكن الحماية أنقذتك.\n"
                             "🛡️ تم استهلاك حماية واحدة.\n\n"
-                            f"🛡️ الحماية المتبقية في هذه اللعبة: "
-                            f"**{remaining_protection}**\n\n"
+                            f"🛡️ الحماية المتبقية: "
+                            f"**{remaining_protection}**\n"
+                            "🔒 تم إيقاف شراء الحماية لباقي هذه اللعبة.\n\n"
                             "🎮 أكمل اللعبة!"
                         ),
                         color=0x2ECC71
@@ -844,7 +980,9 @@ class MinesView(discord.ui.View):
                         f"💰 الذهب المخصوم: "
                         f"**-{LOSS_GOLD:,}**\n"
                         f"💳 رصيدك الحالي: "
-                        f"**{new_gold:,} ذهب**"
+                        f"**{new_gold:,} ذهب**\n\n"
+                        f"🛡️ الحماية المتبقية المحفوظة: "
+                        f"**{self.protections}**"
                     ),
                     color=0xE74C3C
                 )
@@ -917,7 +1055,10 @@ class MinesView(discord.ui.View):
                         f"💰 الجائزة: "
                         f"**+{WIN_GOLD:,} ذهب**\n"
                         f"💳 رصيدك الحالي: "
-                        f"**{new_gold:,} ذهب**"
+                        f"**{new_gold:,} ذهب**\n\n"
+                        f"🛡️ الحماية المتبقية: "
+                        f"**{self.protections}**\n"
+                        "💾 الحمايات المتبقية محفوظة للجولة القادمة."
                     ),
                     color=0x2ECC71
                 )
@@ -1004,12 +1145,7 @@ class ProtectionView(discord.ui.View):
 
     def update_button(self):
 
-        if (
-            self.game.game_over
-            or
-            self.game.protection_purchases
-            >= MAX_PROTECTION_PURCHASES_PER_GAME
-        ):
+        if not self.game.can_buy_protection():
 
             self.buy_button.disabled = True
 
@@ -1055,7 +1191,7 @@ class ProtectionView(discord.ui.View):
         try:
 
             # =================================================
-            # التأكد أن اللعبة ما زالت موجودة
+            # التأكد أن هذه اللعبة ما زالت الحالية
             # =================================================
 
             active_key = (
@@ -1069,8 +1205,11 @@ class ProtectionView(discord.ui.View):
 
             if active_game is not self.game:
 
+                self.buy_button.disabled = True
+
                 await interaction.response.send_message(
-                    "❌ هذه اللعبة انتهت بالفعل.",
+                    "❌ هذه اللعبة انتهت بالفعل.\n"
+                    "🛡️ يمكنك الشراء فقط أثناء لعبة جديدة.",
                     ephemeral=True
                 )
 
@@ -1078,8 +1217,27 @@ class ProtectionView(discord.ui.View):
 
             if self.game.game_over:
 
+                self.buy_button.disabled = True
+
                 await interaction.response.send_message(
                     "❌ انتهت اللعبة بالفعل.",
+                    ephemeral=True
+                )
+
+                return
+
+            # =================================================
+            # إذا تم استخدام حماية
+            # =================================================
+
+            if self.game.protection_used_this_game:
+
+                self.update_button()
+
+                await interaction.response.send_message(
+                    "🔒 لا يمكنك شراء حماية جديدة بعد استخدام حماية "
+                    "في نفس اللعبة.\n"
+                    "انتظر حتى تنتهي اللعبة وابدأ جولة جديدة.",
                     ephemeral=True
                 )
 
@@ -1096,17 +1254,49 @@ class ProtectionView(discord.ui.View):
             )
 
             # =================================================
-            # الحد الأقصى
+            # تم استخدام حماية مسبقاً
             # =================================================
 
-            if status == "max":
+            if status == "used":
 
                 self.update_button()
 
                 await interaction.response.send_message(
-                    f"🛡️ وصلت للحد الأقصى في هذه اللعبة: "
+                    "🔒 استخدمت حماية في هذه اللعبة، "
+                    "لذلك لا يمكنك شراء حماية إضافية حتى تنتهي الجولة.",
+                    ephemeral=True
+                )
+
+                return
+
+            # =================================================
+            # الحد الأقصى للمشتريات
+            # =================================================
+
+            if status == "max_purchases":
+
+                self.update_button()
+
+                await interaction.response.send_message(
+                    f"🛡️ وصلت للحد الأقصى للشراء في هذه اللعبة: "
                     f"**{MAX_PROTECTION_PURCHASES_PER_GAME}/"
-                    f"{MAX_PROTECTION_PURCHASES_PER_GAME}** مشتريات.",
+                    f"{MAX_PROTECTION_PURCHASES_PER_GAME}**.",
+                    ephemeral=True
+                )
+
+                return
+
+            # =================================================
+            # الحد الأقصى للحمايات
+            # =================================================
+
+            if status == "max_protections":
+
+                self.update_button()
+
+                await interaction.response.send_message(
+                    f"🛡️ عندك بالفعل الحد الأقصى: "
+                    f"**{MAX_PROTECTIONS} حمايات**.",
                     ephemeral=True
                 )
 
@@ -1117,6 +1307,8 @@ class ProtectionView(discord.ui.View):
             # =================================================
 
             if status == "game_over":
+
+                self.update_button()
 
                 await interaction.response.send_message(
                     "❌ انتهت اللعبة بالفعل.",
@@ -1171,7 +1363,7 @@ class ProtectionView(discord.ui.View):
                 description = (
                     "✅ تمت عملية الشراء بنجاح!\n\n"
                     f"🛡️ الحماية المتوفرة الآن: "
-                    f"**{protections}**\n"
+                    f"**{protections}/{MAX_PROTECTIONS}**\n"
                     f"🛒 مرات الشراء في هذه اللعبة: "
                     f"**{purchases}/"
                     f"{MAX_PROTECTION_PURCHASES_PER_GAME}**\n"
@@ -1188,7 +1380,14 @@ class ProtectionView(discord.ui.View):
 
                     description += (
                         "\n\n"
-                        "🔒 وصلت للحد الأقصى لهذه اللعبة."
+                        "🔒 وصلت للحد الأقصى للشراء في هذه اللعبة."
+                    )
+
+                elif protections >= MAX_PROTECTIONS:
+
+                    description += (
+                        "\n\n"
+                        "🛡️ وصلت للحد الأقصى من الحمايات."
                     )
 
                 embed = discord.Embed(
@@ -1321,10 +1520,6 @@ class MinesGame(commands.Cog):
             guild_id
         )
 
-        # =================================================
-        # النظام الجديد
-        # =================================================
-
         setting = await self.website_command_settings.find_one(
             {
                 "guild_id": {
@@ -1338,10 +1533,6 @@ class MinesGame(commands.Cog):
 
         if setting is not None:
             return setting
-
-        # =================================================
-        # دعم النظام القديم
-        # =================================================
 
         setting = await self.website_command_settings.find_one(
             {
@@ -1379,17 +1570,9 @@ class MinesGame(commands.Cog):
             command_name
         )
 
-        # =================================================
-        # لا يوجد إعداد للموقع
-        # =================================================
-
         if setting is None:
 
             return True
-
-        # =================================================
-        # الأمر معطل
-        # =================================================
 
         if not setting.get(
             "enabled",
@@ -1397,10 +1580,6 @@ class MinesGame(commands.Cog):
         ):
 
             return False
-
-        # =================================================
-        # الرتب
-        # =================================================
 
         role_ids = setting.get(
             "role_ids",
@@ -1424,10 +1603,6 @@ class MinesGame(commands.Cog):
             ):
 
                 return False
-
-        # =================================================
-        # الرومات
-        # =================================================
 
         channel_ids = setting.get(
             "channel_ids",
@@ -1535,6 +1710,51 @@ class MinesGame(commands.Cog):
 
         if document is not None:
 
+            # =================================================
+            # ترقية البيانات القديمة
+            # =================================================
+
+            if "protection" not in document:
+
+                await self.game_data.update_one(
+                    {
+                        "_id": document["_id"]
+                    },
+                    {
+                        "$set": {
+                            "protection": 0
+                        }
+                    }
+                )
+
+                document["protection"] = 0
+
+            # =================================================
+            # حماية من أي قيمة أكبر من الحد
+            # =================================================
+
+            current_protection = int(
+                document.get(
+                    "protection",
+                    0
+                )
+            )
+
+            if current_protection > MAX_PROTECTIONS:
+
+                await self.game_data.update_one(
+                    {
+                        "_id": document["_id"]
+                    },
+                    {
+                        "$set": {
+                            "protection": MAX_PROTECTIONS
+                        }
+                    }
+                )
+
+                document["protection"] = MAX_PROTECTIONS
+
             return document
 
         # =================================================
@@ -1549,6 +1769,7 @@ class MinesGame(commands.Cog):
                 user_id
             ),
             "gold": STARTING_GOLD,
+            "protection": 0,
             "last_game_at": None,
             "last_golden_at": None,
             "created_at": datetime.now(
@@ -1875,9 +2096,28 @@ class MinesGame(commands.Cog):
 
             return
 
-        await self.get_user_data(
+        # =================================================
+        # جلب بيانات اللاعب والحماية المحفوظة
+        # =================================================
+
+        user_data = await self.get_user_data(
             guild_id,
             user_id
+        )
+
+        starting_protections = int(
+            user_data.get(
+                "protection",
+                0
+            )
+        )
+
+        starting_protections = min(
+            max(
+                starting_protections,
+                0
+            ),
+            MAX_PROTECTIONS
         )
 
         await self.set_last_game_time(
@@ -1888,7 +2128,8 @@ class MinesGame(commands.Cog):
         view = MinesView(
             self,
             guild_id,
-            user_id
+            user_id,
+            starting_protections
         )
 
         self.active_games[
@@ -1913,7 +2154,12 @@ class MinesGame(commands.Cog):
                 f"يمكنك شراء الحماية من أمر **{COMMAND_PROTECTION}** "
                 f"أثناء اللعبة بسعر **{PROTECTION_PRICE:,} ذهب**.\n"
                 f"الحد الأقصى: **{MAX_PROTECTION_PURCHASES_PER_GAME} "
-                "مشتريات لكل لعبة**.\n\n"
+                "مشتريات لكل لعبة**.\n"
+                "⚠️ إذا استخدمت أي حماية، يتوقف شراء الحماية "
+                "حتى تنتهي اللعبة.\n\n"
+
+                f"🛡️ **حمايتك الحالية:** "
+                f"**{starting_protections}/{MAX_PROTECTIONS}**\n\n"
 
                 "💰 **المكافآت**\n"
                 f"🏆 الفوز: **+{WIN_GOLD:,} ذهب**\n"
@@ -1965,9 +2211,23 @@ class MinesGame(commands.Cog):
 
             return
 
-        gold = await self.get_balance(
+        data = await self.get_user_data(
             ctx.guild.id,
             ctx.author.id
+        )
+
+        gold = int(
+            data.get(
+                "gold",
+                STARTING_GOLD
+            )
+        )
+
+        saved_protection = int(
+            data.get(
+                "protection",
+                0
+            )
         )
 
         active_game = self.active_games.get(
@@ -1980,14 +2240,24 @@ class MinesGame(commands.Cog):
         if active_game is not None and not active_game.game_over:
 
             protection_text = (
-                f"{active_game.protections} حماية "
-                f"(تم شراء {active_game.protection_purchases}/"
+                f"{active_game.protections}/"
+                f"{MAX_PROTECTIONS} حماية "
+                f"(شراء {active_game.protection_purchases}/"
                 f"{MAX_PROTECTION_PURCHASES_PER_GAME})"
             )
 
+            if active_game.protection_used_this_game:
+
+                protection_text += (
+                    " — 🔒 الشراء متوقف"
+                )
+
         else:
 
-            protection_text = "لا توجد حماية — لا توجد لعبة نشطة"
+            protection_text = (
+                f"{saved_protection}/"
+                f"{MAX_PROTECTIONS} حماية محفوظة"
+            )
 
         embed = discord.Embed(
             title="💰 محفظتي",
@@ -2132,9 +2402,24 @@ class MinesGame(commands.Cog):
 
         if active_game is None or active_game.game_over:
 
+            data = await self.get_user_data(
+                ctx.guild.id,
+                ctx.author.id
+            )
+
+            saved_protection = int(
+                data.get(
+                    "protection",
+                    0
+                )
+            )
+
             await ctx.send(
                 f"{ctx.author.mention}\n"
-                "❌ لازم تبدأ لعبة **الغام** أولاً حتى تقدر تشتري حماية."
+                "❌ ما عندك لعبة نشطة حالياً.\n"
+                f"🛡️ الحمايات المحفوظة عندك: "
+                f"**{saved_protection}/{MAX_PROTECTIONS}**\n"
+                "ابدأ لعبة **الغام** أولاً حتى تقدر تشتري حماية."
             )
 
             return
@@ -2152,23 +2437,46 @@ class MinesGame(commands.Cog):
             active_game.protection_purchases
         )
 
-        remaining_purchases = (
+        remaining_purchases = max(
+            0,
             MAX_PROTECTION_PURCHASES_PER_GAME
             - purchases
         )
+
+        if active_game.protection_used_this_game:
+
+            purchase_status = (
+                "🔒 متوقف — تم استخدام حماية في هذه اللعبة"
+            )
+
+        elif protection >= MAX_PROTECTIONS:
+
+            purchase_status = (
+                "🛡️ مكتمل — وصلت للحد الأقصى"
+            )
+
+        else:
+
+            purchase_status = (
+                f"🟢 متاح — {remaining_purchases} شراء متبقي"
+            )
 
         embed = discord.Embed(
             title="🛡️ الحماية",
             description=(
                 "احمِ نفسك من الألغام أثناء اللعبة.\n\n"
-                f"🛡️ الحماية الحالية: **{protection}**\n"
-                f"🛒 مرات الشراء: **{purchases}/"
+                f"🛡️ الحماية الحالية: "
+                f"**{protection}/{MAX_PROTECTIONS}**\n"
+                f"🛒 مرات الشراء: "
+                f"**{purchases}/"
                 f"{MAX_PROTECTION_PURCHASES_PER_GAME}**\n"
-                f"🔓 المشتريات المتبقية: **{remaining_purchases}**\n"
-                f"💰 سعر الحماية الواحدة: **{PROTECTION_PRICE:,} ذهب**\n"
+                f"📌 حالة الشراء: **{purchase_status}**\n"
+                f"💰 سعر الحماية الواحدة: "
+                f"**{PROTECTION_PRICE:,} ذهب**\n"
                 f"💳 رصيدك الحالي: **{gold:,} ذهب**\n\n"
-                "كل حماية تنقذك من لغم واحد فقط.\n"
-                "بعد استخدام الحماية على لغم، تستهلك وتكمل اللعبة."
+                "⚠️ إذا استخدمت أي حماية، لن تستطيع شراء "
+                "حماية جديدة حتى تنتهي هذه اللعبة.\n"
+                "💾 الحمايات التي لا تستخدمها تبقى معك للجولة القادمة."
             ),
             color=0x3498DB
         )
