@@ -30,9 +30,12 @@ welcome_settings_collection = db["welcome_settings"]
 IMAGE_WIDTH = 1200
 IMAGE_HEIGHT = 500
 
-BG_1 = (8, 12, 35)
-BG_2 = (24, 35, 85)
-BG_3 = (67, 30, 125)
+# تدرج متعدد الألوان
+BG_1 = (8, 12, 35)       # أزرق داكن
+BG_2 = (35, 35, 105)     # أزرق بنفسجي
+BG_3 = (95, 35, 145)     # بنفسجي
+BG_4 = (165, 45, 125)     # وردي بنفسجي
+BG_5 = (45, 75, 160)      # أزرق
 
 WHITE = (255, 255, 255)
 GOLD = (255, 210, 65)
@@ -51,6 +54,50 @@ class WelcomeCog(commands.Cog):
         self.bot = bot
 
     # =====================================================
+    # حساب عمر الحساب
+    # =====================================================
+
+    def get_account_age(self, member):
+
+        try:
+
+            created_at = member.created_at
+            now = discord.utils.utcnow()
+
+            total_days = (
+                now - created_at
+            ).days
+
+            years = total_days // 365
+            remaining_days = total_days % 365
+
+            months = remaining_days // 30
+            days = remaining_days % 30
+
+            if years > 0:
+
+                if months > 0:
+                    return f"{years} سنة و {months} شهر"
+
+                return f"{years} سنة"
+
+            if months > 0:
+
+                if days > 0:
+                    return f"{months} شهر و {days} يوم"
+
+                return f"{months} شهر"
+
+            if days > 0:
+                return f"{days} يوم"
+
+            return "أقل من يوم"
+
+        except Exception:
+
+            return "غير معروف"
+
+    # =====================================================
     # استبدال المتغيرات
     # =====================================================
 
@@ -67,9 +114,11 @@ class WelcomeCog(commands.Cog):
             "{server}": member.guild.name,
             "{member_count}": str(member.guild.member_count),
             "{user_id}": str(member.id),
+            "{account_age}": self.get_account_age(member),
         }
 
         for key, value in replacements.items():
+
             text = text.replace(
                 key,
                 str(value)
@@ -84,6 +133,7 @@ class WelcomeCog(commands.Cog):
     def get_font(self, size, bold=False):
 
         if bold:
+
             fonts = [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
@@ -91,6 +141,7 @@ class WelcomeCog(commands.Cog):
             ]
 
         else:
+
             fonts = [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
@@ -103,18 +154,20 @@ class WelcomeCog(commands.Cog):
                 continue
 
             try:
+
                 return ImageFont.truetype(
                     font_path,
                     size
                 )
 
             except Exception:
+
                 continue
 
         return ImageFont.load_default()
 
     # =====================================================
-    # الخلفية المتدرجة
+    # الخلفية المتدرجة متعددة الألوان
     # =====================================================
 
     def create_background(self):
@@ -129,65 +182,59 @@ class WelcomeCog(commands.Cog):
 
         pixels = image.load()
 
+        gradient_colors = [
+            BG_1,
+            BG_2,
+            BG_3,
+            BG_4,
+            BG_5
+        ]
+
+        segments = len(
+            gradient_colors
+        ) - 1
+
         for x in range(IMAGE_WIDTH):
 
             ratio = x / (
                 IMAGE_WIDTH - 1
             )
 
-            if ratio < 0.5:
+            position = ratio * segments
 
-                ratio2 = ratio * 2
+            index = int(position)
 
-                r = int(
-                    BG_1[0]
-                    +
-                    (BG_2[0] - BG_1[0])
-                    * ratio2
-                )
+            if index >= segments:
+                index = segments - 1
 
-                g = int(
-                    BG_1[1]
-                    +
-                    (BG_2[1] - BG_1[1])
-                    * ratio2
-                )
+            local_ratio = position - index
 
-                b = int(
-                    BG_1[2]
-                    +
-                    (BG_2[2] - BG_1[2])
-                    * ratio2
-                )
+            color_a = gradient_colors[index]
+            color_b = gradient_colors[index + 1]
 
-            else:
+            r = int(
+                color_a[0]
+                +
+                (color_b[0] - color_a[0])
+                * local_ratio
+            )
 
-                ratio2 = (
-                    ratio - 0.5
-                ) * 2
+            g = int(
+                color_a[1]
+                +
+                (color_b[1] - color_a[1])
+                * local_ratio
+            )
 
-                r = int(
-                    BG_2[0]
-                    +
-                    (BG_3[0] - BG_2[0])
-                    * ratio2
-                )
-
-                g = int(
-                    BG_2[1]
-                    +
-                    (BG_3[1] - BG_2[1])
-                    * ratio2
-                )
-
-                b = int(
-                    BG_2[2]
-                    +
-                    (BG_3[2] - BG_2[2])
-                    * ratio2
-                )
+            b = int(
+                color_a[2]
+                +
+                (color_b[2] - color_a[2])
+                * local_ratio
+            )
 
             for y in range(IMAGE_HEIGHT):
+
                 pixels[x, y] = (
                     r,
                     g,
@@ -611,8 +658,9 @@ class WelcomeCog(commands.Cog):
             image
         )
 
+        # تكبير كلمة WELCOME
         font = self.get_font(
-            62,
+            78,
             bold=True
         )
 
@@ -636,12 +684,12 @@ class WelcomeCog(commands.Cog):
             text_width
         ) // 2
 
-        y = 350
+        y = 345
 
         draw.text(
             (
-                x + 4,
-                y + 6
+                x + 5,
+                y + 7
             ),
             text,
             font=font,
@@ -703,7 +751,7 @@ class WelcomeCog(commands.Cog):
 
         line_width = min(
             text_width + 30,
-            430
+            500
         )
 
         line_x1 = (
@@ -894,6 +942,22 @@ class WelcomeCog(commands.Cog):
                 )
             ),
             timestamp=discord.utils.utcnow()
+        )
+
+        # =================================================
+        # معلومات العضو الجديدة
+        # =================================================
+
+        embed.add_field(
+            name="👥 أعضاء السيرفر",
+            value=f"**{member.guild.member_count:,}** عضو",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📅 عمر الحساب",
+            value=f"**{self.get_account_age(member)}**",
+            inline=True
         )
 
         if settings.get(
