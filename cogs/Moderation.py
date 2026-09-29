@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 from datetime import timedelta
 
 import discord
@@ -74,6 +75,15 @@ COMMAND_WARNS = "تحذيرات"
 COMMAND_CLEAR_WARNS = "مسح-تحذيرات"
 COMMAND_MUTES = "اسكاتات"
 COMMAND_CLEAR = "مسح"
+
+# =========================================================
+# أوامر قفل / فتح / اخفاء / اظهار
+# =========================================================
+
+COMMAND_LOCK = "قفل"
+COMMAND_UNLOCK = "فتح"
+COMMAND_HIDE = "اخفاء"
+COMMAND_SHOW = "اظهار"
 
 
 # =========================================================
@@ -239,6 +249,191 @@ async def website_permission_allowed(
 
 
 # =========================================================
+# جلب رتب الموقع الخاصة بأمر معين
+# =========================================================
+
+async def get_website_role_ids(
+    guild_id,
+    command_name
+):
+
+    setting = await get_command_setting(
+        guild_id,
+        command_name
+    )
+
+    if not setting:
+        return []
+
+    if not setting.get(
+        "enabled",
+        False
+    ):
+        return []
+
+    role_ids = setting.get(
+        "role_ids",
+        []
+    )
+
+    if not role_ids:
+        return []
+
+    result = set()
+
+    for role_id in role_ids:
+
+        try:
+
+            result.add(
+                int(role_id)
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
+
+            pass
+
+    return result
+
+
+# =========================================================
+# تطبيق قفل الروم
+# =========================================================
+
+async def lock_channel(
+    channel: discord.abc.GuildChannel,
+    allowed_role_ids
+):
+
+    guild = channel.guild
+
+    # =====================================================
+    # قفل @everyone
+    # =====================================================
+
+    await channel.set_permissions(
+        guild.default_role,
+        send_messages=False,
+        reason="قفل الروم"
+    )
+
+    # =====================================================
+    # السماح للرتب المحددة من الموقع
+    # =====================================================
+
+    for role_id in allowed_role_ids:
+
+        role = guild.get_role(
+            role_id
+        )
+
+        if role is None:
+            continue
+
+        try:
+
+            await channel.set_permissions(
+                role,
+                send_messages=True,
+                reason="السماح لرتبة محددة بعد قفل الروم"
+            )
+
+        except (
+            discord.Forbidden,
+            discord.HTTPException
+        ):
+
+            pass
+
+
+# =========================================================
+# فتح الروم
+# =========================================================
+
+async def unlock_channel(
+    channel: discord.abc.GuildChannel
+):
+
+    guild = channel.guild
+
+    await channel.set_permissions(
+        guild.default_role,
+        send_messages=True,
+        reason="فتح الروم"
+    )
+
+
+# =========================================================
+# إخفاء الروم
+# =========================================================
+
+async def hide_channel(
+    channel: discord.abc.GuildChannel,
+    allowed_role_ids
+):
+
+    guild = channel.guild
+
+    # =====================================================
+    # إخفاء عن @everyone
+    # =====================================================
+
+    await channel.set_permissions(
+        guild.default_role,
+        view_channel=False,
+        reason="إخفاء الروم"
+    )
+
+    # =====================================================
+    # السماح للرتب المحددة من الموقع بالرؤية
+    # =====================================================
+
+    for role_id in allowed_role_ids:
+
+        role = guild.get_role(
+            role_id
+        )
+
+        if role is None:
+            continue
+
+        try:
+
+            await channel.set_permissions(
+                role,
+                view_channel=True,
+                reason="السماح لرتبة محددة برؤية الروم"
+            )
+
+        except (
+            discord.Forbidden,
+            discord.HTTPException
+        ):
+
+            pass
+
+
+# =========================================================
+# إظهار الروم
+# =========================================================
+
+async def show_channel(
+    channel: discord.abc.GuildChannel
+):
+
+    guild = channel.guild
+
+    await channel.set_permissions(
+        guild.default_role,
+        view_channel=True,
+        reason="إظهار الروم"
+    )
+
+
+# =========================================================
 # الأسباب
 # =========================================================
 
@@ -338,10 +533,6 @@ def parse_duration(value: str):
 
     # =====================================================
     # المدة المركبة
-    # مثال:
-    # 5m20s
-    # 1h30m
-    # 2d5h20m10s
     # =====================================================
 
     pattern = re.compile(
@@ -360,7 +551,6 @@ def parse_duration(value: str):
     if not matches:
         return None
 
-    # يجب أن يغطي الـ regex كامل النص
     rebuilt = "".join(
         match.group(0)
         for match in matches
@@ -1443,10 +1633,6 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # =================================================
-        # حفظ الإسكات في MongoDB
-        # =================================================
-
         save_mute(
             guild_id=interaction.guild.id,
             user_id=target.id,
@@ -1460,6 +1646,266 @@ class ModerationCog(commands.Cog):
             f"**المدة:** {format_duration(duration)}\n"
             f"**السبب:** {reason}",
             ephemeral=False
+        )
+
+    # =====================================================
+    # قفل
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_LOCK
+    )
+    async def lock_command(
+        self,
+        ctx
+    ):
+
+        if not await website_permission_allowed(
+            ctx.author,
+            COMMAND_LOCK,
+            ctx.channel.id
+        ):
+
+            return
+
+        if not ctx.guild:
+
+            return
+
+        permissions = ctx.channel.permissions_for(
+            ctx.guild.me
+        )
+
+        if not permissions.manage_channels:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
+            )
+
+            return
+
+        try:
+
+            allowed_role_ids = await get_website_role_ids(
+                ctx.guild.id,
+                COMMAND_LOCK
+            )
+
+            await lock_channel(
+                ctx.channel,
+                allowed_role_ids
+            )
+
+        except discord.Forbidden:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
+            )
+
+            return
+
+        except discord.HTTPException:
+
+            await ctx.send(
+                "❌ حصل خطأ أثناء قفل الروم."
+            )
+
+            return
+
+        await ctx.send(
+            "🔒 تم قفل الروم."
+        )
+
+    # =====================================================
+    # فتح
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_UNLOCK
+    )
+    async def unlock_command(
+        self,
+        ctx
+    ):
+
+        if not await website_permission_allowed(
+            ctx.author,
+            COMMAND_UNLOCK,
+            ctx.channel.id
+        ):
+
+            return
+
+        if not ctx.guild:
+
+            return
+
+        permissions = ctx.channel.permissions_for(
+            ctx.guild.me
+        )
+
+        if not permissions.manage_channels:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
+            )
+
+            return
+
+        try:
+
+            await unlock_channel(
+                ctx.channel
+            )
+
+        except discord.Forbidden:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
+            )
+
+            return
+
+        except discord.HTTPException:
+
+            await ctx.send(
+                "❌ حصل خطأ أثناء فتح الروم."
+            )
+
+            return
+
+        await ctx.send(
+            "🔓 تم فتح الروم للجميع."
+        )
+
+    # =====================================================
+    # اخفاء
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_HIDE
+    )
+    async def hide_command(
+        self,
+        ctx
+    ):
+
+        if not await website_permission_allowed(
+            ctx.author,
+            COMMAND_HIDE,
+            ctx.channel.id
+        ):
+
+            return
+
+        if not ctx.guild:
+
+            return
+
+        permissions = ctx.channel.permissions_for(
+            ctx.guild.me
+        )
+
+        if not permissions.manage_channels:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
+            )
+
+            return
+
+        try:
+
+            allowed_role_ids = await get_website_role_ids(
+                ctx.guild.id,
+                COMMAND_HIDE
+            )
+
+            await hide_channel(
+                ctx.channel,
+                allowed_role_ids
+            )
+
+        except discord.Forbidden:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
+            )
+
+            return
+
+        except discord.HTTPException:
+
+            await ctx.send(
+                "❌ حصل خطأ أثناء إخفاء الروم."
+            )
+
+            return
+
+        await ctx.send(
+            "👻 تم إخفاء الروم."
+        )
+
+    # =====================================================
+    # اظهار
+    # =====================================================
+
+    @commands.command(
+        name=COMMAND_SHOW
+    )
+    async def show_command(
+        self,
+        ctx
+    ):
+
+        if not await website_permission_allowed(
+            ctx.author,
+            COMMAND_SHOW,
+            ctx.channel.id
+        ):
+
+            return
+
+        if not ctx.guild:
+
+            return
+
+        permissions = ctx.channel.permissions_for(
+            ctx.guild.me
+        )
+
+        if not permissions.manage_channels:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
+            )
+
+            return
+
+        try:
+
+            await show_channel(
+                ctx.channel
+            )
+
+        except discord.Forbidden:
+
+            await ctx.send(
+                "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
+            )
+
+            return
+
+        except discord.HTTPException:
+
+            await ctx.send(
+                "❌ حصل خطأ أثناء إظهار الروم."
+            )
+
+            return
+
+        await ctx.send(
+            "👁️ تم إظهار الروم للجميع."
         )
 
     # =====================================================
@@ -1506,10 +1952,6 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # =================================================
-        # إذا كتب مدة
-        # =================================================
-
         if duration_text:
 
             duration = parse_duration(
@@ -1555,10 +1997,6 @@ class ModerationCog(commands.Cog):
 
                 return
 
-            # =================================================
-            # حفظ الإسكات
-            # =================================================
-
             save_mute(
                 guild_id=ctx.guild.id,
                 user_id=member.id,
@@ -1574,10 +2012,6 @@ class ModerationCog(commands.Cog):
             )
 
             return
-
-        # =================================================
-        # بدون مدة → الأسباب
-        # =================================================
 
         await ctx.send(
             f"🔇 اختر سبب إسكات {member.mention}:",
@@ -2090,10 +2524,6 @@ class ModerationCog(commands.Cog):
                 view=view
             )
 
-        # =================================================
-        # ملخص
-        # =================================================
-
         if len(warnings) > 10:
 
             await ctx.send(
@@ -2150,10 +2580,6 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # =================================================
-        # Embed رئيسي
-        # =================================================
-
         embed = discord.Embed(
             title=f"📋 سجل العقوبات — {member}",
             description=(
@@ -2167,10 +2593,6 @@ class ModerationCog(commands.Cog):
         await ctx.send(
             embed=embed
         )
-
-        # =================================================
-        # التحذيرات
-        # =================================================
 
         for index, warning in enumerate(
             warnings[:10],
@@ -2229,10 +2651,6 @@ class ModerationCog(commands.Cog):
                 embed=record_embed,
                 view=view
             )
-
-        # =================================================
-        # الإسكاتات
-        # =================================================
 
         for index, mute in enumerate(
             mutes[:10],
@@ -2400,10 +2818,6 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # =================================================
-        # صلاحية Discord
-        # =================================================
-
         if not ctx.channel.permissions_for(
             ctx.guild.me
         ).manage_messages:
@@ -2414,12 +2828,6 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # =================================================
-        # حماية من أرقام غير منطقية
-        # =================================================
-
-        # Discord يسمح بطلب عدد كبير، لكن التنفيذ يتم
-        # على دفعات حتى لا يحصل ضغط على API.
         amount = min(
             amount,
             100000
@@ -2430,10 +2838,6 @@ class ModerationCog(commands.Cog):
         )
 
         try:
-
-            # =================================================
-            # جلب الرسائل
-            # =================================================
 
             messages = []
 
@@ -2452,12 +2856,6 @@ class ModerationCog(commands.Cog):
                 )
 
                 return
-
-            # =================================================
-            # Discord bulk delete:
-            # الرسائل الأقدم من 14 يوم لا يمكن حذفها
-            # باستخدام bulk delete.
-            # =================================================
 
             now = discord.utils.utcnow()
 
@@ -2485,11 +2883,6 @@ class ModerationCog(commands.Cog):
                     )
 
             deleted_count = 0
-
-            # =================================================
-            # حذف الرسائل الحديثة
-            # دفعات 100
-            # =================================================
 
             for index in range(
                 0,
@@ -2522,7 +2915,6 @@ class ModerationCog(commands.Cog):
 
                 except discord.HTTPException:
 
-                    # محاولة حذف فردي إذا فشل bulk
                     for message in chunk:
 
                         try:
@@ -2538,10 +2930,6 @@ class ModerationCog(commands.Cog):
                         ):
 
                             pass
-
-            # =================================================
-            # حذف الرسائل القديمة فرديًا
-            # =================================================
 
             for message in old_messages:
 
@@ -2559,10 +2947,6 @@ class ModerationCog(commands.Cog):
 
                     pass
 
-            # =================================================
-            # حذف رسالة الأمر نفسها إذا لم تكن ضمن الرسائل
-            # =================================================
-
             try:
 
                 if ctx.message.id not in {
@@ -2579,10 +2963,6 @@ class ModerationCog(commands.Cog):
             ):
 
                 pass
-
-            # =================================================
-            # النتيجة
-            # =================================================
 
             await status_message.edit(
                 content=(
