@@ -16,12 +16,18 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 MONGO_URI = os.getenv("MONGO_URI")
 
+if not MONGO_URI:
+    raise RuntimeError("MONGO_URI غير موجود في Environment Variables.")
+
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["discord_bot_db"]
 
 moderation_reasons_collection = db["moderation_reasons"]
 moderation_warnings_collection = db["moderation_warnings"]
 moderation_mutes_collection = db["moderation_mutes"]
+
+# تخزين إعدادات قفل الرومات المؤقتة
+moderation_channel_locks_collection = db["moderation_channel_locks"]
 
 
 # =========================================================
@@ -76,10 +82,6 @@ COMMAND_CLEAR_WARNS = "مسح-تحذيرات"
 COMMAND_MUTES = "اسكاتات"
 COMMAND_CLEAR = "مسح"
 
-# =========================================================
-# أوامر قفل / فتح / اخفاء / اظهار
-# =========================================================
-
 COMMAND_LOCK = "قفل"
 COMMAND_UNLOCK = "فتح"
 COMMAND_HIDE = "اخفاء"
@@ -124,10 +126,6 @@ async def get_command_setting(
         guild_id
     )
 
-    # =====================================================
-    # البيانات الجديدة
-    # =====================================================
-
     setting = await website_command_settings.find_one(
         {
             "guild_id": {
@@ -139,10 +137,6 @@ async def get_command_setting(
 
     if setting:
         return setting
-
-    # =====================================================
-    # دعم البيانات القديمة
-    # =====================================================
 
     setting = await website_command_settings.find_one(
         {
@@ -172,35 +166,19 @@ async def website_permission_allowed(
     if member.guild is None:
         return False
 
-    # =====================================================
-    # جلب إعداد الأمر من الموقع
-    # =====================================================
-
     setting = await get_command_setting(
         member.guild.id,
         command_name
     )
 
-    # =====================================================
-    # الأمر غير موجود في الموقع
-    # =====================================================
-
     if not setting:
         return False
-
-    # =====================================================
-    # الأمر غير مفعّل
-    # =====================================================
 
     if not setting.get(
         "enabled",
         False
     ):
         return False
-
-    # =====================================================
-    # الرتب
-    # =====================================================
 
     role_ids = setting.get(
         "role_ids",
@@ -224,10 +202,6 @@ async def website_permission_allowed(
         user_role_ids
     ):
         return False
-
-    # =====================================================
-    # الرومات
-    # =====================================================
 
     channel_ids = setting.get(
         "channel_ids",
@@ -300,7 +274,9 @@ async def get_website_role_ids(
 
 
 # =========================================================
-# تطبيق قفل الروم
+# قفل الروم
+#
+# يحفظ الـ Override القديم حتى نقدر نرجعه عند فتح الروم
 # =========================================================
 
 async def lock_channel(
@@ -310,13 +286,83 @@ async def lock_channel(
 
     guild = channel.guild
 
+    existing_lock = (
+        moderation_channel_locks_collection.find_one(
+            {
+                "guild_id": guild.id,
+                "channel_id": channel.id
+            }
+        )
+    )
+
+    # =====================================================
+    # إذا الروم مقفول مسبقًا
+    # نستخدم الحالة الموجودة
+    # =====================================================
+
+    if existing_lock:
+
+        everyone_previous = existing_lock.get(
+            "everyone_send_messages"
+        )
+
+        role_previous = existing_lock.get(
+            "role_send_messages",
+            {}
+        )
+
+    else:
+
+        everyone_overwrite = channel.overwrites_for(
+            guild.default_role
+        )
+
+        everyone_previous = (
+            everyone_overwrite.send_messages
+        )
+
+        role_previous = {}
+
+    # =====================================================
+    # حفظ الحالة الأصلية للرتب الجديدة
+    # =====================================================
+
+    for role_id in allowed_role_ids:
+
+        role = guild.get_role(
+            role_id
+        )
+
+        if role is None:
+            continue
+
+        role_key = str(
+            role.id
+        )
+
+        if role_key not in role_previous:
+
+            overwrite = channel.overwrites_for(
+                role
+            )
+
+            role_previous[role_key] = (
+                overwrite.send_messages
+            )
+
     # =====================================================
     # قفل @everyone
     # =====================================================
 
+    everyone_overwrite = channel.overwrites_for(
+        guild.default_role
+    )
+
+    everyone_overwrite.send_messages = False
+
     await channel.set_permissions(
         guild.default_role,
-        send_messages=False,
+        overwrite=everyone_overwrite,
         reason="قفل الروم"
     )
 
@@ -335,9 +381,15 @@ async def lock_channel(
 
         try:
 
+            overwrite = channel.overwrites_for(
+                role
+            )
+
+            overwrite.send_messages = True
+
             await channel.set_permissions(
                 role,
-                send_messages=True,
+                overwrite=overwrite,
                 reason="السماح لرتبة محددة بعد قفل الروم"
             )
 
@@ -347,6 +399,29 @@ async def lock_channel(
         ):
 
             pass
+
+    # =====================================================
+    # حفظ حالة القفل
+    # =====================================================
+
+    moderation_channel_locks_collection.update_one(
+        {
+            "guild_id": guild.id,
+            "channel_id": channel.id
+        },
+        {
+            "$set": {
+                "guild_id": guild.id,
+                "channel_id": channel.id,
+                "everyone_send_messages": everyone_previous,
+                "role_send_messages": role_previous,
+                "allowed_role_ids": list(
+                    allowed_role_ids
+                )
+            }
+        },
+        upsert=True
+    )
 
 
 # =========================================================
@@ -359,9 +434,112 @@ async def unlock_channel(
 
     guild = channel.guild
 
+    lock_data = (
+        moderation_channel_locks_collection.find_one(
+            {
+                "guild_id": guild.id,
+                "channel_id": channel.id
+            }
+        )
+    )
+
+    # =====================================================
+    # استرجاع Override @everyone الأصلي
+    # =====================================================
+
+    if lock_data:
+
+        everyone_previous = lock_data.get(
+            "everyone_send_messages"
+        )
+
+        everyone_overwrite = channel.overwrites_for(
+            guild.default_role
+        )
+
+        everyone_overwrite.send_messages = (
+            everyone_previous
+        )
+
+        await channel.set_permissions(
+            guild.default_role,
+            overwrite=everyone_overwrite,
+            reason="فتح الروم"
+        )
+
+        # =================================================
+        # استرجاع Overrides الرتب التي عدلها القفل
+        # =================================================
+
+        role_previous = lock_data.get(
+            "role_send_messages",
+            {}
+        )
+
+        for role_id, previous_value in role_previous.items():
+
+            try:
+
+                role = guild.get_role(
+                    int(role_id)
+                )
+
+            except (
+                TypeError,
+                ValueError
+            ):
+
+                continue
+
+            if role is None:
+                continue
+
+            try:
+
+                overwrite = channel.overwrites_for(
+                    role
+                )
+
+                overwrite.send_messages = (
+                    previous_value
+                )
+
+                await channel.set_permissions(
+                    role,
+                    overwrite=overwrite,
+                    reason="استرجاع صلاحيات ما قبل القفل"
+                )
+
+            except (
+                discord.Forbidden,
+                discord.HTTPException
+            ):
+
+                pass
+
+        moderation_channel_locks_collection.delete_one(
+            {
+                "guild_id": guild.id,
+                "channel_id": channel.id
+            }
+        )
+
+        return
+
+    # =====================================================
+    # لو ما فيه حالة محفوظة
+    # نفتح @everyone
+    # =====================================================
+
+    overwrite = channel.overwrites_for(
+        guild.default_role
+    )
+
+    overwrite.send_messages = True
+
     await channel.set_permissions(
         guild.default_role,
-        send_messages=True,
+        overwrite=overwrite,
         reason="فتح الروم"
     )
 
@@ -377,19 +555,11 @@ async def hide_channel(
 
     guild = channel.guild
 
-    # =====================================================
-    # إخفاء عن @everyone
-    # =====================================================
-
     await channel.set_permissions(
         guild.default_role,
         view_channel=False,
         reason="إخفاء الروم"
     )
-
-    # =====================================================
-    # السماح للرتب المحددة من الموقع بالرؤية
-    # =====================================================
 
     for role_id in allowed_role_ids:
 
@@ -511,14 +681,6 @@ def add_reason(
 
 # =========================================================
 # تحويل المدة
-#
-# يدعم:
-# 5m20s
-# 1h30m
-# 2d5h20m10s
-# 1w2d3h4m5s
-# 100s
-# 90m
 # =========================================================
 
 def parse_duration(value: str):
@@ -530,10 +692,6 @@ def parse_duration(value: str):
 
     if not value:
         return None
-
-    # =====================================================
-    # المدة المركبة
-    # =====================================================
 
     pattern = re.compile(
         r"(\d+(?:\.\d+)?)\s*"
@@ -641,10 +799,6 @@ def parse_duration(value: str):
         else:
 
             return None
-
-    # =====================================================
-    # Discord timeout maximum = 28 days
-    # =====================================================
 
     max_seconds = 28 * 24 * 60 * 60
 
@@ -859,6 +1013,415 @@ def get_mutes(
 
 
 # =========================================================
+# نظام صفحات التحذيرات والإسكاتات
+# =========================================================
+
+class ModerationPagesView(ui.View):
+
+    def __init__(
+        self,
+        member,
+        records,
+        command_name
+    ):
+
+        super().__init__(
+            timeout=300
+        )
+
+        self.member = member
+        self.records = records
+        self.command_name = command_name
+        self.current_page = 0
+
+        self.previous_button = ui.Button(
+            label="السابق",
+            emoji="⬅️",
+            style=discord.ButtonStyle.secondary
+        )
+
+        self.next_button = ui.Button(
+            label="التالي",
+            emoji="➡️",
+            style=discord.ButtonStyle.primary
+        )
+
+        self.delete_button = ui.Button(
+            label="حذف السجل",
+            emoji="🗑️",
+            style=discord.ButtonStyle.danger
+        )
+
+        self.previous_button.callback = (
+            self.previous_page
+        )
+
+        self.next_button.callback = (
+            self.next_page
+        )
+
+        self.delete_button.callback = (
+            self.delete_current
+        )
+
+        self.add_item(
+            self.previous_button
+        )
+
+        self.add_item(
+            self.next_button
+        )
+
+        self.add_item(
+            self.delete_button
+        )
+
+        self.update_buttons()
+
+    # =====================================================
+    # تحديث الأزرار
+    # =====================================================
+
+    def update_buttons(self):
+
+        self.previous_button.disabled = (
+            self.current_page <= 0
+        )
+
+        self.next_button.disabled = (
+            self.current_page >= len(self.records) - 1
+        )
+
+        self.delete_button.disabled = (
+            len(self.records) == 0
+        )
+
+    # =====================================================
+    # بناء Embed
+    # =====================================================
+
+    def build_embed(self):
+
+        record = self.records[
+            self.current_page
+        ]
+
+        record_type = record.get(
+            "_record_type",
+            "warning"
+        )
+
+        guild = self.member.guild
+
+        moderator = guild.get_member(
+            record.get("moderator_id")
+        )
+
+        moderator_name = (
+            moderator.mention
+            if moderator
+            else f"`{record.get('moderator_id')}`"
+        )
+
+        reason = record.get(
+            "reason",
+            "لا يوجد سبب"
+        )
+
+        created_at = record.get(
+            "created_at"
+        )
+
+        if created_at:
+
+            created_text = discord.utils.format_dt(
+                created_at,
+                style="R"
+            )
+
+        else:
+
+            created_text = "غير معروف"
+
+        # =================================================
+        # تحذير
+        # =================================================
+
+        if record_type == "warning":
+
+            embed = discord.Embed(
+                title="⚠️ سجل التحذيرات",
+                description=(
+                    f"👤 **الشخص:** {self.member.mention}\n\n"
+                    f"📝 **السبب:** {reason}\n"
+                    f"👮 **بواسطة:** {moderator_name}\n"
+                    f"🕐 **الوقت:** {created_text}"
+                ),
+                color=discord.Color.orange()
+            )
+
+        # =================================================
+        # إسكات
+        # =================================================
+
+        else:
+
+            duration_seconds = record.get(
+                "duration_seconds",
+                0
+            )
+
+            duration = timedelta(
+                seconds=int(
+                    duration_seconds
+                )
+            )
+
+            expires_at = record.get(
+                "expires_at"
+            )
+
+            if expires_at:
+
+                expires_text = discord.utils.format_dt(
+                    expires_at,
+                    style="R"
+                )
+
+            else:
+
+                expires_text = "غير معروف"
+
+            embed = discord.Embed(
+                title="🔇 سجل الإسكاتات",
+                description=(
+                    f"👤 **الشخص:** {self.member.mention}\n\n"
+                    f"📝 **السبب:** {reason}\n"
+                    f"⏱️ **المدة:** {format_duration(duration)}\n"
+                    f"👮 **بواسطة:** {moderator_name}\n"
+                    f"🕐 **بدأ:** {created_text}\n"
+                    f"⏳ **ينتهي:** {expires_text}"
+                ),
+                color=discord.Color.red()
+            )
+
+        embed.set_footer(
+            text=(
+                f"الصفحة {self.current_page + 1}"
+                f" من {len(self.records)}"
+            )
+        )
+
+        return embed
+
+    # =====================================================
+    # التحقق من الصلاحية
+    # =====================================================
+
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        allowed = await website_permission_allowed(
+            interaction.user,
+            self.command_name,
+            interaction.channel.id
+        )
+
+        if not allowed:
+
+            await interaction.response.send_message(
+                "❌ ما عندك صلاحية استخدام هذا الأمر.",
+                ephemeral=True
+            )
+
+            return False
+
+        return True
+
+    # =====================================================
+    # السابق
+    # =====================================================
+
+    async def previous_page(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if self.current_page > 0:
+
+            self.current_page -= 1
+
+        self.update_buttons()
+
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self
+        )
+
+    # =====================================================
+    # التالي
+    # =====================================================
+
+    async def next_page(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if self.current_page < len(self.records) - 1:
+
+            self.current_page += 1
+
+        self.update_buttons()
+
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self
+        )
+
+    # =====================================================
+    # حذف السجل الحالي
+    # =====================================================
+
+    async def delete_current(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if not self.records:
+            return
+
+        record = self.records[
+            self.current_page
+        ]
+
+        record_type = record.get(
+            "_record_type",
+            "warning"
+        )
+
+        record_id = record.get(
+            "_id"
+        )
+
+        if record_type == "warning":
+
+            collection = (
+                moderation_warnings_collection
+            )
+
+        else:
+
+            collection = (
+                moderation_mutes_collection
+            )
+
+        result = collection.delete_one(
+            {
+                "_id": record_id,
+                "guild_id": interaction.guild.id,
+                "user_id": self.member.id
+            }
+        )
+
+        if result.deleted_count == 0:
+
+            await interaction.response.send_message(
+                "⚠️ هذا السجل محذوف مسبقًا.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # إذا كان إسكاتًا
+        # =================================================
+
+        if record_type == "mute":
+
+            member = interaction.guild.get_member(
+                self.member.id
+            )
+
+            if member:
+
+                try:
+
+                    await member.timeout(
+                        None,
+                        reason="حذف سجل الإسكات"
+                    )
+
+                except (
+                    discord.Forbidden,
+                    discord.HTTPException
+                ):
+
+                    pass
+
+        # =================================================
+        # حذف من القائمة الحالية
+        # =================================================
+
+        self.records.pop(
+            self.current_page
+        )
+
+        if not self.records:
+
+            self.stop()
+
+            await interaction.response.edit_message(
+                content="✅ تم حذف آخر سجل.",
+                embed=None,
+                view=None
+            )
+
+            return
+
+        if self.current_page >= len(
+            self.records
+        ):
+
+            self.current_page = (
+                len(self.records) - 1
+            )
+
+        self.update_buttons()
+
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self
+        )
+
+    # =====================================================
+    # انتهاء مدة الأزرار
+    # =====================================================
+
+    async def on_timeout(self):
+
+        for child in self.children:
+
+            child.disabled = True
+
+        try:
+
+            if hasattr(self, "message") and self.message:
+
+                await self.message.edit(
+                    view=self
+                )
+
+        except (
+            discord.NotFound,
+            discord.HTTPException
+        ):
+
+            pass
+
+
+# =========================================================
 # مودال إضافة سبب
 # =========================================================
 
@@ -1034,7 +1597,7 @@ class CustomDurationModal(ui.Modal):
                 "`5m20s`\n"
                 "`1h30m`\n"
                 "`2d5h20m10s`\n"
-                "`1w2d3h`\n\n"
+                "`1w2d3h4m5s`\n\n"
                 "الحد الأقصى 28 يوم.",
                 ephemeral=True
             )
@@ -1152,7 +1715,7 @@ class DurationView(ui.View):
     async def ten_seconds(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         await self.apply(
@@ -1168,7 +1731,7 @@ class DurationView(ui.View):
     async def one_minute(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         await self.apply(
@@ -1184,7 +1747,7 @@ class DurationView(ui.View):
     async def ten_minutes(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         await self.apply(
@@ -1200,7 +1763,7 @@ class DurationView(ui.View):
     async def one_hour(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         await self.apply(
@@ -1422,152 +1985,6 @@ class ReasonView(ui.View):
 
 
 # =========================================================
-# زر حذف سجل
-# =========================================================
-
-class DeleteModerationButton(ui.Button):
-
-    def __init__(
-        self,
-        cog,
-        record_type,
-        record_id,
-        target_id
-    ):
-
-        super().__init__(
-            label="حذف هذا السجل",
-            style=discord.ButtonStyle.danger
-        )
-
-        self.cog = cog
-        self.record_type = record_type
-        self.record_id = record_id
-        self.target_id = target_id
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        command_name = COMMAND_MUTES
-
-        if self.record_type == "warning":
-            command_name = COMMAND_MUTES
-
-        allowed = await website_permission_allowed(
-            interaction.user,
-            command_name,
-            interaction.channel.id
-        )
-
-        if not allowed:
-
-            await interaction.response.send_message(
-                "❌ ما عندك صلاحية حذف هذا السجل.",
-                ephemeral=True
-            )
-
-            return
-
-        collection = (
-            moderation_warnings_collection
-            if self.record_type == "warning"
-            else moderation_mutes_collection
-        )
-
-        result = collection.delete_one(
-            {
-                "_id": self.record_id,
-                "guild_id": interaction.guild.id,
-                "user_id": self.target_id
-            }
-        )
-
-        if result.deleted_count == 0:
-
-            await interaction.response.send_message(
-                "⚠️ هذا السجل محذوف مسبقًا.",
-                ephemeral=True
-            )
-
-            return
-
-        # =================================================
-        # إذا كان السجل إسكاتًا
-        # نحاول فك الإسكات الحالي أيضًا
-        # =================================================
-
-        if self.record_type == "mute":
-
-            member = interaction.guild.get_member(
-                self.target_id
-            )
-
-            if member:
-
-                try:
-
-                    await member.timeout(
-                        None,
-                        reason="حذف سجل الإسكات"
-                    )
-
-                except (
-                    discord.Forbidden,
-                    discord.HTTPException
-                ):
-
-                    pass
-
-        await interaction.response.send_message(
-            "✅ تم حذف السجل بنجاح.",
-            ephemeral=True
-        )
-
-        try:
-
-            await interaction.message.edit(
-                view=None
-            )
-
-        except (
-            discord.NotFound,
-            discord.HTTPException
-        ):
-
-            pass
-
-
-# =========================================================
-# View سجل الإسكات / التحذير
-# =========================================================
-
-class ModerationRecordView(ui.View):
-
-    def __init__(
-        self,
-        cog,
-        record_type,
-        record_id,
-        target_id
-    ):
-
-        super().__init__(
-            timeout=300
-        )
-
-        self.add_item(
-            DeleteModerationButton(
-                cog=cog,
-                record_type=record_type,
-                record_id=record_id,
-                target_id=target_id
-            )
-        )
-
-
-# =========================================================
 # Cog
 # =========================================================
 
@@ -1669,7 +2086,6 @@ class ModerationCog(commands.Cog):
             return
 
         if not ctx.guild:
-
             return
 
         permissions = ctx.channel.permissions_for(
@@ -1737,7 +2153,6 @@ class ModerationCog(commands.Cog):
             return
 
         if not ctx.guild:
-
             return
 
         permissions = ctx.channel.permissions_for(
@@ -1799,7 +2214,6 @@ class ModerationCog(commands.Cog):
             return
 
         if not ctx.guild:
-
             return
 
         permissions = ctx.channel.permissions_for(
@@ -1867,7 +2281,6 @@ class ModerationCog(commands.Cog):
             return
 
         if not ctx.guild:
-
             return
 
         permissions = ctx.channel.permissions_for(
@@ -2162,7 +2575,7 @@ class ModerationCog(commands.Cog):
         )
 
     # =====================================================
-    # انتهاء التسفير / فك الباند
+    # انتهاء التسفير
     # =====================================================
 
     @commands.command(
@@ -2416,7 +2829,7 @@ class ModerationCog(commands.Cog):
         )
 
     # =====================================================
-    # تحذيرات
+    # تحذيرات - صفحات
     # =====================================================
 
     @commands.command(
@@ -2440,7 +2853,7 @@ class ModerationCog(commands.Cog):
 
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-تحذيرات @الشخص`"
+                "`تحذيرات @الشخص`"
             )
 
             return
@@ -2458,81 +2871,29 @@ class ModerationCog(commands.Cog):
 
             return
 
-        embed = discord.Embed(
-            title=f"⚠️ تحذيرات {member}",
-            description=(
-                f"عدد التحذيرات: **{len(warnings)}**"
-            ),
-            color=discord.Color.orange()
+        # =================================================
+        # تحديد نوع كل سجل
+        # =================================================
+
+        for warning in warnings:
+
+            warning["_record_type"] = "warning"
+
+        view = ModerationPagesView(
+            member=member,
+            records=warnings,
+            command_name=COMMAND_WARNS
         )
 
-        for index, warning in enumerate(
-            warnings[:10],
-            start=1
-        ):
+        message = await ctx.send(
+            embed=view.build_embed(),
+            view=view
+        )
 
-            moderator = ctx.guild.get_member(
-                warning.get("moderator_id")
-            )
-
-            moderator_name = (
-                moderator.mention
-                if moderator
-                else f"`{warning.get('moderator_id')}`"
-            )
-
-            reason = warning.get(
-                "reason",
-                "لا يوجد سبب"
-            )
-
-            created_at = warning.get(
-                "created_at"
-            )
-
-            if created_at:
-
-                time_text = discord.utils.format_dt(
-                    created_at,
-                    style="R"
-                )
-
-            else:
-
-                time_text = "غير معروف"
-
-            warning_id = warning.get("_id")
-
-            view = ModerationRecordView(
-                self,
-                "warning",
-                warning_id,
-                member.id
-            )
-
-            await ctx.send(
-                embed=discord.Embed(
-                    title=f"⚠️ التحذير #{index}",
-                    description=(
-                        f"👤 **الشخص:** {member.mention}\n"
-                        f"📝 **السبب:** {reason}\n"
-                        f"👮 **بواسطة:** {moderator_name}\n"
-                        f"🕐 **الوقت:** {time_text}"
-                    ),
-                    color=discord.Color.orange()
-                ),
-                view=view
-            )
-
-        if len(warnings) > 10:
-
-            await ctx.send(
-                f"ℹ️ يوجد **{len(warnings)}** تحذير، "
-                "لكن يتم عرض آخر 10 فقط."
-            )
+        view.message = message
 
     # =====================================================
-    # اسكاتات
+    # اسكاتات - صفحات
     # =====================================================
 
     @commands.command(
@@ -2580,163 +2941,53 @@ class ModerationCog(commands.Cog):
 
             return
 
-        embed = discord.Embed(
-            title=f"📋 سجل العقوبات — {member}",
-            description=(
-                f"👤 **العضو:** {member.mention}\n"
-                f"⚠️ **التحذيرات:** {len(warnings)}\n"
-                f"🔇 **الإسكاتات:** {len(mutes)}"
+        # =================================================
+        # تحويل السجلات إلى نظام موحد
+        # =================================================
+
+        records = []
+
+        for warning in warnings:
+
+            warning["_record_type"] = "warning"
+
+            records.append(
+                warning
+            )
+
+        for mute in mutes:
+
+            mute["_record_type"] = "mute"
+
+            records.append(
+                mute
+            )
+
+        # =================================================
+        # ترتيب كل السجلات من الأحدث إلى الأقدم
+        # =================================================
+
+        records.sort(
+            key=lambda record: (
+                record.get("created_at").timestamp()
+                if record.get("created_at")
+                else 0
             ),
-            color=discord.Color.blurple()
+            reverse=True
         )
 
-        await ctx.send(
-            embed=embed
+        view = ModerationPagesView(
+            member=member,
+            records=records,
+            command_name=COMMAND_MUTES
         )
 
-        for index, warning in enumerate(
-            warnings[:10],
-            start=1
-        ):
+        message = await ctx.send(
+            embed=view.build_embed(),
+            view=view
+        )
 
-            moderator = ctx.guild.get_member(
-                warning.get("moderator_id")
-            )
-
-            moderator_name = (
-                moderator.mention
-                if moderator
-                else f"`{warning.get('moderator_id')}`"
-            )
-
-            reason = warning.get(
-                "reason",
-                "لا يوجد سبب"
-            )
-
-            created_at = warning.get(
-                "created_at"
-            )
-
-            if created_at:
-
-                time_text = discord.utils.format_dt(
-                    created_at,
-                    style="R"
-                )
-
-            else:
-
-                time_text = "غير معروف"
-
-            record_embed = discord.Embed(
-                title=f"⚠️ تحذير #{index}",
-                description=(
-                    f"👤 **الشخص:** {member.mention}\n"
-                    f"📝 **السبب:** {reason}\n"
-                    f"👮 **بواسطة:** {moderator_name}\n"
-                    f"🕐 **الوقت:** {time_text}"
-                ),
-                color=discord.Color.orange()
-            )
-
-            view = ModerationRecordView(
-                self,
-                "warning",
-                warning.get("_id"),
-                member.id
-            )
-
-            await ctx.send(
-                embed=record_embed,
-                view=view
-            )
-
-        for index, mute in enumerate(
-            mutes[:10],
-            start=1
-        ):
-
-            moderator = ctx.guild.get_member(
-                mute.get("moderator_id")
-            )
-
-            moderator_name = (
-                moderator.mention
-                if moderator
-                else f"`{mute.get('moderator_id')}`"
-            )
-
-            reason = mute.get(
-                "reason",
-                "لا يوجد سبب"
-            )
-
-            created_at = mute.get(
-                "created_at"
-            )
-
-            expires_at = mute.get(
-                "expires_at"
-            )
-
-            duration_seconds = mute.get(
-                "duration_seconds",
-                0
-            )
-
-            duration = timedelta(
-                seconds=int(
-                    duration_seconds
-                )
-            )
-
-            if created_at:
-
-                time_text = discord.utils.format_dt(
-                    created_at,
-                    style="R"
-                )
-
-            else:
-
-                time_text = "غير معروف"
-
-            if expires_at:
-
-                expires_text = discord.utils.format_dt(
-                    expires_at,
-                    style="R"
-                )
-
-            else:
-
-                expires_text = "غير معروف"
-
-            record_embed = discord.Embed(
-                title=f"🔇 إسكات #{index}",
-                description=(
-                    f"👤 **الشخص:** {member.mention}\n"
-                    f"📝 **السبب:** {reason}\n"
-                    f"⏱️ **المدة:** {format_duration(duration)}\n"
-                    f"👮 **بواسطة:** {moderator_name}\n"
-                    f"🕐 **بدأ:** {time_text}\n"
-                    f"⏳ **ينتهي:** {expires_text}"
-                ),
-                color=discord.Color.red()
-            )
-
-            view = ModerationRecordView(
-                self,
-                "mute",
-                mute.get("_id"),
-                member.id
-            )
-
-            await ctx.send(
-                embed=record_embed,
-                view=view
-            )
+        view.message = message
 
     # =====================================================
     # مسح التحذيرات
