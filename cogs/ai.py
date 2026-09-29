@@ -65,6 +65,10 @@ class AIAutoChatCog(commands.Cog):
                     if len(self.conversation_history) > 10:
                         self.conversation_history = self.conversation_history[-10:]
 
+                    # انتظار 3 ثواني قبل بدء معالجة الطلب
+                    # عشان تكون الاستجابة أهدأ وما يضغط البوت على المعالجة
+                    await asyncio.sleep(3)
+
                     # تجميع الرسائل مع رسالة النظام الأساسية للإرسال
                     payload_messages = [
                         self.system_prompt
