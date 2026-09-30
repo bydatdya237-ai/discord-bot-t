@@ -21,7 +21,6 @@ db = mongo_client.discord_bot_db
 
 collection = db["server_map_settings"]
 
-# إعدادات أوامر الموقع
 website_collection = db["website_command_settings"]
 
 
@@ -44,7 +43,9 @@ def get_website_command_setting(guild_id, command_name):
     ]
 
     try:
-        guild_id_variants.append(int(guild_id))
+        guild_id_variants.append(
+            int(guild_id)
+        )
     except Exception:
         pass
 
@@ -113,8 +114,13 @@ def normalize_ids(value):
     for item in value:
 
         try:
-            result.add(int(str(item)))
-        except (ValueError, TypeError):
+            result.add(
+                int(str(item))
+            )
+        except (
+            ValueError,
+            TypeError
+        ):
             continue
 
     return result
@@ -123,14 +129,14 @@ def normalize_ids(value):
 # =========================================================
 # التحقق من صلاحية الأمر من الموقع
 #
-# مطابق لنظام أمر "استدعاء":
+# مطابق لنظام استدعاء:
 #
-# 1. الإعداد موجود
-# 2. الأمر مفعّل
-# 3. توجد رتب مسموحة
-# 4. العضو يملك رتبة مسموحة
-# 5. توجد رومات مسموحة
-# 6. الروم الحالي مسموح
+# - الإعداد موجود
+# - الأمر مفعّل
+# - الرتبة محددة
+# - العضو يملك الرتبة
+# - الروم محدد
+# - العضو داخل الروم المسموح
 # =========================================================
 
 def website_command_allowed(
@@ -151,7 +157,7 @@ def website_command_allowed(
     )
 
     # =====================================================
-    # لا يوجد إعداد في الموقع
+    # لا يوجد إعداد
     # =====================================================
 
     if not setting:
@@ -184,7 +190,7 @@ def website_command_allowed(
         for role_id in role_ids
     }
 
-    member_role_ids = {
+    user_role_ids = {
         str(role.id)
         for role in member.roles
     }
@@ -194,7 +200,7 @@ def website_command_allowed(
     # =====================================================
 
     if not allowed_role_ids.intersection(
-        member_role_ids
+        user_role_ids
     ):
         return False
 
@@ -245,7 +251,7 @@ def get_settings(guild_id):
         "map_channel_id": None,
         "notification_roles": [],
         "map_channels": [],
-        "rules": "لم يتم تحديد قوانين السيرفر بعد."
+        "rules": ""
     }
 
     collection.insert_one(
@@ -256,10 +262,99 @@ def get_settings(guild_id):
 
 
 # =========================================================
+# Embed القوانين
+# =========================================================
+
+def create_rules_embed(
+    rules
+):
+
+    embed = discord.Embed(
+        title="📜 قوانين السيرفر",
+        description=str(rules),
+        color=discord.Color.blurple()
+    )
+
+    embed.set_footer(
+        text="يرجى الالتزام بقوانين السيرفر."
+    )
+
+    return embed
+
+
+# =========================================================
+# زر عرض القوانين
+# =========================================================
+
+class RulesButtonView(
+    ui.View
+):
+
+    def __init__(
+        self,
+        rules
+    ):
+
+        super().__init__(
+            timeout=None
+        )
+
+        self.rules = rules
+
+    @ui.button(
+        label="القوانين",
+        style=discord.ButtonStyle.primary,
+        emoji="📜",
+        custom_id="server_map_rules"
+    )
+    async def rules_button(
+        self,
+        interaction: discord.Interaction,
+        button: ui.Button
+    ):
+
+        # =================================================
+        # إعادة جلب القوانين من Mongo
+        # حتى لو تغيرت بعد إرسال الرسالة
+        # =================================================
+
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        rules = settings.get(
+            "rules",
+            ""
+        )
+
+        rules = str(
+            rules or ""
+        ).strip()
+
+        if not rules:
+
+            await interaction.response.send_message(
+                "ℹ️ لم يتم تحديد قوانين السيرفر حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_message(
+            embed=create_rules_embed(
+                rules
+            ),
+            ephemeral=True
+        )
+
+
+# =========================================================
 # تحديث خريطة السيرفر
 # =========================================================
 
-async def update_server_map(guild):
+async def update_server_map(
+    guild
+):
 
     settings = get_settings(
         guild.id
@@ -272,8 +367,18 @@ async def update_server_map(guild):
     if not map_channel_id:
         return
 
+    try:
+        map_channel_id = int(
+            map_channel_id
+        )
+    except (
+        ValueError,
+        TypeError
+    ):
+        return
+
     channel = guild.get_channel(
-        int(map_channel_id)
+        map_channel_id
     )
 
     if channel is None:
@@ -300,7 +405,7 @@ async def update_server_map(guild):
         pass
 
     # =====================================================
-    # إعداد رتب الإشعارات
+    # رتب الإشعارات
     # =====================================================
 
     notification_role_ids = normalize_ids(
@@ -324,19 +429,20 @@ async def update_server_map(guild):
             )
 
     # =====================================================
-    # Embed رتب الإشعارات
+    # لا نرسل Embed رتب الإشعارات
+    # إذا لم يتم تحديد أي رتبة
     # =====================================================
 
-    notification_embed = discord.Embed(
-        title="🔔 رتب الإشعارات",
-        description=(
-            "اختر رتبة الإشعارات التي تريد الحصول عليها.\n\n"
-            "يمكنك أيضًا إزالة رتبة إشعارات حصلت عليها مسبقًا."
-        ),
-        color=discord.Color.blurple()
-    )
-
     if notification_roles:
+
+        notification_embed = discord.Embed(
+            title="🔔 رتب الإشعارات",
+            description=(
+                "اختر رتبة الإشعارات التي تريد الحصول عليها.\n\n"
+                "يمكنك أيضًا إزالة رتبة حصلت عليها مسبقًا."
+            ),
+            color=discord.Color.blurple()
+        )
 
         roles_text = "\n".join(
             f"• {role.mention}"
@@ -349,27 +455,19 @@ async def update_server_map(guild):
             inline=False
         )
 
-    else:
-
-        notification_embed.add_field(
-            name="الرتب المتاحة",
-            value="لا توجد رتب إشعارات مضافة حاليًا.",
-            inline=False
+        notification_embed.set_footer(
+            text="خريطة السيرفر"
         )
 
-    notification_embed.set_footer(
-        text="خريطة السيرفر"
-    )
-
-    await channel.send(
-        embed=notification_embed,
-        view=NotificationRoleView(
-            guild.id
+        await channel.send(
+            embed=notification_embed,
+            view=NotificationRoleView(
+                guild.id
+            )
         )
-    )
 
     # =====================================================
-    # Embed خريطة السيرفر
+    # قنوات الخريطة
     # =====================================================
 
     map_channel_ids = normalize_ids(
@@ -392,15 +490,20 @@ async def update_server_map(guild):
                 map_item
             )
 
-    map_embed = discord.Embed(
-        title="🗺️ خريطة السيرفر",
-        description=(
-            "هذه هي القنوات المتاحة في السيرفر."
-        ),
-        color=discord.Color.blurple()
-    )
+    # =====================================================
+    # لا نرسل Embed القنوات
+    # إذا لم يتم تحديد أي قناة
+    # =====================================================
 
     if map_channels:
+
+        map_embed = discord.Embed(
+            title="🗺️ خريطة السيرفر",
+            description=(
+                "هذه هي القنوات المتاحة في السيرفر."
+            ),
+            color=discord.Color.blurple()
+        )
 
         channels_text = "\n".join(
             f"• {item.mention}"
@@ -413,44 +516,52 @@ async def update_server_map(guild):
             inline=False
         )
 
-    else:
-
-        map_embed.add_field(
-            name="📍 القنوات",
-            value="لم يتم تحديد قنوات لعرضها.",
-            inline=False
+        map_embed.set_footer(
+            text="خريطة السيرفر"
         )
 
-    map_embed.set_footer(
-        text="خريطة السيرفر"
-    )
-
-    await channel.send(
-        embed=map_embed
-    )
+        await channel.send(
+            embed=map_embed
+        )
 
     # =====================================================
-    # Embed القوانين
+    # القوانين
     # =====================================================
 
     rules = settings.get(
         "rules",
-        "لم يتم تحديد قوانين السيرفر بعد."
+        ""
     )
 
-    rules_embed = discord.Embed(
-        title="📜 قوانين السيرفر",
-        description=str(rules),
-        color=discord.Color.blurple()
-    )
+    rules = str(
+        rules or ""
+    ).strip()
 
-    rules_embed.set_footer(
-        text="يرجى الالتزام بقوانين السيرفر."
-    )
+    # =====================================================
+    # زر القوانين فقط إذا توجد قوانين
+    # =====================================================
 
-    await channel.send(
-        embed=rules_embed
-    )
+    if rules:
+
+        rules_button_embed = discord.Embed(
+            title="📜 قوانين السيرفر",
+            description=(
+                "للاطلاع على قوانين السيرفر، "
+                "اضغط على الزر بالأسفل."
+            ),
+            color=discord.Color.blurple()
+        )
+
+        rules_button_embed.set_footer(
+            text="خريطة السيرفر"
+        )
+
+        await channel.send(
+            embed=rules_button_embed,
+            view=RulesButtonView(
+                rules
+            )
+        )
 
 
 # =========================================================
@@ -480,6 +591,12 @@ class AddNotificationRoleSelect(
     ):
 
         if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
             return
 
         settings = get_settings(
@@ -496,7 +613,7 @@ class AddNotificationRoleSelect(
         selected_role = self.values[0]
 
         # =================================================
-        # التأكد أن الرتبة موجودة ضمن رتب الإشعارات
+        # الرتبة ليست من الرتب المحددة
         # =================================================
 
         if selected_role.id not in allowed_role_ids:
@@ -509,7 +626,7 @@ class AddNotificationRoleSelect(
             return
 
         # =================================================
-        # التأكد أن البوت يستطيع إعطاء الرتبة
+        # التحقق من رتبة البوت
         # =================================================
 
         me = interaction.guild.me
@@ -599,6 +716,12 @@ class RemoveNotificationRoleSelect(
     ):
 
         if interaction.guild is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
             return
 
         settings = get_settings(
@@ -615,7 +738,7 @@ class RemoveNotificationRoleSelect(
         selected_role = self.values[0]
 
         # =================================================
-        # التأكد أن الرتبة من رتب الإشعارات
+        # الرتبة ليست من الرتب المحددة
         # =================================================
 
         if selected_role.id not in allowed_role_ids:
@@ -628,7 +751,7 @@ class RemoveNotificationRoleSelect(
             return
 
         # =================================================
-        # التأكد أن المستخدم يملك الرتبة
+        # المستخدم لا يملك الرتبة
         # =================================================
 
         if selected_role not in interaction.user.roles:
@@ -691,7 +814,7 @@ class NotificationRoleView(
         self.guild_id = guild_id
 
     # =====================================================
-    # زر اختيار رتبة
+    # اختيار رتبة
     # =====================================================
 
     @ui.button(
@@ -715,6 +838,30 @@ class NotificationRoleView(
 
             return
 
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        # =================================================
+        # إذا لم تعد هناك رتب محددة
+        # =================================================
+
+        if not allowed_role_ids:
+
+            await interaction.response.send_message(
+                "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
         view = ui.View(
             timeout=60
         )
@@ -732,7 +879,7 @@ class NotificationRoleView(
         )
 
     # =====================================================
-    # زر إزالة رتبة
+    # إزالة رتبة
     # =====================================================
 
     @ui.button(
@@ -751,6 +898,30 @@ class NotificationRoleView(
 
             await interaction.response.send_message(
                 "❌ تعذر تحديد السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        # =================================================
+        # إذا لم تعد هناك رتب محددة
+        # =================================================
+
+        if not allowed_role_ids:
+
+            await interaction.response.send_message(
+                "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
                 ephemeral=True
             )
 
@@ -945,13 +1116,17 @@ class RulesModal(
 
             return
 
+        rules = str(
+            self.rules.value or ""
+        ).strip()
+
         collection.update_one(
             {
                 "guild_id": self.guild_id
             },
             {
                 "$set": {
-                    "rules": self.rules.value
+                    "rules": rules
                 }
             },
             upsert=True
@@ -983,7 +1158,7 @@ class ServerMapSetupView(
         self.guild_id = guild_id
 
     # =====================================================
-    # التحقق من الصلاحية
+    # فحص الصلاحية
     # =====================================================
 
     async def check_permission(
@@ -1013,7 +1188,7 @@ class ServerMapSetupView(
     async def notification_roles_button(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         if not await self.check_permission(
@@ -1056,7 +1231,7 @@ class ServerMapSetupView(
     async def map_channels_button(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         if not await self.check_permission(
@@ -1099,7 +1274,7 @@ class ServerMapSetupView(
     async def rules_button(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         if not await self.check_permission(
@@ -1132,7 +1307,7 @@ class ServerMapSetupView(
     async def refresh_button(
         self,
         interaction: discord.Interaction,
-        button: ui.Button
+        button: discord.ui.Button
     ):
 
         if not await self.check_permission(
@@ -1176,7 +1351,7 @@ class ServerMapCog(
         self.bot = bot
 
     # =====================================================
-    # أمر إنشاء الخريطة
+    # خريطة-إنشاء
     # =====================================================
 
     @commands.command(
@@ -1187,15 +1362,11 @@ class ServerMapCog(
         ctx
     ):
 
-        # =================================================
-        # يجب أن يكون داخل سيرفر
-        # =================================================
-
         if ctx.guild is None:
             return
 
         # =================================================
-        # التحقق من الموقع
+        # صلاحية الموقع
         # =================================================
 
         allowed = website_command_allowed(
@@ -1204,19 +1375,11 @@ class ServerMapCog(
             CREATE_COMMAND_NAME
         )
 
-        # =================================================
-        # إذا غير مسموح
-        #
-        # مطابق لنظام استدعاء:
-        # إذا الأمر غير موجود/غير مفعل/الروم غير مسموح/
-        # الرتبة غير مسموحة -> تجاهل
-        # =================================================
-
         if not allowed:
             return
 
         # =================================================
-        # البحث عن روم الخريطة
+        # البحث عن الروم
         # =================================================
 
         map_channel = discord.utils.get(
@@ -1225,7 +1388,7 @@ class ServerMapCog(
         )
 
         # =================================================
-        # إنشاء الروم إذا غير موجود
+        # إنشاء الروم
         # =================================================
 
         if map_channel is None:
@@ -1283,7 +1446,7 @@ class ServerMapCog(
         )
 
     # =====================================================
-    # أمر إعداد الخريطة
+    # خريطة-إعداد
     # =====================================================
 
     @commands.command(
@@ -1294,15 +1457,11 @@ class ServerMapCog(
         ctx
     ):
 
-        # =================================================
-        # يجب أن يكون داخل سيرفر
-        # =================================================
-
         if ctx.guild is None:
             return
 
         # =================================================
-        # التحقق من الموقع
+        # صلاحية الموقع
         # =================================================
 
         allowed = website_command_allowed(
@@ -1311,15 +1470,11 @@ class ServerMapCog(
             SETUP_COMMAND_NAME
         )
 
-        # =================================================
-        # إذا غير مسموح
-        # =================================================
-
         if not allowed:
             return
 
         # =================================================
-        # التأكد أن الخريطة موجودة
+        # التأكد من وجود الخريطة
         # =================================================
 
         settings = get_settings(
@@ -1381,10 +1536,6 @@ class ServerMapCog(
         if ctx.guild is None:
             return
 
-        # =================================================
-        # تجاهل إذا الأمر غير موجود بالموقع
-        # =================================================
-
         setting = get_website_command_setting(
             ctx.guild.id,
             CREATE_COMMAND_NAME
@@ -1393,19 +1544,11 @@ class ServerMapCog(
         if not setting:
             return
 
-        # =================================================
-        # تجاهل إذا الأمر غير مفعل
-        # =================================================
-
         if not setting.get(
             "enabled",
             False
         ):
             return
-
-        # =================================================
-        # تجاهل إذا الروم غير مسموح
-        # =================================================
 
         channel_ids = setting.get(
             "channel_ids",
@@ -1420,19 +1563,11 @@ class ServerMapCog(
         if str(ctx.channel.id) not in allowed_channel_ids:
             return
 
-        # =================================================
-        # تجاهل أخطاء الصلاحيات
-        # =================================================
-
         if isinstance(
             error,
             commands.CheckFailure
         ):
             return
-
-        # =================================================
-        # Console
-        # =================================================
 
         print(
             f"[ServerMap] Create Error: {repr(error)}"
@@ -1452,10 +1587,6 @@ class ServerMapCog(
         if ctx.guild is None:
             return
 
-        # =================================================
-        # تجاهل إذا الأمر غير موجود بالموقع
-        # =================================================
-
         setting = get_website_command_setting(
             ctx.guild.id,
             SETUP_COMMAND_NAME
@@ -1464,19 +1595,11 @@ class ServerMapCog(
         if not setting:
             return
 
-        # =================================================
-        # تجاهل إذا الأمر غير مفعل
-        # =================================================
-
         if not setting.get(
             "enabled",
             False
         ):
             return
-
-        # =================================================
-        # تجاهل إذا الروم غير مسموح
-        # =================================================
 
         channel_ids = setting.get(
             "channel_ids",
@@ -1490,10 +1613,6 @@ class ServerMapCog(
 
         if str(ctx.channel.id) not in allowed_channel_ids:
             return
-
-        # =================================================
-        # Console
-        # =================================================
 
         print(
             f"[ServerMap] Setup Error: {repr(error)}"
