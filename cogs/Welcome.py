@@ -117,63 +117,32 @@ class WelcomeCog(commands.Cog):
         return text
 
     # =====================================================
-    # تحميل الخط
+    # تحميل الخلفية من قاعدة البيانات أو الملف المحلي
     # =====================================================
 
-    def get_font(self, size, bold=False):
+    def get_background(self, settings):
 
-        if bold:
+        # أولاً: محاولة جلب الصورة المخزنة في MongoDB كـ Binary
+        bg_binary = settings.get("bg_image_binary")
 
-            fonts = [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-            ]
-
-        else:
-
-            fonts = [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            ]
-
-        for font_path in fonts:
-
-            if not os.path.isfile(font_path):
-                continue
-
+        if bg_binary:
             try:
+                bg_image = Image.open(io.BytesIO(bg_binary)).convert("RGB")
+                return bg_image.resize((IMAGE_WIDTH, IMAGE_HEIGHT), Image.Resampling.LANCZOS)
+            except Exception as e:
+                print(f"[WelcomeCog] Error loading background from DB: {e}")
 
-                return ImageFont.truetype(
-                    font_path,
-                    size
-                )
-
-            except Exception:
-
-                continue
-
-        return ImageFont.load_default()
-
-    # =====================================================
-    # تحميل الخلفية الخاصة بك باسم Welcome.py
-    # =====================================================
-
-    def create_background(self):
-
+        # ثانياً: محاولة البحث محلياً إن لم توجد في القاعدة
         bg_path = "Welcome.py"
-
         if os.path.isfile(bg_path):
             try:
                 bg_image = Image.open(bg_path).convert("RGB")
                 return bg_image.resize((IMAGE_WIDTH, IMAGE_HEIGHT), Image.Resampling.LANCZOS)
-            except Exception as e:
-                print(f"[WelcomeCog] Error loading background image: {e}")
+            except Exception:
+                pass
 
-        # صورة افتراضية في حال لم يتم العثور على الملف
-        image = Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), (8, 12, 35))
-        return image
+        # خلفية افتراضية احتياطية
+        return Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), (8, 12, 35))
 
     # =====================================================
     # تحميل Avatar
@@ -270,7 +239,7 @@ class WelcomeCog(commands.Cog):
         settings
     ):
 
-        image = self.create_background()
+        image = self.get_background(settings)
 
         avatar = await self.download_avatar(
             member
@@ -283,7 +252,7 @@ class WelcomeCog(commands.Cog):
                 175
             )
 
-            # إحداثيات مركز الدائرة الزرقاء
+            # إحداثيات مركز الدائرة الزرقاء في صورتك
             avatar_x = 885
             avatar_y = 197
 
@@ -313,6 +282,36 @@ class WelcomeCog(commands.Cog):
         output.seek(0)
 
         return output
+
+    # =====================================================
+    # أمر لتعيين خلفية الترحيب عبر رفع الصورة مباشرة في الشات
+    # =====================================================
+
+    @commands.command(name="setwelcomebg")
+    @commands.has_permissions(administrator=True)
+    async def set_welcome_bg(self, ctx):
+        if not ctx.message.attachments:
+            await ctx.send("❌ الرجاء إرفاق صورة مع الأمر!")
+            return
+
+        attachment = ctx.message.attachments[0]
+        if not attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            await ctx.send("❌ الملف المرفق ليس صالحة كصورة!")
+            return
+
+        try:
+            image_bytes = await attachment.read()
+            
+            # حفظ الصورة مباشرة في MongoDB الخاصة بالسيرفر
+            welcome_settings_collection.update_one(
+                {"guild_id": str(ctx.guild.id)},
+                {"$set": {"bg_image_binary": image_bytes}},
+                upsert=True
+            )
+
+            await ctx.send("✅ تم حفظ خلفية الترحيب بنجاح ولن يتم نسيانها!")
+        except Exception as e:
+            await ctx.send(f"❌ حدث خطأ أثناء حفظ الصورة: {e}")
 
     # =====================================================
     # لون الـ Embed
