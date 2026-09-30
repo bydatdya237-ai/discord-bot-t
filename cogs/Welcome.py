@@ -178,7 +178,7 @@ class WelcomeCog(commands.Cog):
     def make_circle_avatar(
         self,
         avatar,
-        size=175
+        size=210
     ):
 
         avatar = avatar.resize(
@@ -230,7 +230,7 @@ class WelcomeCog(commands.Cog):
         return avatar_result
 
     # =====================================================
-    # إنشاء صورة الترحيب ودمج البروفايل داخل الدائرة
+    # إنشاء صورة الترحيب ودمج البروفايل داخل الدائرة بدقة
     # =====================================================
 
     async def generate_welcome_image(
@@ -247,14 +247,15 @@ class WelcomeCog(commands.Cog):
 
         if avatar:
 
+            avatar_size = 210
             avatar_image = self.make_circle_avatar(
                 avatar,
-                175
+                avatar_size
             )
 
-            # إحداثيات مركز الدائرة الزرقاء في صورتك
-            avatar_x = 885
-            avatar_y = 197
+            # الإحداثيات المضبّطة خصيصاً لمركز الدائرة في صورتك
+            avatar_x = 792 - (avatar_size // 2)
+            avatar_y = 158 - (avatar_size // 2)
 
             image = image.convert(
                 "RGBA"
@@ -296,20 +297,19 @@ class WelcomeCog(commands.Cog):
 
         attachment = ctx.message.attachments[0]
         if not attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-            await ctx.send("❌ الملف المرفق ليس صالحة كصورة!")
+            await ctx.send("❌ الملف المرفق ليس صالحاً كصورة!")
             return
 
         try:
             image_bytes = await attachment.read()
             
-            # حفظ الصورة مباشرة في MongoDB الخاصة بالسيرفر
             welcome_settings_collection.update_one(
                 {"guild_id": str(ctx.guild.id)},
                 {"$set": {"bg_image_binary": image_bytes}},
                 upsert=True
             )
 
-            await ctx.send("✅ تم حفظ خلفية الترحيب بنجاح ولن يتم نسيانها!")
+            await ctx.send("✅ تم حفظ خلفية الترحيب الجديدة وتحديث المقاسات بنجاح!")
         except Exception as e:
             await ctx.send(f"❌ حدث خطأ أثناء حفظ الصورة: {e}")
 
