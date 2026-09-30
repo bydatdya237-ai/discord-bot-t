@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from pymongo import MongoClient
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageOps
 
 
 # =========================================================
@@ -21,6 +21,7 @@ mongo = MongoClient(MONGO_URI)
 db = mongo["discord_bot_db"]
 
 welcome_settings_collection = db["welcome_settings"]
+website_command_collection = db["website_command_settings"]
 
 
 # =========================================================
@@ -29,6 +30,8 @@ welcome_settings_collection = db["welcome_settings"]
 
 IMAGE_WIDTH = 1200
 IMAGE_HEIGHT = 500
+
+AVATAR_SIZE = 170
 
 WHITE = (255, 255, 255)
 GOLD = (255, 210, 65)
@@ -63,7 +66,6 @@ class WelcomeCog(commands.Cog):
         }
 
         for key, value in replacements.items():
-
             text = text.replace(
                 key,
                 str(value)
@@ -72,38 +74,210 @@ class WelcomeCog(commands.Cog):
         return text
 
     # =====================================================
-    # تحميل الخلفية من قاعدة البيانات أو الملف المحلي
+    # جلب إعدادات الأمر من الموقع
+    # =====================================================
+
+    def get_website_command_setting(
+        self,
+        guild_id,
+        command_name
+    ):
+
+        guild_id_str = str(guild_id)
+
+        setting = website_command_collection.find_one({
+            "$and": [
+                {
+                    "$or": [
+                        {"guild_id": guild_id_str},
+                        {"guild_id": guild_id}
+                    ]
+                },
+                {
+                    "$or": [
+                        {"command_name": command_name},
+                        {"name": command_name},
+                        {"command": command_name}
+                    ]
+                }
+            ]
+        })
+
+        return setting
+
+    # =====================================================
+    # التحقق من صلاحية استخدام الأمر من الموقع
+    # =====================================================
+
+    def website_command_allowed(
+        self,
+        member,
+        channel,
+        command_name
+    ):
+
+        if member is None:
+            return False
+
+        if channel is None:
+            return False
+
+        setting = self.get_website_command_setting(
+            member.guild.id,
+            command_name
+        )
+
+        # إذا الأمر غير موجود بالموقع
+        if not setting:
+            return False
+
+        # إذا الأمر غير مفعّل
+        if not setting.get("enabled", False):
+            return False
+
+        # =================================================
+        # الرتب المسموحة
+        # =================================================
+
+        role_ids = setting.get(
+            "role_ids",
+            []
+        )
+
+        if not role_ids:
+            return False
+
+        allowed_role_ids = {
+            str(role_id)
+            for role_id in role_ids
+        }
+
+        user_role_ids = {
+            str(role.id)
+            for role in member.roles
+        }
+
+        if not allowed_role_ids.intersection(
+            user_role_ids
+        ):
+            return False
+
+        # =================================================
+        # الرومات المسموحة
+        # =================================================
+
+        channel_ids = setting.get(
+            "channel_ids",
+            []
+        )
+
+        if not channel_ids:
+            return False
+
+        allowed_channel_ids = {
+            str(channel_id)
+            for channel_id in channel_ids
+        }
+
+        if str(channel.id) not in allowed_channel_ids:
+            return False
+
+        return True
+
+    # =====================================================
+    # تحميل الخلفية من MongoDB
     # =====================================================
 
     def get_background(self, settings):
 
-        # أولاً: محاولة جلب الصورة المخزنة في MongoDB كـ Binary
-        bg_binary = settings.get("bg_image_binary")
+        bg_binary = settings.get(
+            "bg_image_binary"
+        )
+
+        # =================================================
+        # الصورة المخزنة في MongoDB
+        # =================================================
 
         if bg_binary:
+
             try:
-                bg_image = Image.open(io.BytesIO(bg_binary)).convert("RGB")
-                return bg_image.resize((IMAGE_WIDTH, IMAGE_HEIGHT), Image.Resampling.LANCZOS)
+
+                bg_image = Image.open(
+                    io.BytesIO(bg_binary)
+                ).convert("RGB")
+
+                # ضبط الصورة بدون تشويه
+                bg_image = ImageOps.fit(
+                    bg_image,
+                    (
+                        IMAGE_WIDTH,
+                        IMAGE_HEIGHT
+                    ),
+                    method=Image.Resampling.LANCZOS,
+                    centering=(0.5, 0.5)
+                )
+
+                return bg_image
+
             except Exception as e:
-                print(f"[WelcomeCog] Error loading background from DB: {e}")
 
-        # ثانياً: محاولة البحث محلياً إن لم توجد في القاعدة
-        bg_path = "Welcome.py"
+                print(
+                    f"[WelcomeCog] Error loading background from DB: {e}"
+                )
+
+        # =================================================
+        # صورة محلية احتياطية
+        # =================================================
+
+        bg_path = "welcome_bg.png"
+
         if os.path.isfile(bg_path):
-            try:
-                bg_image = Image.open(bg_path).convert("RGB")
-                return bg_image.resize((IMAGE_WIDTH, IMAGE_HEIGHT), Image.Resampling.LANCZOS)
-            except Exception:
-                pass
 
-        # خلفية افتراضية احتياطية
-        return Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), (8, 12, 35))
+            try:
+
+                bg_image = Image.open(
+                    bg_path
+                ).convert("RGB")
+
+                bg_image = ImageOps.fit(
+                    bg_image,
+                    (
+                        IMAGE_WIDTH,
+                        IMAGE_HEIGHT
+                    ),
+                    method=Image.Resampling.LANCZOS,
+                    centering=(0.5, 0.5)
+                )
+
+                return bg_image
+
+            except Exception as e:
+
+                print(
+                    f"[WelcomeCog] Error loading local background: {e}"
+                )
+
+        # =================================================
+        # خلفية افتراضية
+        # =================================================
+
+        return Image.new(
+            "RGB",
+            (
+                IMAGE_WIDTH,
+                IMAGE_HEIGHT
+            ),
+            (8, 12, 35)
+        )
 
     # =====================================================
     # تحميل Avatar
     # =====================================================
 
-    async def download_avatar(self, member):
+    async def download_avatar(
+        self,
+        member
+    ):
 
         try:
 
@@ -127,22 +301,32 @@ class WelcomeCog(commands.Cog):
             return None
 
     # =====================================================
-    # Avatar دائري متناسق تماماً مع الدائرة الزرقاء
+    # Avatar دائري
     # =====================================================
 
     def make_circle_avatar(
         self,
         avatar,
-        size=170
+        size=AVATAR_SIZE
     ):
 
-        avatar = avatar.resize(
+        # =================================================
+        # جعل الصورة مربعة أولاً بدون تشويه
+        # =================================================
+
+        avatar = ImageOps.fit(
+            avatar,
             (
                 size,
                 size
             ),
-            Image.Resampling.LANCZOS
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5)
         )
+
+        # =================================================
+        # قناع دائري
+        # =================================================
 
         mask = Image.new(
             "L",
@@ -167,6 +351,10 @@ class WelcomeCog(commands.Cog):
             fill=255
         )
 
+        # =================================================
+        # الصورة النهائية
+        # =================================================
+
         avatar_result = Image.new(
             "RGBA",
             (
@@ -185,7 +373,7 @@ class WelcomeCog(commands.Cog):
         return avatar_result
 
     # =====================================================
-    # إنشاء صورة الترحيب ودمج البروفايل داخل الدائرة بدقة
+    # إنشاء صورة الترحيب
     # =====================================================
 
     async def generate_welcome_image(
@@ -194,7 +382,9 @@ class WelcomeCog(commands.Cog):
         settings
     ):
 
-        image = self.get_background(settings)
+        image = self.get_background(
+            settings
+        )
 
         avatar = await self.download_avatar(
             member
@@ -202,15 +392,22 @@ class WelcomeCog(commands.Cog):
 
         if avatar:
 
-            avatar_size = 170
             avatar_image = self.make_circle_avatar(
                 avatar,
-                avatar_size
+                AVATAR_SIZE
             )
 
-            # الإحداثيات المضبوطة لمركز الدائرة في صورتك بالضبط
-            avatar_x = 794 - (avatar_size // 2)
-            avatar_y = 196 - (avatar_size // 2)
+            # =================================================
+            # مركز الدائرة
+            # =================================================
+
+            avatar_x = 794 - (
+                AVATAR_SIZE // 2
+            )
+
+            avatar_y = 196 - (
+                AVATAR_SIZE // 2
+            )
 
             image = image.convert(
                 "RGBA"
@@ -228,6 +425,10 @@ class WelcomeCog(commands.Cog):
                 "RGB"
             )
 
+        # =================================================
+        # حفظ الصورة النهائية
+        # =================================================
+
         output = io.BytesIO()
 
         image.save(
@@ -240,33 +441,170 @@ class WelcomeCog(commands.Cog):
         return output
 
     # =====================================================
-    # أمر لتعيين خلفية الترحيب عبر رفع الصورة مباشرة في الشات
+    # أمر تعيين خلفية الترحيب
     # =====================================================
 
-    @commands.command(name="setwelcomebg")
-    @commands.has_permissions(administrator=True)
-    async def set_welcome_bg(self, ctx):
+    @commands.command(
+        name="setwelcomebg"
+    )
+    async def set_welcome_bg(
+        self,
+        ctx
+    ):
+
+        # =================================================
+        # لا يعمل خارج السيرفر
+        # =================================================
+
+        if ctx.guild is None:
+            return
+
+        # =================================================
+        # صلاحية الموقع
+        # =================================================
+
+        if not self.website_command_allowed(
+            ctx.author,
+            ctx.channel,
+            "setwelcomebg"
+        ):
+            return
+
+        # =================================================
+        # التأكد من وجود صورة
+        # =================================================
+
         if not ctx.message.attachments:
-            await ctx.send("❌ الرجاء إرفاق صورة مع الأمر!")
+
+            await ctx.send(
+                "❌ الرجاء إرفاق صورة مع الأمر!"
+            )
+
             return
 
         attachment = ctx.message.attachments[0]
-        if not attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-            await ctx.send("❌ الملف المرفق ليس صالحاً كصورة!")
+
+        # =================================================
+        # التأكد من نوع الملف
+        # =================================================
+
+        allowed_extensions = (
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp"
+        )
+
+        if not attachment.filename.lower().endswith(
+            allowed_extensions
+        ):
+
+            await ctx.send(
+                "❌ الملف المرفق ليس صالحاً كصورة!"
+            )
+
+            return
+
+        # =================================================
+        # حد أقصى لحجم الصورة
+        # =================================================
+
+        MAX_FILE_SIZE = 10 * 1024 * 1024
+
+        if attachment.size > MAX_FILE_SIZE:
+
+            await ctx.send(
+                "❌ حجم الصورة كبير جداً! الحد الأقصى 10MB."
+            )
+
             return
 
         try:
+
+            # =================================================
+            # قراءة الصورة
+            # =================================================
+
             image_bytes = await attachment.read()
-            
+
+            source_image = Image.open(
+                io.BytesIO(image_bytes)
+            )
+
+            # التأكد أن الملف فعلاً صورة
+            source_image.verify()
+
+            # إعادة فتح الصورة بعد verify
+            source_image = Image.open(
+                io.BytesIO(image_bytes)
+            ).convert("RGB")
+
+            # =================================================
+            # ضبط الصورة إلى 1200×500 بدون تشويه
+            #
+            # إذا كانت الصورة بنسبة مختلفة:
+            # يتم قص الزوائد فقط بدلاً من تمديد الصورة.
+            # =================================================
+
+            normalized_image = ImageOps.fit(
+                source_image,
+                (
+                    IMAGE_WIDTH,
+                    IMAGE_HEIGHT
+                ),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5)
+            )
+
+            # =================================================
+            # تحويلها إلى PNG قبل التخزين
+            # =================================================
+
+            output = io.BytesIO()
+
+            normalized_image.save(
+                output,
+                format="PNG",
+                optimize=True
+            )
+
+            normalized_bytes = output.getvalue()
+
+            # =================================================
+            # حفظ الصورة المضبوطة في MongoDB
+            # =================================================
+
             welcome_settings_collection.update_one(
-                {"guild_id": str(ctx.guild.id)},
-                {"$set": {"bg_image_binary": image_bytes}},
+                {
+                    "guild_id": str(
+                        ctx.guild.id
+                    )
+                },
+                {
+                    "$set": {
+                        "bg_image_binary": normalized_bytes,
+                        "bg_width": IMAGE_WIDTH,
+                        "bg_height": IMAGE_HEIGHT
+                    }
+                },
                 upsert=True
             )
 
-            await ctx.send("✅ تم حفظ خلفية الترحيب وتحديث الإحداثيات بنجاح!")
+            await ctx.send(
+                "✅ تم حفظ خلفية الترحيب بنجاح!\n"
+                "📐 الأبعاد: 1200×500\n"
+                "🖼️ تم ضبط الصورة بدون تشويه."
+            )
+
         except Exception as e:
-            await ctx.send(f"❌ حدث خطأ أثناء حفظ الصورة: {e}")
+
+            print(
+                f"[WelcomeCog] Background Error: {e}"
+            )
+
+            await ctx.send(
+                "❌ حدث خطأ أثناء معالجة الصورة."
+            )
 
     # =====================================================
     # لون الـ Embed
@@ -313,7 +651,7 @@ class WelcomeCog(commands.Cog):
             return discord.Color.blue()
 
     # =====================================================
-    # Embed الترحيب (بدون أعضاء السيرفر وعمر الحساب)
+    # Embed الترحيب
     # =====================================================
 
     def build_welcome_embed(
@@ -364,6 +702,10 @@ class WelcomeCog(commands.Cog):
             timestamp=discord.utils.utcnow()
         )
 
+        # =================================================
+        # صورة العضو الصغيرة
+        # =================================================
+
         if settings.get(
             "show_avatar",
             True
@@ -378,6 +720,10 @@ class WelcomeCog(commands.Cog):
             except Exception:
                 pass
 
+        # =================================================
+        # صورة الترحيب الكبيرة
+        # =================================================
+
         if settings.get(
             "generated_image",
             True
@@ -386,6 +732,10 @@ class WelcomeCog(commands.Cog):
             embed.set_image(
                 url="attachment://welcome.png"
             )
+
+        # =================================================
+        # Footer
+        # =================================================
 
         if footer:
 
@@ -466,6 +816,10 @@ class WelcomeCog(commands.Cog):
             if channel is None:
                 return
 
+            # =================================================
+            # إنشاء الصورة
+            # =================================================
+
             generated_image = settings.get(
                 "generated_image",
                 True
@@ -484,6 +838,10 @@ class WelcomeCog(commands.Cog):
                     image_bytes,
                     filename="welcome.png"
                 )
+
+            # =================================================
+            # الرسالة
+            # =================================================
 
             message = settings.get(
                 "message",
@@ -506,6 +864,10 @@ class WelcomeCog(commands.Cog):
                     member,
                     settings
                 )
+
+            # =================================================
+            # إرسال الترحيب
+            # =================================================
 
             if image_file and embed:
 
