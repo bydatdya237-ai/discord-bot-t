@@ -1,5 +1,4 @@
 import os
-import io
 import discord
 
 from discord.ext import commands
@@ -35,19 +34,6 @@ SETUP_COMMAND_NAME = "خريطة-إعداد"
 
 
 # =========================================================
-# محاولة استدعاء Pillow
-# =========================================================
-
-try:
-    from PIL import Image, ImageDraw, ImageFont
-
-    PIL_AVAILABLE = True
-
-except Exception:
-    PIL_AVAILABLE = False
-
-
-# =========================================================
 # أدوات عامة
 # =========================================================
 
@@ -65,6 +51,7 @@ def normalize_ids(value):
 
         try:
             result.add(int(str(item)))
+
         except (
             ValueError,
             TypeError
@@ -265,222 +252,6 @@ def get_settings(guild_id):
 
 
 # =========================================================
-# إنشاء صورة للسيرفر
-# =========================================================
-
-async def create_server_image(
-    guild
-):
-
-    # =====================================================
-    # إذا Pillow غير موجود
-    # =====================================================
-
-    if not PIL_AVAILABLE:
-
-        if guild.icon:
-            return str(guild.icon.url)
-
-        return None
-
-    try:
-
-        width = 1200
-        height = 500
-
-        image = Image.new(
-            "RGB",
-            (width, height),
-            (35, 25, 55)
-        )
-
-        draw = ImageDraw.Draw(
-            image
-        )
-
-        # =================================================
-        # خلفية متدرجة
-        # =================================================
-
-        for x in range(width):
-
-            ratio = x / width
-
-            r = int(
-                35 + (120 * ratio)
-            )
-
-            g = int(
-                25 + (40 * ratio)
-            )
-
-            b = int(
-                55 + (100 * ratio)
-            )
-
-            draw.line(
-                [(x, 0), (x, height)],
-                fill=(r, g, b)
-            )
-
-        # =================================================
-        # الخط
-        # =================================================
-
-        font = None
-        small_font = None
-
-        try:
-
-            font = ImageFont.truetype(
-                "DejaVuSans.ttf",
-                55
-            )
-
-            small_font = ImageFont.truetype(
-                "DejaVuSans.ttf",
-                30
-            )
-
-        except Exception:
-
-            try:
-
-                font = ImageFont.load_default()
-                small_font = ImageFont.load_default()
-
-            except Exception:
-                pass
-
-        # =================================================
-        # اسم السيرفر
-        # =================================================
-
-        server_name = guild.name
-
-        if len(server_name) > 30:
-            server_name = server_name[:30] + "..."
-
-        if font:
-
-            bbox = draw.textbbox(
-                (0, 0),
-                server_name,
-                font=font
-            )
-
-            text_width = bbox[2] - bbox[0]
-
-            draw.text(
-                (
-                    (width - text_width) / 2,
-                    170
-                ),
-                server_name,
-                font=font,
-                fill=(255, 255, 255)
-            )
-
-        # =================================================
-        # عدد الأعضاء
-        # =================================================
-
-        member_text = (
-            f"{guild.member_count or 0} عضو"
-        )
-
-        if small_font:
-
-            bbox = draw.textbbox(
-                (0, 0),
-                member_text,
-                font=small_font
-            )
-
-            text_width = bbox[2] - bbox[0]
-
-            draw.text(
-                (
-                    (width - text_width) / 2,
-                    250
-                ),
-                member_text,
-                font=small_font,
-                fill=(230, 220, 245)
-            )
-
-        # =================================================
-        # أيقونة السيرفر
-        # =================================================
-
-        if guild.icon:
-
-            try:
-
-                import urllib.request
-
-                image_bytes = urllib.request.urlopen(
-                    str(guild.icon.url),
-                    timeout=10
-                ).read()
-
-                icon = Image.open(
-                    io.BytesIO(image_bytes)
-                ).convert(
-                    "RGBA"
-                )
-
-                icon_size = 130
-
-                icon.thumbnail(
-                    (
-                        icon_size,
-                        icon_size
-                    )
-                )
-
-                icon_x = (
-                    width - icon.width
-                ) // 2
-
-                icon_y = 25
-
-                image.paste(
-                    icon,
-                    (
-                        icon_x,
-                        icon_y
-                    ),
-                    icon
-                )
-
-            except Exception:
-                pass
-
-        # =================================================
-        # حفظ الصورة في الذاكرة
-        # =================================================
-
-        buffer = io.BytesIO()
-
-        image.save(
-            buffer,
-            format="PNG"
-        )
-
-        buffer.seek(0)
-
-        return buffer
-
-    except Exception:
-
-        if guild.icon:
-            return str(guild.icon.url)
-
-        return None
-
-
-# =========================================================
 # Embed القوانين
 # =========================================================
 
@@ -608,7 +379,7 @@ def create_notification_roles_embed(
 
 
 # =========================================================
-# الصورة + Embed الترحيب
+# Embed الترحيب
 # =========================================================
 
 def create_welcome_embed(
@@ -618,41 +389,43 @@ def create_welcome_embed(
     embed = discord.Embed(
         title=f"أهلًا بك في {guild.name}",
         description=(
-            f"أهلًا بك في سيرفر **{guild.name}** 🌟\n\n"
-            "الرجاء الاطلاع على القوانين "
-            "واستكشاف السيرفر من خلال الأزرار بالأسفل."
+            f"أهلًا بك في **{guild.name}** 🌟\n\n"
+            "استكشف السيرفر من خلال الأقسام والأزرار الموجودة بالأسفل."
         ),
         color=discord.Color.blurple()
     )
 
-    embed.add_field(
-        name="👥 أعضاء السيرفر",
-        value=str(
-            guild.member_count or 0
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="📅 تاريخ إنشاء السيرفر",
-        value=discord.utils.format_dt(
-            guild.created_at,
-            style="D"
-        ),
-        inline=True
-    )
-
-    if guild.icon:
-
-        embed.set_thumbnail(
-            url=guild.icon.url
-        )
-
     embed.set_footer(
-        text="استمتع بوقتك في السيرفر 💜"
+        text="نتمنى لك وقتًا ممتعًا معنا 💜"
     )
 
     return embed
+
+
+# =========================================================
+# صورة السيرفر
+# =========================================================
+
+def get_server_icon_url(
+    guild
+):
+
+    if not guild.icon:
+        return None
+
+    try:
+        return str(
+            guild.icon.with_size(1024).url
+        )
+
+    except Exception:
+        try:
+            return str(
+                guild.icon.url
+            )
+
+        except Exception:
+            return None
 
 
 # =========================================================
@@ -773,10 +546,6 @@ class NotificationRoleSelect(
 
             return
 
-        # =================================================
-        # حماية إضافية
-        # =================================================
-
         if role_id not in allowed_role_ids:
 
             await interaction.response.send_message(
@@ -810,10 +579,6 @@ class NotificationRoleSelect(
 
             return
 
-        # =================================================
-        # البوت لازم يكون فوق الرتبة
-        # =================================================
-
         if role >= me.top_role:
 
             await interaction.response.send_message(
@@ -823,10 +588,6 @@ class NotificationRoleSelect(
 
             return
 
-        # =================================================
-        # إذا العضو يملك الرتبة
-        # =================================================
-
         if role in interaction.user.roles:
 
             await interaction.response.send_message(
@@ -835,10 +596,6 @@ class NotificationRoleSelect(
             )
 
             return
-
-        # =================================================
-        # إعطاء الرتبة
-        # =================================================
 
         try:
 
@@ -1225,10 +982,6 @@ class NotificationButton(
             )
         )
 
-        # =================================================
-        # لا توجد رتب
-        # =================================================
-
         if not allowed_role_ids:
 
             await interaction.response.send_message(
@@ -1271,10 +1024,23 @@ class CustomEmbedButton(
     ui.Button
 ):
 
-    def __init__(self):
+    def __init__(
+        self,
+        title=""
+    ):
+
+        title = str(
+            title or ""
+        ).strip()
+
+        if not title:
+            title = "معلومات السيرفر"
+
+        # Discord يسمح بحد أقصى 80 حرف لاسم الزر
+        button_label = title[:80]
 
         super().__init__(
-            label="معلومات",
+            label=button_label,
             style=discord.ButtonStyle.secondary,
             emoji="ℹ️",
             custom_id="server_map_custom_embed"
@@ -1434,13 +1200,20 @@ class ServerMapMainView(
             )
 
         # =================================================
-        # الإيمبد المخصص فقط إذا مفعل
+        # الإيمبد المخصص
         # =================================================
 
         custom_enabled = settings.get(
             "custom_embed_enabled",
             False
         )
+
+        custom_title = str(
+            settings.get(
+                "custom_embed_title",
+                ""
+            ) or ""
+        ).strip()
 
         custom_description = str(
             settings.get(
@@ -1452,7 +1225,9 @@ class ServerMapMainView(
         if custom_enabled and custom_description:
 
             self.add_item(
-                CustomEmbedButton()
+                CustomEmbedButton(
+                    custom_title
+                )
             )
 
 
@@ -1501,16 +1276,21 @@ async def update_server_map(
 
     try:
 
-        async for message in channel.history(
-            limit=100
-        ):
+        me = guild.me
 
-            if message.author.id == guild.me.id:
+        if me:
 
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
+            async for message in channel.history(
+                limit=100
+            ):
+
+                if message.author.id == me.id:
+
+                    try:
+                        await message.delete()
+
+                    except Exception:
+                        pass
 
     except Exception:
         pass
@@ -1524,6 +1304,20 @@ async def update_server_map(
     )
 
     # =====================================================
+    # صورة السيرفر
+    # =====================================================
+
+    icon_url = get_server_icon_url(
+        guild
+    )
+
+    if icon_url:
+
+        welcome_embed.set_image(
+            url=icon_url
+        )
+
+    # =====================================================
     # View
     # =====================================================
 
@@ -1532,71 +1326,31 @@ async def update_server_map(
     )
 
     # =====================================================
-    # محاولة إنشاء صورة
+    # إرسال الخريطة
     # =====================================================
 
-    image_result = await create_server_image(
-        guild
-    )
+    try:
 
-    # =====================================================
-    # إذا الصورة BytesIO
-    # =====================================================
+        await channel.send(
+            embed=welcome_embed,
+            view=view
+        )
 
-    if isinstance(
-        image_result,
-        io.BytesIO
-    ):
+    except discord.HTTPException:
 
-        try:
+        # =================================================
+        # إذا تعذر إرسال الصورة لأي سبب
+        # نرسل الإيمبد بدونها
+        # =================================================
 
-            file = discord.File(
-                image_result,
-                filename="server_map.png"
-            )
+        welcome_embed.set_image(
+            url=None
+        )
 
-            welcome_embed.set_image(
-                url="attachment://server_map.png"
-            )
-
-            await channel.send(
-                embed=welcome_embed,
-                file=file,
-                view=view
-            )
-
-            return
-
-        except Exception:
-
-            pass
-
-    # =====================================================
-    # إذا عندنا رابط صورة
-    # =====================================================
-
-    if isinstance(
-        image_result,
-        str
-    ):
-
-        try:
-
-            welcome_embed.set_image(
-                url=image_result
-            )
-
-        except Exception:
-            pass
-
-    # =====================================================
-    # إرسال الرسالة الواحدة
-    # =====================================================
-
-    await channel.send(
-        embed=welcome_embed,
-        view=view
-    )
+        await channel.send(
+            embed=welcome_embed,
+            view=view
+        )
 
 
 # =========================================================
@@ -1852,6 +1606,14 @@ class CustomEmbedModal(
             self.description_input.value or ""
         ).strip()
 
+        # =================================================
+        # إذا ما كتب عنوان
+        # =================================================
+
+        if not title:
+
+            title = "معلومات السيرفر"
+
         collection.update_one(
             {
                 "guild_id": self.guild_id
@@ -1867,7 +1629,8 @@ class CustomEmbedModal(
         )
 
         await interaction.response.send_message(
-            "✅ تم حفظ الإيمبد المخصص.",
+            f"✅ تم حفظ الإيمبد باسم **{title}**.\n"
+            "🔄 اضغط تحديث الخريطة حتى تظهر التغييرات.",
             ephemeral=True
         )
 
@@ -2280,7 +2043,7 @@ class ServerMapCog(
                 "📜 **القوانين**\n"
                 "اكتب قوانين السيرفر.\n\n"
                 "📝 **إيمبد مخصص**\n"
-                "اكتب أي عنوان ومحتوى تريده وسيظهر كزر إضافي في الخريطة.\n\n"
+                "اكتب أي عنوان ومحتوى تريده، وسيظهر الزر بنفس الاسم الذي اخترته.\n\n"
                 "🔄 **تحديث الخريطة**\n"
                 "يعيد بناء رسالة الخريطة بالإعدادات الحالية."
             ),
