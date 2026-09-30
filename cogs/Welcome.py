@@ -44,50 +44,6 @@ class WelcomeCog(commands.Cog):
         self.bot = bot
 
     # =====================================================
-    # حساب عمر الحساب
-    # =====================================================
-
-    def get_account_age(self, member):
-
-        try:
-
-            created_at = member.created_at
-            now = discord.utils.utcnow()
-
-            total_days = (
-                now - created_at
-            ).days
-
-            years = total_days // 365
-            remaining_days = total_days % 365
-
-            months = remaining_days // 30
-            days = remaining_days % 30
-
-            if years > 0:
-
-                if months > 0:
-                    return f"{years} سنة و {months} شهر"
-
-                return f"{years} سنة"
-
-            if months > 0:
-
-                if days > 0:
-                    return f"{months} شهر و {days} يوم"
-
-                return f"{months} شهر"
-
-            if days > 0:
-                return f"{days} يوم"
-
-            return "أقل من يوم"
-
-        except Exception:
-
-            return "غير معروف"
-
-    # =====================================================
     # استبدال المتغيرات
     # =====================================================
 
@@ -104,7 +60,6 @@ class WelcomeCog(commands.Cog):
             "{server}": member.guild.name,
             "{member_count}": str(member.guild.member_count),
             "{user_id}": str(member.id),
-            "{account_age}": self.get_account_age(member),
         }
 
         for key, value in replacements.items():
@@ -172,13 +127,13 @@ class WelcomeCog(commands.Cog):
             return None
 
     # =====================================================
-    # Avatar دائري متناسق مع الدائرة الزرقاء
+    # Avatar دائري متناسق تماماً مع الدائرة الزرقاء
     # =====================================================
 
     def make_circle_avatar(
         self,
         avatar,
-        size=210
+        size=170
     ):
 
         avatar = avatar.resize(
@@ -247,15 +202,15 @@ class WelcomeCog(commands.Cog):
 
         if avatar:
 
-            avatar_size = 210
+            avatar_size = 170
             avatar_image = self.make_circle_avatar(
                 avatar,
                 avatar_size
             )
 
-            # الإحداثيات المضبّطة خصيصاً لمركز الدائرة في صورتك
-            avatar_x = 792 - (avatar_size // 2)
-            avatar_y = 158 - (avatar_size // 2)
+            # الإحداثيات المضبوطة لمركز الدائرة في صورتك بالضبط
+            avatar_x = 794 - (avatar_size // 2)
+            avatar_y = 196 - (avatar_size // 2)
 
             image = image.convert(
                 "RGBA"
@@ -309,7 +264,7 @@ class WelcomeCog(commands.Cog):
                 upsert=True
             )
 
-            await ctx.send("✅ تم حفظ خلفية الترحيب الجديدة وتحديث المقاسات بنجاح!")
+            await ctx.send("✅ تم حفظ خلفية الترحيب وتحديث الإحداثيات بنجاح!")
         except Exception as e:
             await ctx.send(f"❌ حدث خطأ أثناء حفظ الصورة: {e}")
 
@@ -358,7 +313,7 @@ class WelcomeCog(commands.Cog):
             return discord.Color.blue()
 
     # =====================================================
-    # Embed الترحيب
+    # Embed الترحيب (بدون أعضاء السيرفر وعمر الحساب)
     # =====================================================
 
     def build_welcome_embed(
@@ -407,18 +362,6 @@ class WelcomeCog(commands.Cog):
                 )
             ),
             timestamp=discord.utils.utcnow()
-        )
-
-        embed.add_field(
-            name="👥 أعضاء السيرفر",
-            value=f"**{member.guild.member_count:,}** عضو",
-            inline=True
-        )
-
-        embed.add_field(
-            name="📅 عمر الحساب",
-            value=f"**{self.get_account_age(member)}**",
-            inline=True
         )
 
         if settings.get(
