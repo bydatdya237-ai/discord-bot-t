@@ -157,12 +157,12 @@ class WelcomeCog(commands.Cog):
         return ImageFont.load_default()
 
     # =====================================================
-    # تحميل الخلفية الخاصة بك
+    # تحميل الخلفية الخاصة بك باسم Welcome.py
     # =====================================================
 
     def create_background(self):
 
-        bg_path = "welcome_bg.png"  # اسم صورة الخلفية الخاصة بك
+        bg_path = "Welcome.py"
 
         if os.path.isfile(bg_path):
             try:
@@ -209,7 +209,7 @@ class WelcomeCog(commands.Cog):
     def make_circle_avatar(
         self,
         avatar,
-        size=175  # حجم مناسب ليتوافق تماماً مع الدائرة الزرقاء في صورتك
+        size=175
     ):
 
         avatar = avatar.resize(
@@ -283,7 +283,7 @@ class WelcomeCog(commands.Cog):
                 175
             )
 
-            # إحداثيات مركز الدائرة الزرقاء بناءً على صورتك الخاصة
+            # إحداثيات مركز الدائرة الزرقاء
             avatar_x = 885
             avatar_y = 197
 
