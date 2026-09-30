@@ -1,8 +1,10 @@
 import os
-
+import io
 import discord
+
 from discord.ext import commands
 from discord import ui
+
 from pymongo import MongoClient
 
 
@@ -33,19 +35,64 @@ SETUP_COMMAND_NAME = "خريطة-إعداد"
 
 
 # =========================================================
+# محاولة استدعاء Pillow
+# =========================================================
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+
+    PIL_AVAILABLE = True
+
+except Exception:
+    PIL_AVAILABLE = False
+
+
+# =========================================================
+# أدوات عامة
+# =========================================================
+
+def normalize_ids(value):
+
+    if value is None:
+        return set()
+
+    if not isinstance(value, (list, tuple, set)):
+        value = [value]
+
+    result = set()
+
+    for item in value:
+
+        try:
+            result.add(int(str(item)))
+        except (
+            ValueError,
+            TypeError
+        ):
+            continue
+
+    return result
+
+
+# =========================================================
 # جلب إعداد الأمر من الموقع
 # =========================================================
 
-def get_website_command_setting(guild_id, command_name):
+def get_website_command_setting(
+    guild_id,
+    command_name
+):
 
     guild_id_variants = [
         str(guild_id)
     ]
 
     try:
+
         guild_id_variants.append(
             int(guild_id)
         )
+
     except Exception:
         pass
 
@@ -98,45 +145,7 @@ def get_website_command_setting(guild_id, command_name):
 
 
 # =========================================================
-# تحويل IDs إلى Set
-# =========================================================
-
-def normalize_ids(value):
-
-    if value is None:
-        return set()
-
-    if not isinstance(value, (list, tuple, set)):
-        value = [value]
-
-    result = set()
-
-    for item in value:
-
-        try:
-            result.add(
-                int(str(item))
-            )
-        except (
-            ValueError,
-            TypeError
-        ):
-            continue
-
-    return result
-
-
-# =========================================================
-# التحقق من صلاحية الأمر من الموقع
-#
-# مطابق لنظام استدعاء:
-#
-# - الإعداد موجود
-# - الأمر مفعّل
-# - الرتبة محددة
-# - العضو يملك الرتبة
-# - الروم محدد
-# - العضو داخل الروم المسموح
+# صلاحية الموقع
 # =========================================================
 
 def website_command_allowed(
@@ -156,16 +165,8 @@ def website_command_allowed(
         command_name
     )
 
-    # =====================================================
-    # لا يوجد إعداد
-    # =====================================================
-
     if not setting:
         return False
-
-    # =====================================================
-    # الأمر غير مفعّل
-    # =====================================================
 
     if not setting.get(
         "enabled",
@@ -174,7 +175,7 @@ def website_command_allowed(
         return False
 
     # =====================================================
-    # الرتب المسموحة
+    # الرتب
     # =====================================================
 
     role_ids = setting.get(
@@ -195,17 +196,13 @@ def website_command_allowed(
         for role in member.roles
     }
 
-    # =====================================================
-    # العضو لا يملك الرتبة
-    # =====================================================
-
     if not allowed_role_ids.intersection(
         user_role_ids
     ):
         return False
 
     # =====================================================
-    # الرومات المسموحة
+    # الرومات
     # =====================================================
 
     channel_ids = setting.get(
@@ -221,10 +218,6 @@ def website_command_allowed(
         for channel_id in channel_ids
     }
 
-    # =====================================================
-    # الروم الحالي غير مسموح
-    # =====================================================
-
     if str(channel.id) not in allowed_channel_ids:
         return False
 
@@ -232,7 +225,7 @@ def website_command_allowed(
 
 
 # =========================================================
-# جلب إعدادات خريطة السيرفر
+# إعدادات خريطة السيرفر
 # =========================================================
 
 def get_settings(guild_id):
@@ -248,10 +241,20 @@ def get_settings(guild_id):
 
     settings = {
         "guild_id": guild_id,
+
         "map_channel_id": None,
+
         "notification_roles": [],
+
         "map_channels": [],
-        "rules": ""
+
+        "rules": "",
+
+        "custom_embed_title": "",
+
+        "custom_embed_description": "",
+
+        "custom_embed_enabled": False
     }
 
     collection.insert_one(
@@ -259,6 +262,222 @@ def get_settings(guild_id):
     )
 
     return settings
+
+
+# =========================================================
+# إنشاء صورة للسيرفر
+# =========================================================
+
+async def create_server_image(
+    guild
+):
+
+    # =====================================================
+    # إذا Pillow غير موجود
+    # =====================================================
+
+    if not PIL_AVAILABLE:
+
+        if guild.icon:
+            return str(guild.icon.url)
+
+        return None
+
+    try:
+
+        width = 1200
+        height = 500
+
+        image = Image.new(
+            "RGB",
+            (width, height),
+            (35, 25, 55)
+        )
+
+        draw = ImageDraw.Draw(
+            image
+        )
+
+        # =================================================
+        # خلفية متدرجة
+        # =================================================
+
+        for x in range(width):
+
+            ratio = x / width
+
+            r = int(
+                35 + (120 * ratio)
+            )
+
+            g = int(
+                25 + (40 * ratio)
+            )
+
+            b = int(
+                55 + (100 * ratio)
+            )
+
+            draw.line(
+                [(x, 0), (x, height)],
+                fill=(r, g, b)
+            )
+
+        # =================================================
+        # الخط
+        # =================================================
+
+        font = None
+        small_font = None
+
+        try:
+
+            font = ImageFont.truetype(
+                "DejaVuSans.ttf",
+                55
+            )
+
+            small_font = ImageFont.truetype(
+                "DejaVuSans.ttf",
+                30
+            )
+
+        except Exception:
+
+            try:
+
+                font = ImageFont.load_default()
+                small_font = ImageFont.load_default()
+
+            except Exception:
+                pass
+
+        # =================================================
+        # اسم السيرفر
+        # =================================================
+
+        server_name = guild.name
+
+        if len(server_name) > 30:
+            server_name = server_name[:30] + "..."
+
+        if font:
+
+            bbox = draw.textbbox(
+                (0, 0),
+                server_name,
+                font=font
+            )
+
+            text_width = bbox[2] - bbox[0]
+
+            draw.text(
+                (
+                    (width - text_width) / 2,
+                    170
+                ),
+                server_name,
+                font=font,
+                fill=(255, 255, 255)
+            )
+
+        # =================================================
+        # عدد الأعضاء
+        # =================================================
+
+        member_text = (
+            f"{guild.member_count or 0} عضو"
+        )
+
+        if small_font:
+
+            bbox = draw.textbbox(
+                (0, 0),
+                member_text,
+                font=small_font
+            )
+
+            text_width = bbox[2] - bbox[0]
+
+            draw.text(
+                (
+                    (width - text_width) / 2,
+                    250
+                ),
+                member_text,
+                font=small_font,
+                fill=(230, 220, 245)
+            )
+
+        # =================================================
+        # أيقونة السيرفر
+        # =================================================
+
+        if guild.icon:
+
+            try:
+
+                import urllib.request
+
+                image_bytes = urllib.request.urlopen(
+                    str(guild.icon.url),
+                    timeout=10
+                ).read()
+
+                icon = Image.open(
+                    io.BytesIO(image_bytes)
+                ).convert(
+                    "RGBA"
+                )
+
+                icon_size = 130
+
+                icon.thumbnail(
+                    (
+                        icon_size,
+                        icon_size
+                    )
+                )
+
+                icon_x = (
+                    width - icon.width
+                ) // 2
+
+                icon_y = 25
+
+                image.paste(
+                    icon,
+                    (
+                        icon_x,
+                        icon_y
+                    ),
+                    icon
+                )
+
+            except Exception:
+                pass
+
+        # =================================================
+        # حفظ الصورة في الذاكرة
+        # =================================================
+
+        buffer = io.BytesIO()
+
+        image.save(
+            buffer,
+            format="PNG"
+        )
+
+        buffer.seek(0)
+
+        return buffer
+
+    except Exception:
+
+        if guild.icon:
+            return str(guild.icon.url)
+
+        return None
 
 
 # =========================================================
@@ -283,52 +502,622 @@ def create_rules_embed(
 
 
 # =========================================================
-# زر عرض القوانين
+# Embed القنوات
 # =========================================================
 
-class RulesButtonView(
-    ui.View
+def create_channels_embed(
+    guild,
+    channel_ids
+):
+
+    channels = []
+
+    for channel_id in normalize_ids(
+        channel_ids
+    ):
+
+        channel = guild.get_channel(
+            channel_id
+        )
+
+        if channel:
+            channels.append(
+                channel
+            )
+
+    if not channels:
+        return None
+
+    embed = discord.Embed(
+        title="🗺️ خريطة السيرفر",
+        description=(
+            "استكشف أقسام السيرفر من خلال القنوات التالية:"
+        ),
+        color=discord.Color.blurple()
+    )
+
+    channels_text = "\n".join(
+        f"• {channel.mention}"
+        for channel in channels
+    )
+
+    embed.add_field(
+        name="📍 القنوات المتاحة",
+        value=channels_text,
+        inline=False
+    )
+
+    embed.set_footer(
+        text="خريطة السيرفر"
+    )
+
+    return embed
+
+
+# =========================================================
+# Embed الرتب
+# =========================================================
+
+def create_notification_roles_embed(
+    guild,
+    role_ids
+):
+
+    roles = []
+
+    for role_id in normalize_ids(
+        role_ids
+    ):
+
+        role = guild.get_role(
+            role_id
+        )
+
+        if role:
+            roles.append(
+                role
+            )
+
+    if not roles:
+        return None
+
+    embed = discord.Embed(
+        title="🔔 رتب الإشعارات",
+        description=(
+            "اختر رتبة الإشعارات التي تريد الحصول عليها."
+        ),
+        color=discord.Color.blurple()
+    )
+
+    roles_text = "\n".join(
+        f"• {role.mention}"
+        for role in roles
+    )
+
+    embed.add_field(
+        name="الرتب المتاحة",
+        value=roles_text,
+        inline=False
+    )
+
+    embed.set_footer(
+        text="يمكنك إضافة أو إزالة الرتب في أي وقت."
+    )
+
+    return embed
+
+
+# =========================================================
+# الصورة + Embed الترحيب
+# =========================================================
+
+def create_welcome_embed(
+    guild
+):
+
+    embed = discord.Embed(
+        title=f"أهلًا بك في {guild.name}",
+        description=(
+            f"أهلًا بك في سيرفر **{guild.name}** 🌟\n\n"
+            "الرجاء الاطلاع على القوانين "
+            "واستكشاف السيرفر من خلال الأزرار بالأسفل."
+        ),
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="👥 أعضاء السيرفر",
+        value=str(
+            guild.member_count or 0
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="📅 تاريخ إنشاء السيرفر",
+        value=discord.utils.format_dt(
+            guild.created_at,
+            style="D"
+        ),
+        inline=True
+    )
+
+    if guild.icon:
+
+        embed.set_thumbnail(
+            url=guild.icon.url
+        )
+
+    embed.set_footer(
+        text="استمتع بوقتك في السيرفر 💜"
+    )
+
+    return embed
+
+
+# =========================================================
+# اختيار رتبة مخصصة
+#
+# مهم:
+# لا نستخدم RoleSelect
+# لأن RoleSelect يعرض كل رتب السيرفر.
+#
+# نستخدم Select عادي ونضع فقط الرتب
+# التي حددها الأدمن.
+# =========================================================
+
+class NotificationRoleSelect(
+    ui.Select
 ):
 
     def __init__(
         self,
-        rules
+        guild
     ):
 
-        super().__init__(
-            timeout=None
+        self.guild_id = guild.id
+
+        settings = get_settings(
+            guild.id
         )
 
-        self.rules = rules
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
 
-    @ui.button(
-        label="القوانين",
-        style=discord.ButtonStyle.primary,
-        emoji="📜",
-        custom_id="server_map_rules"
-    )
-    async def rules_button(
+        options = []
+
+        for role_id in allowed_role_ids:
+
+            role = guild.get_role(
+                role_id
+            )
+
+            if role is None:
+                continue
+
+            options.append(
+                discord.SelectOption(
+                    label=role.name[:100],
+                    value=str(role.id),
+                    description=(
+                        f"اختيار رتبة {role.name[:80]}"
+                    ),
+                    emoji="🔔"
+                )
+            )
+
+        if not options:
+
+            options.append(
+                discord.SelectOption(
+                    label="لا توجد رتب متاحة",
+                    value="none",
+                    description="لم يتم تحديد رتب إشعارات",
+                    emoji="ℹ️"
+                )
+            )
+
+        super().__init__(
+            placeholder="🔔 اختر رتبة الإشعارات",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(
         self,
-        interaction: discord.Interaction,
-        button: ui.Button
+        interaction: discord.Interaction
     ):
 
-        # =================================================
-        # إعادة جلب القوانين من Mongo
-        # حتى لو تغيرت بعد إرسال الرسالة
-        # =================================================
+        if interaction.guild is None:
+            return
 
         settings = get_settings(
             interaction.guild.id
         )
 
-        rules = settings.get(
-            "rules",
-            ""
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        selected_value = self.values[0]
+
+        if selected_value == "none":
+
+            await interaction.response.send_message(
+                "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        try:
+
+            role_id = int(
+                selected_value
+            )
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد الرتبة.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # حماية إضافية
+        # =================================================
+
+        if role_id not in allowed_role_ids:
+
+            await interaction.response.send_message(
+                "❌ هذه الرتبة ليست من الرتب المحددة للإشعارات.",
+                ephemeral=True
+            )
+
+            return
+
+        role = interaction.guild.get_role(
+            role_id
+        )
+
+        if role is None:
+
+            await interaction.response.send_message(
+                "❌ هذه الرتبة لم تعد موجودة.",
+                ephemeral=True
+            )
+
+            return
+
+        me = interaction.guild.me
+
+        if me is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد البوت.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # البوت لازم يكون فوق الرتبة
+        # =================================================
+
+        if role >= me.top_role:
+
+            await interaction.response.send_message(
+                "❌ البوت لا يستطيع إعطاء هذه الرتبة لأن رتبة البوت ليست أعلى منها.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # إذا العضو يملك الرتبة
+        # =================================================
+
+        if role in interaction.user.roles:
+
+            await interaction.response.send_message(
+                "ℹ️ أنت تملك هذه الرتبة بالفعل.",
+                ephemeral=True
+            )
+
+            return
+
+        # =================================================
+        # إعطاء الرتبة
+        # =================================================
+
+        try:
+
+            await interaction.user.add_roles(
+                role,
+                reason="اختيار رتبة إشعارات من خريطة السيرفر"
+            )
+
+            await interaction.response.send_message(
+                f"✅ تم إعطاؤك رتبة {role.mention}.",
+                ephemeral=True
+            )
+
+        except discord.Forbidden:
+
+            await interaction.response.send_message(
+                "❌ البوت لا يملك صلاحية إعطاء هذه الرتبة.",
+                ephemeral=True
+            )
+
+        except discord.HTTPException:
+
+            await interaction.response.send_message(
+                "❌ حدث خطأ أثناء إعطاء الرتبة.",
+                ephemeral=True
+            )
+
+
+# =========================================================
+# اختيار رتبة للإزالة
+# =========================================================
+
+class RemoveNotificationRoleSelect(
+    ui.Select
+):
+
+    def __init__(
+        self,
+        guild
+    ):
+
+        self.guild_id = guild.id
+
+        settings = get_settings(
+            guild.id
+        )
+
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        options = []
+
+        for role_id in allowed_role_ids:
+
+            role = guild.get_role(
+                role_id
+            )
+
+            if role is None:
+                continue
+
+            options.append(
+                discord.SelectOption(
+                    label=role.name[:100],
+                    value=str(role.id),
+                    description=(
+                        f"إزالة رتبة {role.name[:80]}"
+                    ),
+                    emoji="🗑️"
+                )
+            )
+
+        if not options:
+
+            options.append(
+                discord.SelectOption(
+                    label="لا توجد رتب متاحة",
+                    value="none",
+                    description="لم يتم تحديد رتب إشعارات",
+                    emoji="ℹ️"
+                )
+            )
+
+        super().__init__(
+            placeholder="🗑️ اختر رتبة لإزالتها",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.guild is None:
+            return
+
+        selected_value = self.values[0]
+
+        if selected_value == "none":
+
+            await interaction.response.send_message(
+                "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        try:
+
+            role_id = int(
+                selected_value
+            )
+
+        except Exception:
+
+            await interaction.response.send_message(
+                "❌ تعذر تحديد الرتبة.",
+                ephemeral=True
+            )
+
+            return
+
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        if role_id not in allowed_role_ids:
+
+            await interaction.response.send_message(
+                "❌ هذه الرتبة ليست من الرتب المحددة للإشعارات.",
+                ephemeral=True
+            )
+
+            return
+
+        role = interaction.guild.get_role(
+            role_id
+        )
+
+        if role is None:
+
+            await interaction.response.send_message(
+                "❌ هذه الرتبة لم تعد موجودة.",
+                ephemeral=True
+            )
+
+            return
+
+        if role not in interaction.user.roles:
+
+            await interaction.response.send_message(
+                "ℹ️ أنت لا تملك هذه الرتبة.",
+                ephemeral=True
+            )
+
+            return
+
+        try:
+
+            await interaction.user.remove_roles(
+                role,
+                reason="إزالة رتبة إشعارات من خريطة السيرفر"
+            )
+
+            await interaction.response.send_message(
+                f"✅ تم إزالة رتبة {role.mention} منك.",
+                ephemeral=True
+            )
+
+        except discord.Forbidden:
+
+            await interaction.response.send_message(
+                "❌ البوت لا يملك صلاحية إزالة هذه الرتبة.",
+                ephemeral=True
+            )
+
+        except discord.HTTPException:
+
+            await interaction.response.send_message(
+                "❌ حدث خطأ أثناء إزالة الرتبة.",
+                ephemeral=True
+            )
+
+
+# =========================================================
+# View اختيار رتب الإشعارات
+# =========================================================
+
+class NotificationRoleMenuView(
+    ui.View
+):
+
+    def __init__(
+        self,
+        guild
+    ):
+
+        super().__init__(
+            timeout=60
+        )
+
+        self.add_item(
+            NotificationRoleSelect(
+                guild
+            )
+        )
+
+
+# =========================================================
+# View إزالة رتب الإشعارات
+# =========================================================
+
+class RemoveNotificationRoleMenuView(
+    ui.View
+):
+
+    def __init__(
+        self,
+        guild
+    ):
+
+        super().__init__(
+            timeout=60
+        )
+
+        self.add_item(
+            RemoveNotificationRoleSelect(
+                guild
+            )
+        )
+
+
+# =========================================================
+# زر القوانين
+# =========================================================
+
+class RulesButton(
+    ui.Button
+):
+
+    def __init__(self):
+
+        super().__init__(
+            label="القوانين",
+            style=discord.ButtonStyle.primary,
+            emoji="📜",
+            custom_id="server_map_rules"
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.guild is None:
+            return
+
+        settings = get_settings(
+            interaction.guild.id
         )
 
         rules = str(
-            rules or ""
+            settings.get(
+                "rules",
+                ""
+            ) or ""
         ).strip()
 
         if not rules:
@@ -346,6 +1135,325 @@ class RulesButtonView(
             ),
             ephemeral=True
         )
+
+
+# =========================================================
+# زر خريطة السيرفر
+# =========================================================
+
+class MapButton(
+    ui.Button
+):
+
+    def __init__(self):
+
+        super().__init__(
+            label="خريطة السيرفر",
+            style=discord.ButtonStyle.primary,
+            emoji="🗺️",
+            custom_id="server_map_channels"
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.guild is None:
+            return
+
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        embed = create_channels_embed(
+            interaction.guild,
+            settings.get(
+                "map_channels",
+                []
+            )
+        )
+
+        if embed is None:
+
+            await interaction.response.send_message(
+                "ℹ️ لم يتم تحديد قنوات في خريطة السيرفر حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# زر رتب الإشعارات
+# =========================================================
+
+class NotificationButton(
+    ui.Button
+):
+
+    def __init__(self):
+
+        super().__init__(
+            label="رتب الإشعارات",
+            style=discord.ButtonStyle.primary,
+            emoji="🔔",
+            custom_id="server_map_notifications"
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.guild is None:
+            return
+
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        allowed_role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        # =================================================
+        # لا توجد رتب
+        # =================================================
+
+        if not allowed_role_ids:
+
+            await interaction.response.send_message(
+                "ℹ️ لم يتم تحديد رتب إشعارات حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        embed = create_notification_roles_embed(
+            interaction.guild,
+            allowed_role_ids
+        )
+
+        if embed is None:
+
+            await interaction.response.send_message(
+                "ℹ️ لم تعد رتب الإشعارات المحددة موجودة.",
+                ephemeral=True
+            )
+
+            return
+
+        view = NotificationRoleMenuView(
+            interaction.guild
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# زر الإيمبد المخصص
+# =========================================================
+
+class CustomEmbedButton(
+    ui.Button
+):
+
+    def __init__(self):
+
+        super().__init__(
+            label="معلومات",
+            style=discord.ButtonStyle.secondary,
+            emoji="ℹ️",
+            custom_id="server_map_custom_embed"
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.guild is None:
+            return
+
+        settings = get_settings(
+            interaction.guild.id
+        )
+
+        enabled = settings.get(
+            "custom_embed_enabled",
+            False
+        )
+
+        title = str(
+            settings.get(
+                "custom_embed_title",
+                ""
+            ) or ""
+        ).strip()
+
+        description = str(
+            settings.get(
+                "custom_embed_description",
+                ""
+            ) or ""
+        ).strip()
+
+        if not enabled or not description:
+
+            await interaction.response.send_message(
+                "ℹ️ لم يتم إعداد هذا القسم حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        if not title:
+            title = "معلومات السيرفر"
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text=interaction.guild.name
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# View خريطة السيرفر الرئيسية
+# =========================================================
+
+class ServerMapMainView(
+    ui.View
+):
+
+    def __init__(
+        self,
+        guild
+    ):
+
+        super().__init__(
+            timeout=None
+        )
+
+        settings = get_settings(
+            guild.id
+        )
+
+        # =================================================
+        # زر الرتب فقط إذا فيه رتب
+        # =================================================
+
+        role_ids = normalize_ids(
+            settings.get(
+                "notification_roles",
+                []
+            )
+        )
+
+        valid_roles = [
+            guild.get_role(role_id)
+            for role_id in role_ids
+        ]
+
+        valid_roles = [
+            role
+            for role in valid_roles
+            if role is not None
+        ]
+
+        if valid_roles:
+
+            self.add_item(
+                NotificationButton()
+            )
+
+        # =================================================
+        # زر الخريطة فقط إذا فيه قنوات
+        # =================================================
+
+        channel_ids = normalize_ids(
+            settings.get(
+                "map_channels",
+                []
+            )
+        )
+
+        valid_channels = [
+            guild.get_channel(channel_id)
+            for channel_id in channel_ids
+        ]
+
+        valid_channels = [
+            channel
+            for channel in valid_channels
+            if channel is not None
+        ]
+
+        if valid_channels:
+
+            self.add_item(
+                MapButton()
+            )
+
+        # =================================================
+        # زر القوانين فقط إذا فيه قوانين
+        # =================================================
+
+        rules = str(
+            settings.get(
+                "rules",
+                ""
+            ) or ""
+        ).strip()
+
+        if rules:
+
+            self.add_item(
+                RulesButton()
+            )
+
+        # =================================================
+        # الإيمبد المخصص فقط إذا مفعل
+        # =================================================
+
+        custom_enabled = settings.get(
+            "custom_embed_enabled",
+            False
+        )
+
+        custom_description = str(
+            settings.get(
+                "custom_embed_description",
+                ""
+            ) or ""
+        ).strip()
+
+        if custom_enabled and custom_description:
+
+            self.add_item(
+                CustomEmbedButton()
+            )
 
 
 # =========================================================
@@ -368,13 +1476,16 @@ async def update_server_map(
         return
 
     try:
+
         map_channel_id = int(
             map_channel_id
         )
+
     except (
         ValueError,
         TypeError
     ):
+
         return
 
     channel = guild.get_channel(
@@ -405,547 +1516,91 @@ async def update_server_map(
         pass
 
     # =====================================================
-    # رتب الإشعارات
+    # Embed الترحيب
     # =====================================================
 
-    notification_role_ids = normalize_ids(
-        settings.get(
-            "notification_roles",
-            []
-        )
+    welcome_embed = create_welcome_embed(
+        guild
     )
 
-    notification_roles = []
-
-    for role_id in notification_role_ids:
-
-        role = guild.get_role(
-            role_id
-        )
-
-        if role:
-            notification_roles.append(
-                role
-            )
-
     # =====================================================
-    # لا نرسل Embed رتب الإشعارات
-    # إذا لم يتم تحديد أي رتبة
+    # View
     # =====================================================
 
-    if notification_roles:
-
-        notification_embed = discord.Embed(
-            title="🔔 رتب الإشعارات",
-            description=(
-                "اختر رتبة الإشعارات التي تريد الحصول عليها.\n\n"
-                "يمكنك أيضًا إزالة رتبة حصلت عليها مسبقًا."
-            ),
-            color=discord.Color.blurple()
-        )
-
-        roles_text = "\n".join(
-            f"• {role.mention}"
-            for role in notification_roles
-        )
-
-        notification_embed.add_field(
-            name="الرتب المتاحة",
-            value=roles_text,
-            inline=False
-        )
-
-        notification_embed.set_footer(
-            text="خريطة السيرفر"
-        )
-
-        await channel.send(
-            embed=notification_embed,
-            view=NotificationRoleView(
-                guild.id
-            )
-        )
-
-    # =====================================================
-    # قنوات الخريطة
-    # =====================================================
-
-    map_channel_ids = normalize_ids(
-        settings.get(
-            "map_channels",
-            []
-        )
+    view = ServerMapMainView(
+        guild
     )
 
-    map_channels = []
-
-    for channel_id in map_channel_ids:
-
-        map_item = guild.get_channel(
-            channel_id
-        )
-
-        if map_item:
-            map_channels.append(
-                map_item
-            )
-
     # =====================================================
-    # لا نرسل Embed القنوات
-    # إذا لم يتم تحديد أي قناة
+    # محاولة إنشاء صورة
     # =====================================================
 
-    if map_channels:
-
-        map_embed = discord.Embed(
-            title="🗺️ خريطة السيرفر",
-            description=(
-                "هذه هي القنوات المتاحة في السيرفر."
-            ),
-            color=discord.Color.blurple()
-        )
-
-        channels_text = "\n".join(
-            f"• {item.mention}"
-            for item in map_channels
-        )
-
-        map_embed.add_field(
-            name="📍 القنوات",
-            value=channels_text,
-            inline=False
-        )
-
-        map_embed.set_footer(
-            text="خريطة السيرفر"
-        )
-
-        await channel.send(
-            embed=map_embed
-        )
-
-    # =====================================================
-    # القوانين
-    # =====================================================
-
-    rules = settings.get(
-        "rules",
-        ""
+    image_result = await create_server_image(
+        guild
     )
 
-    rules = str(
-        rules or ""
-    ).strip()
-
     # =====================================================
-    # زر القوانين فقط إذا توجد قوانين
+    # إذا الصورة BytesIO
     # =====================================================
 
-    if rules:
-
-        rules_button_embed = discord.Embed(
-            title="📜 قوانين السيرفر",
-            description=(
-                "للاطلاع على قوانين السيرفر، "
-                "اضغط على الزر بالأسفل."
-            ),
-            color=discord.Color.blurple()
-        )
-
-        rules_button_embed.set_footer(
-            text="خريطة السيرفر"
-        )
-
-        await channel.send(
-            embed=rules_button_embed,
-            view=RulesButtonView(
-                rules
-            )
-        )
-
-
-# =========================================================
-# اختيار رتبة إشعارات للإضافة
-# =========================================================
-
-class AddNotificationRoleSelect(
-    ui.RoleSelect
-):
-
-    def __init__(
-        self,
-        guild_id
+    if isinstance(
+        image_result,
+        io.BytesIO
     ):
-
-        super().__init__(
-            placeholder="🔔 اختر رتبة الإشعارات",
-            min_values=1,
-            max_values=1
-        )
-
-        self.guild_id = guild_id
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        if interaction.guild is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر تحديد السيرفر.",
-                ephemeral=True
-            )
-
-            return
-
-        settings = get_settings(
-            self.guild_id
-        )
-
-        allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
-        )
-
-        selected_role = self.values[0]
-
-        # =================================================
-        # الرتبة ليست من الرتب المحددة
-        # =================================================
-
-        if selected_role.id not in allowed_role_ids:
-
-            await interaction.response.send_message(
-                "❌ هذه الرتبة ليست من رتب الإشعارات المتاحة.",
-                ephemeral=True
-            )
-
-            return
-
-        # =================================================
-        # التحقق من رتبة البوت
-        # =================================================
-
-        me = interaction.guild.me
-
-        if me is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر تحديد البوت.",
-                ephemeral=True
-            )
-
-            return
-
-        if selected_role >= me.top_role:
-
-            await interaction.response.send_message(
-                "❌ البوت لا يستطيع إعطاء هذه الرتبة لأن رتبة البوت ليست أعلى منها.",
-                ephemeral=True
-            )
-
-            return
-
-        # =================================================
-        # إضافة الرتبة
-        # =================================================
 
         try:
 
-            if selected_role in interaction.user.roles:
-
-                await interaction.response.send_message(
-                    "ℹ️ أنت تملك هذه الرتبة بالفعل.",
-                    ephemeral=True
-                )
-
-                return
-
-            await interaction.user.add_roles(
-                selected_role,
-                reason="اختيار رتبة إشعارات من خريطة السيرفر"
+            file = discord.File(
+                image_result,
+                filename="server_map.png"
             )
 
-            await interaction.response.send_message(
-                f"✅ تم إعطاؤك رتبة {selected_role.mention}.",
-                ephemeral=True
+            welcome_embed.set_image(
+                url="attachment://server_map.png"
             )
 
-        except discord.Forbidden:
-
-            await interaction.response.send_message(
-                "❌ البوت لا يملك صلاحية إعطاء هذه الرتبة.",
-                ephemeral=True
+            await channel.send(
+                embed=welcome_embed,
+                file=file,
+                view=view
             )
 
-        except discord.HTTPException:
+            return
 
-            await interaction.response.send_message(
-                "❌ حدث خطأ أثناء إعطاء الرتبة.",
-                ephemeral=True
-            )
+        except Exception:
 
+            pass
 
-# =========================================================
-# اختيار رتبة إشعارات للإزالة
-# =========================================================
+    # =====================================================
+    # إذا عندنا رابط صورة
+    # =====================================================
 
-class RemoveNotificationRoleSelect(
-    ui.RoleSelect
-):
-
-    def __init__(
-        self,
-        guild_id
+    if isinstance(
+        image_result,
+        str
     ):
-
-        super().__init__(
-            placeholder="🗑️ اختر رتبة الإشعارات لإزالتها",
-            min_values=1,
-            max_values=1
-        )
-
-        self.guild_id = guild_id
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        if interaction.guild is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر تحديد السيرفر.",
-                ephemeral=True
-            )
-
-            return
-
-        settings = get_settings(
-            self.guild_id
-        )
-
-        allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
-        )
-
-        selected_role = self.values[0]
-
-        # =================================================
-        # الرتبة ليست من الرتب المحددة
-        # =================================================
-
-        if selected_role.id not in allowed_role_ids:
-
-            await interaction.response.send_message(
-                "❌ هذه الرتبة ليست من رتب الإشعارات المتاحة.",
-                ephemeral=True
-            )
-
-            return
-
-        # =================================================
-        # المستخدم لا يملك الرتبة
-        # =================================================
-
-        if selected_role not in interaction.user.roles:
-
-            await interaction.response.send_message(
-                "ℹ️ أنت لا تملك هذه الرتبة.",
-                ephemeral=True
-            )
-
-            return
-
-        # =================================================
-        # إزالة الرتبة
-        # =================================================
 
         try:
 
-            await interaction.user.remove_roles(
-                selected_role,
-                reason="إزالة رتبة إشعارات من خريطة السيرفر"
+            welcome_embed.set_image(
+                url=image_result
             )
 
-            await interaction.response.send_message(
-                f"✅ تم إزالة رتبة {selected_role.mention} منك.",
-                ephemeral=True
-            )
-
-        except discord.Forbidden:
-
-            await interaction.response.send_message(
-                "❌ البوت لا يملك صلاحية إزالة هذه الرتبة.",
-                ephemeral=True
-            )
-
-        except discord.HTTPException:
-
-            await interaction.response.send_message(
-                "❌ حدث خطأ أثناء إزالة الرتبة.",
-                ephemeral=True
-            )
-
-
-# =========================================================
-# View رتب الإشعارات
-# =========================================================
-
-class NotificationRoleView(
-    ui.View
-):
-
-    def __init__(
-        self,
-        guild_id
-    ):
-
-        super().__init__(
-            timeout=None
-        )
-
-        self.guild_id = guild_id
+        except Exception:
+            pass
 
     # =====================================================
-    # اختيار رتبة
+    # إرسال الرسالة الواحدة
     # =====================================================
 
-    @ui.button(
-        label="اختيار رتبة",
-        style=discord.ButtonStyle.primary,
-        emoji="🔔",
-        custom_id="server_map_add_role"
+    await channel.send(
+        embed=welcome_embed,
+        view=view
     )
-    async def add_role_button(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
-
-        if interaction.guild is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر تحديد السيرفر.",
-                ephemeral=True
-            )
-
-            return
-
-        settings = get_settings(
-            interaction.guild.id
-        )
-
-        allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
-        )
-
-        # =================================================
-        # إذا لم تعد هناك رتب محددة
-        # =================================================
-
-        if not allowed_role_ids:
-
-            await interaction.response.send_message(
-                "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
-                ephemeral=True
-            )
-
-            return
-
-        view = ui.View(
-            timeout=60
-        )
-
-        view.add_item(
-            AddNotificationRoleSelect(
-                interaction.guild.id
-            )
-        )
-
-        await interaction.response.send_message(
-            "🔔 اختر رتبة الإشعارات التي تريد الحصول عليها:",
-            view=view,
-            ephemeral=True
-        )
-
-    # =====================================================
-    # إزالة رتبة
-    # =====================================================
-
-    @ui.button(
-        label="إزالة رتبة",
-        style=discord.ButtonStyle.secondary,
-        emoji="🗑️",
-        custom_id="server_map_remove_role"
-    )
-    async def remove_role_button(
-        self,
-        interaction: discord.Interaction,
-        button: ui.Button
-    ):
-
-        if interaction.guild is None:
-
-            await interaction.response.send_message(
-                "❌ تعذر تحديد السيرفر.",
-                ephemeral=True
-            )
-
-            return
-
-        settings = get_settings(
-            interaction.guild.id
-        )
-
-        allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
-        )
-
-        # =================================================
-        # إذا لم تعد هناك رتب محددة
-        # =================================================
-
-        if not allowed_role_ids:
-
-            await interaction.response.send_message(
-                "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
-                ephemeral=True
-            )
-
-            return
-
-        view = ui.View(
-            timeout=60
-        )
-
-        view.add_item(
-            RemoveNotificationRoleSelect(
-                interaction.guild.id
-            )
-        )
-
-        await interaction.response.send_message(
-            "🗑️ اختر رتبة الإشعارات التي تريد إزالتها:",
-            view=view,
-            ephemeral=True
-        )
 
 
 # =========================================================
-# اختيار رتب الإشعارات من إعداد الخريطة
+# إعداد رتب الإشعارات من الأدمن
 # =========================================================
 
 class NotificationAdminRoleSelect(
@@ -1001,7 +1656,7 @@ class NotificationAdminRoleSelect(
         )
 
         await interaction.response.send_message(
-            "✅ تم حفظ رتب الإشعارات.",
+            "✅ تم حفظ رتب الإشعارات المحددة.",
             ephemeral=True
         )
 
@@ -1139,7 +1794,86 @@ class RulesModal(
 
 
 # =========================================================
-# View إعداد خريطة السيرفر
+# Modal الإيمبد المخصص
+# =========================================================
+
+class CustomEmbedModal(
+    ui.Modal,
+    title="📝 الإيمبد المخصص"
+):
+
+    title_input = ui.TextInput(
+        label="عنوان الإيمبد",
+        placeholder="مثال: معلومات مهمة",
+        required=False,
+        max_length=256
+    )
+
+    description_input = ui.TextInput(
+        label="محتوى الإيمبد",
+        placeholder="اكتب أي شيء تريده هنا...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=4000
+    )
+
+    def __init__(
+        self,
+        guild_id
+    ):
+
+        super().__init__()
+
+        self.guild_id = guild_id
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if not website_command_allowed(
+            interaction.user,
+            interaction.channel,
+            SETUP_COMMAND_NAME
+        ):
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        title = str(
+            self.title_input.value or ""
+        ).strip()
+
+        description = str(
+            self.description_input.value or ""
+        ).strip()
+
+        collection.update_one(
+            {
+                "guild_id": self.guild_id
+            },
+            {
+                "$set": {
+                    "custom_embed_title": title,
+                    "custom_embed_description": description,
+                    "custom_embed_enabled": True
+                }
+            },
+            upsert=True
+        )
+
+        await interaction.response.send_message(
+            "✅ تم حفظ الإيمبد المخصص.",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# View إعداد الخريطة
 # =========================================================
 
 class ServerMapSetupView(
@@ -1158,7 +1892,7 @@ class ServerMapSetupView(
         self.guild_id = guild_id
 
     # =====================================================
-    # فحص الصلاحية
+    # التحقق من الصلاحية
     # =====================================================
 
     async def check_permission(
@@ -1213,7 +1947,8 @@ class ServerMapSetupView(
         )
 
         await interaction.response.send_message(
-            "🔔 اختر رتب الإشعارات التي تريد إتاحتها للأعضاء:",
+            "🔔 اختر الرتب التي تريد إتاحتها كرتب إشعارات.\n"
+            "ملاحظة: هذه الرتب فقط هي التي ستظهر للأعضاء.",
             view=view,
             ephemeral=True
         )
@@ -1256,7 +1991,7 @@ class ServerMapSetupView(
         )
 
         await interaction.response.send_message(
-            "🗺️ اختر القنوات التي تريد ظهورها في خريطة السيرفر:",
+            "🗺️ اختر القنوات التي تريد ظهورها في الخريطة.",
             view=view,
             ephemeral=True
         )
@@ -1295,6 +2030,39 @@ class ServerMapSetupView(
         )
 
     # =====================================================
+    # الإيمبد المخصص
+    # =====================================================
+
+    @ui.button(
+        label="إيمبد مخصص",
+        style=discord.ButtonStyle.secondary,
+        emoji="📝",
+        row=1
+    )
+    async def custom_embed_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if not await self.check_permission(
+            interaction
+        ):
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_modal(
+            CustomEmbedModal(
+                self.guild_id
+            )
+        )
+
+    # =====================================================
     # تحديث الخريطة
     # =====================================================
 
@@ -1302,7 +2070,7 @@ class ServerMapSetupView(
         label="تحديث الخريطة",
         style=discord.ButtonStyle.success,
         emoji="🔄",
-        row=1
+        row=2
     )
     async def refresh_button(
         self,
@@ -1330,7 +2098,7 @@ class ServerMapSetupView(
         )
 
         await interaction.followup.send(
-            "✅ تم تحديث خريطة السيرفر.",
+            "✅ تم تحديث خريطة السيرفر بالإعدادات الجديدة.",
             ephemeral=True
         )
 
@@ -1369,13 +2137,12 @@ class ServerMapCog(
         # صلاحية الموقع
         # =================================================
 
-        allowed = website_command_allowed(
+        if not website_command_allowed(
             ctx.author,
             ctx.channel,
             CREATE_COMMAND_NAME
-        )
+        ):
 
-        if not allowed:
             return
 
         # =================================================
@@ -1433,7 +2200,7 @@ class ServerMapCog(
         )
 
         # =================================================
-        # تحديث الخريطة
+        # إنشاء الخريطة
         # =================================================
 
         await update_server_map(
@@ -1464,13 +2231,12 @@ class ServerMapCog(
         # صلاحية الموقع
         # =================================================
 
-        allowed = website_command_allowed(
+        if not website_command_allowed(
             ctx.author,
             ctx.channel,
             SETUP_COMMAND_NAME
-        )
+        ):
 
-        if not allowed:
             return
 
         # =================================================
@@ -1492,24 +2258,40 @@ class ServerMapCog(
             return
 
         # =================================================
-        # Embed الإعداد
+        # تحديث الخريطة أولًا
+        # =================================================
+
+        await update_server_map(
+            ctx.guild
+        )
+
+        # =================================================
+        # لوحة إعداد واحدة
         # =================================================
 
         embed = discord.Embed(
             title="🗺️ إعداد خريطة السيرفر",
             description=(
-                "من هنا يمكنك إعداد محتوى خريطة السيرفر.\n\n"
+                "من هنا تقدر تتحكم في محتوى خريطة السيرفر.\n\n"
                 "🔔 **رتب الإشعارات**\n"
                 "حدد الرتب التي يستطيع الأعضاء اختيارها.\n\n"
                 "🗺️ **قنوات الخريطة**\n"
-                "حدد القنوات التي ستظهر داخل الخريطة.\n\n"
+                "حدد القنوات التي ستظهر للأعضاء.\n\n"
                 "📜 **القوانين**\n"
-                "حدد قوانين السيرفر.\n\n"
+                "اكتب قوانين السيرفر.\n\n"
+                "📝 **إيمبد مخصص**\n"
+                "اكتب أي عنوان ومحتوى تريده وسيظهر كزر إضافي في الخريطة.\n\n"
                 "🔄 **تحديث الخريطة**\n"
-                "إعادة إرسال الخريطة بالإعدادات الجديدة."
+                "يعيد بناء رسالة الخريطة بالإعدادات الحالية."
             ),
             color=discord.Color.blurple()
         )
+
+        if ctx.guild.icon:
+
+            embed.set_thumbnail(
+                url=ctx.guild.icon.url
+            )
 
         embed.set_footer(
             text="إعداد خريطة السيرفر"
@@ -1550,25 +2332,6 @@ class ServerMapCog(
         ):
             return
 
-        channel_ids = setting.get(
-            "channel_ids",
-            []
-        )
-
-        allowed_channel_ids = {
-            str(channel_id)
-            for channel_id in channel_ids
-        }
-
-        if str(ctx.channel.id) not in allowed_channel_ids:
-            return
-
-        if isinstance(
-            error,
-            commands.CheckFailure
-        ):
-            return
-
         print(
             f"[ServerMap] Create Error: {repr(error)}"
         )
@@ -1601,19 +2364,6 @@ class ServerMapCog(
         ):
             return
 
-        channel_ids = setting.get(
-            "channel_ids",
-            []
-        )
-
-        allowed_channel_ids = {
-            str(channel_id)
-            for channel_id in channel_ids
-        }
-
-        if str(ctx.channel.id) not in allowed_channel_ids:
-            return
-
         print(
             f"[ServerMap] Setup Error: {repr(error)}"
         )
@@ -1623,7 +2373,9 @@ class ServerMapCog(
 # تشغيل الـ Cog
 # =========================================================
 
-async def setup(bot):
+async def setup(
+    bot
+):
 
     await bot.add_cog(
         ServerMapCog(bot)
