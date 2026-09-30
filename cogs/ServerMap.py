@@ -414,17 +414,21 @@ def get_server_icon_url(
         return None
 
     try:
+
         return str(
             guild.icon.with_size(1024).url
         )
 
     except Exception:
+
         try:
+
             return str(
                 guild.icon.url
             )
 
         except Exception:
+
             return None
 
 
@@ -1304,21 +1308,7 @@ async def update_server_map(
     )
 
     # =====================================================
-    # صورة السيرفر
-    # =====================================================
-
-    icon_url = get_server_icon_url(
-        guild
-    )
-
-    if icon_url:
-
-        welcome_embed.set_image(
-            url=icon_url
-        )
-
-    # =====================================================
-    # View
+    # View خريطة السيرفر
     # =====================================================
 
     view = ServerMapMainView(
@@ -1326,31 +1316,56 @@ async def update_server_map(
     )
 
     # =====================================================
-    # إرسال الخريطة
+    # صورة السيرفر الحقيقية
     # =====================================================
+
+    icon_url = get_server_icon_url(
+        guild
+    )
 
     try:
 
+        # =================================================
+        # إرسال صورة السيرفر كرسالة مستقلة
+        # =================================================
+
+        if icon_url:
+
+            await channel.send(
+                icon_url
+            )
+
+        # =================================================
+        # إرسال الإيمبد تحت الصورة
+        # =================================================
+
         await channel.send(
             embed=welcome_embed,
             view=view
         )
 
-    except discord.HTTPException:
+    except discord.HTTPException as error:
 
-        # =================================================
-        # إذا تعذر إرسال الصورة لأي سبب
-        # نرسل الإيمبد بدونها
-        # =================================================
-
-        welcome_embed.set_image(
-            url=None
+        print(
+            f"[ServerMap] Failed to send server map: {repr(error)}"
         )
 
-        await channel.send(
-            embed=welcome_embed,
-            view=view
-        )
+        # =================================================
+        # محاولة إرسال الإيمبد حتى لو فشل إرسال الصورة
+        # =================================================
+
+        try:
+
+            await channel.send(
+                embed=welcome_embed,
+                view=view
+            )
+
+        except Exception as fallback_error:
+
+            print(
+                f"[ServerMap] Fallback send failed: {repr(fallback_error)}"
+            )
 
 
 # =========================================================
