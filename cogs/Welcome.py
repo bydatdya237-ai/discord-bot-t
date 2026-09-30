@@ -25,7 +25,7 @@ website_command_collection = db["website_command_settings"]
 
 
 # =========================================================
-# إعدادات الصورة النهائية
+# أبعاد صورة الترحيب النهائية
 # =========================================================
 
 IMAGE_WIDTH = 1200
@@ -34,20 +34,24 @@ IMAGE_HEIGHT = 500
 
 # =========================================================
 # معلومات الدائرة في التصميم الأصلي
+# الصورة الأصلية: 1920 × 1080
+# مركز الدائرة: 1386 × 530
+# قطر الدائرة: 502
 # =========================================================
 
-ORIGINAL_CIRCLE_CENTER_X = 1386
-ORIGINAL_CIRCLE_CENTER_Y = 530
+ORIGINAL_IMAGE_WIDTH = 1920
+ORIGINAL_IMAGE_HEIGHT = 1080
 
+ORIGINAL_CIRCLE_X = 1386
+ORIGINAL_CIRCLE_Y = 530
 ORIGINAL_CIRCLE_DIAMETER = 502
 
 
 # =========================================================
-# حجم الأفاتار داخل الدائرة
+# إعدادات الأفاتار
 # =========================================================
 
-# نخليه نفس قطر الدائرة تقريباً مع هامش بسيط
-AVATAR_PADDING = 6
+AVATAR_PADDING = 4
 
 
 # =========================================================
@@ -119,7 +123,7 @@ class WelcomeCog(commands.Cog):
         return setting
 
     # =====================================================
-    # التحقق من صلاحية الموقع
+    # التحقق من صلاحية الأمر من الموقع
     # =====================================================
 
     def website_command_allowed(
@@ -140,16 +144,19 @@ class WelcomeCog(commands.Cog):
             command_name
         )
 
-        # الأمر غير موجود بالموقع
+        # الأمر غير موجود في الموقع
         if not setting:
             return False
 
         # الأمر غير مفعّل
-        if not setting.get("enabled", False):
+        if not setting.get(
+            "enabled",
+            False
+        ):
             return False
 
         # =================================================
-        # الرتب
+        # الرتب المسموحة
         # =================================================
 
         role_ids = setting.get(
@@ -176,7 +183,7 @@ class WelcomeCog(commands.Cog):
             return False
 
         # =================================================
-        # الرومات
+        # الرومات المسموحة
         # =================================================
 
         channel_ids = setting.get(
@@ -198,10 +205,10 @@ class WelcomeCog(commands.Cog):
         return True
 
     # =====================================================
-    # تجهيز الخلفية
+    # تجهيز الخلفية إلى 1200 × 500
     #
-    # نحفظ معلومات القص حتى نقدر نحول إحداثيات
-    # الدائرة من الصورة الأصلية إلى الصورة النهائية.
+    # نحافظ على نسبة الصورة.
+    # يتم القص من المنتصف فقط، بدون تشويه.
     # =====================================================
 
     def prepare_background(
@@ -220,22 +227,23 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # حساب أبعاد الجزء الذي سيتم قصه
-        # مثل ImageOps.fit
+        # الصورة أعرض من المطلوب
         # =================================================
 
         if source_ratio > target_ratio:
 
-            # الصورة أعرض من المطلوب
             crop_height = source_height
 
             crop_width = int(
                 source_height * target_ratio
             )
 
+        # =================================================
+        # الصورة أطول من المطلوب
+        # =================================================
+
         else:
 
-            # الصورة أطول من المطلوب
             crop_width = source_width
 
             crop_height = int(
@@ -246,28 +254,28 @@ class WelcomeCog(commands.Cog):
         # القص من المنتصف
         # =================================================
 
-        left = (
-            source_width - crop_width
-        ) / 2
+        left = int(
+            (source_width - crop_width) / 2
+        )
 
-        top = (
-            source_height - crop_height
-        ) / 2
+        top = int(
+            (source_height - crop_height) / 2
+        )
 
         right = left + crop_width
         bottom = top + crop_height
 
         cropped = source_image.crop(
             (
-                int(left),
-                int(top),
-                int(right),
-                int(bottom)
+                left,
+                top,
+                right,
+                bottom
             )
         )
 
         # =================================================
-        # تغيير الحجم إلى 1200×500
+        # تحويل إلى 1200 × 500
         # =================================================
 
         final_image = cropped.resize(
@@ -278,48 +286,10 @@ class WelcomeCog(commands.Cog):
             Image.Resampling.LANCZOS
         )
 
-        # =================================================
-        # حساب Scale
-        # =================================================
-
-        scale_x = (
-            IMAGE_WIDTH / crop_width
-        )
-
-        scale_y = (
-            IMAGE_HEIGHT / crop_height
-        )
-
-        # =================================================
-        # تحويل مركز الدائرة من الصورة الأصلية
-        # إلى الصورة الجديدة
-        # =================================================
-
-        new_circle_x = (
-            ORIGINAL_CIRCLE_CENTER_X - left
-        ) * scale_x
-
-        new_circle_y = (
-            ORIGINAL_CIRCLE_CENTER_Y - top
-        ) * scale_y
-
-        # =================================================
-        # تحويل قطر الدائرة
-        # =================================================
-
-        new_circle_diameter = (
-            ORIGINAL_CIRCLE_DIAMETER * scale_x
-        )
-
-        return (
-            final_image,
-            new_circle_x,
-            new_circle_y,
-            new_circle_diameter
-        )
+        return final_image
 
     # =====================================================
-    # تحميل الخلفية من MongoDB
+    # تحميل الخلفية
     # =====================================================
 
     def get_background(
@@ -332,7 +302,7 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # الصورة الموجودة في MongoDB
+        # الخلفية الموجودة في MongoDB
         # =================================================
 
         if bg_binary:
@@ -350,11 +320,12 @@ class WelcomeCog(commands.Cog):
             except Exception as e:
 
                 print(
-                    f"[WelcomeCog] Error loading background from DB: {e}"
+                    f"[WelcomeCog] "
+                    f"Background DB Error: {e}"
                 )
 
         # =================================================
-        # صورة محلية احتياطية
+        # خلفية محلية احتياطية
         # =================================================
 
         bg_path = "welcome_bg.png"
@@ -374,14 +345,15 @@ class WelcomeCog(commands.Cog):
             except Exception as e:
 
                 print(
-                    f"[WelcomeCog] Error loading local background: {e}"
+                    f"[WelcomeCog] "
+                    f"Local Background Error: {e}"
                 )
 
         # =================================================
         # خلفية افتراضية
         # =================================================
 
-        fallback = Image.new(
+        return Image.new(
             "RGB",
             (
                 IMAGE_WIDTH,
@@ -390,15 +362,8 @@ class WelcomeCog(commands.Cog):
             (8, 12, 35)
         )
 
-        return (
-            fallback,
-            IMAGE_WIDTH // 2,
-            IMAGE_HEIGHT // 2,
-            170
-        )
-
     # =====================================================
-    # تحميل Avatar
+    # تحميل Avatar العضو
     # =====================================================
 
     async def download_avatar(
@@ -415,9 +380,11 @@ class WelcomeCog(commands.Cog):
 
             data = await avatar_asset.read()
 
-            return Image.open(
+            avatar = Image.open(
                 io.BytesIO(data)
             ).convert("RGBA")
+
+            return avatar
 
         except Exception as e:
 
@@ -428,7 +395,7 @@ class WelcomeCog(commands.Cog):
             return None
 
     # =====================================================
-    # تجهيز Avatar دائري
+    # إنشاء Avatar دائري
     # =====================================================
 
     def make_circle_avatar(
@@ -443,7 +410,7 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # قص الأفاتار بشكل مربع بدون تشويه
+        # قص الأفاتار إلى مربع بدون تشويه
         # =================================================
 
         avatar = ImageOps.fit(
@@ -469,11 +436,11 @@ class WelcomeCog(commands.Cog):
             0
         )
 
-        mask_draw = ImageDraw.Draw(
+        draw = ImageDraw.Draw(
             mask
         )
 
-        mask_draw.ellipse(
+        draw.ellipse(
             (
                 0,
                 0,
@@ -487,7 +454,7 @@ class WelcomeCog(commands.Cog):
         # إنشاء الصورة الشفافة
         # =================================================
 
-        avatar_result = Image.new(
+        result = Image.new(
             "RGBA",
             (
                 size,
@@ -496,13 +463,108 @@ class WelcomeCog(commands.Cog):
             (0, 0, 0, 0)
         )
 
-        avatar_result.paste(
+        result.paste(
             avatar,
             (0, 0),
             mask
         )
 
-        return avatar_result
+        return result
+
+    # =====================================================
+    # حساب مكان الدائرة بعد تحويل 1920×1080
+    # إلى 1200×500
+    # =====================================================
+
+    def get_circle_position(self):
+
+        target_ratio = (
+            IMAGE_WIDTH / IMAGE_HEIGHT
+        )
+
+        original_ratio = (
+            ORIGINAL_IMAGE_WIDTH
+            / ORIGINAL_IMAGE_HEIGHT
+        )
+
+        # =================================================
+        # الصورة الأصلية أعرض من النسبة المطلوبة
+        # =================================================
+
+        if original_ratio > target_ratio:
+
+            crop_height = ORIGINAL_IMAGE_HEIGHT
+
+            crop_width = int(
+                ORIGINAL_IMAGE_HEIGHT
+                * target_ratio
+            )
+
+        else:
+
+            crop_width = ORIGINAL_IMAGE_WIDTH
+
+            crop_height = int(
+                ORIGINAL_IMAGE_WIDTH
+                / target_ratio
+            )
+
+        # =================================================
+        # مكان القص
+        # =================================================
+
+        crop_left = (
+            ORIGINAL_IMAGE_WIDTH
+            - crop_width
+        ) / 2
+
+        crop_top = (
+            ORIGINAL_IMAGE_HEIGHT
+            - crop_height
+        ) / 2
+
+        # =================================================
+        # Scale
+        # =================================================
+
+        scale_x = (
+            IMAGE_WIDTH
+            / crop_width
+        )
+
+        scale_y = (
+            IMAGE_HEIGHT
+            / crop_height
+        )
+
+        # =================================================
+        # مركز الدائرة بعد القص والتحجيم
+        # =================================================
+
+        circle_x = (
+            ORIGINAL_CIRCLE_X
+            - crop_left
+        ) * scale_x
+
+        circle_y = (
+            ORIGINAL_CIRCLE_Y
+            - crop_top
+        ) * scale_y
+
+        # =================================================
+        # قطر الدائرة بعد التحجيم
+        # =================================================
+
+        circle_diameter = (
+            ORIGINAL_CIRCLE_DIAMETER
+            * scale_x
+        )
+
+        return (
+            circle_x,
+            circle_y,
+            circle_diameter
+        )
 
     # =====================================================
     # إنشاء صورة الترحيب
@@ -514,76 +576,116 @@ class WelcomeCog(commands.Cog):
         settings
     ):
 
-        (
-            image,
-            circle_x,
-            circle_y,
-            circle_diameter
-        ) = self.get_background(
+        # =================================================
+        # تحميل الخلفية
+        # =================================================
+
+        image = self.get_background(
             settings
         )
+
+        # =================================================
+        # تحميل Avatar
+        # =================================================
 
         avatar = await self.download_avatar(
             member
         )
 
-        if avatar:
+        # =================================================
+        # إذا فشل تحميل Avatar
+        # =================================================
 
-            # =================================================
-            # حجم الأفاتار بناءً على حجم الدائرة الحقيقي
-            # =================================================
+        if avatar is None:
 
-            avatar_size = int(
-                circle_diameter - (
-                    AVATAR_PADDING * 2
-                )
+            print(
+                "[WelcomeCog] "
+                "لم يتم تحميل Avatar العضو"
             )
 
-            avatar_size = max(
-                1,
-                avatar_size
+            output = io.BytesIO()
+
+            image.save(
+                output,
+                format="PNG"
             )
 
-            avatar_image = self.make_circle_avatar(
-                avatar,
-                avatar_size
+            output.seek(0)
+
+            return output
+
+        # =================================================
+        # حساب الدائرة
+        # =================================================
+
+        (
+            circle_x,
+            circle_y,
+            circle_diameter
+        ) = self.get_circle_position()
+
+        # =================================================
+        # حجم Avatar
+        # =================================================
+
+        avatar_size = int(
+            circle_diameter
+            - (
+                AVATAR_PADDING * 2
             )
+        )
 
-            # =================================================
-            # وضع الأفاتار في مركز الدائرة بالضبط
-            # =================================================
+        avatar_size = max(
+            1,
+            avatar_size
+        )
 
-            avatar_x = int(
-                circle_x - (
-                    avatar_size / 2
-                )
+        # =================================================
+        # إنشاء Avatar دائري
+        # =================================================
+
+        avatar_image = self.make_circle_avatar(
+            avatar,
+            avatar_size
+        )
+
+        # =================================================
+        # وضع Avatar في منتصف الدائرة
+        # =================================================
+
+        avatar_x = int(
+            circle_x
+            - (
+                avatar_size / 2
             )
+        )
 
-            avatar_y = int(
-                circle_y - (
-                    avatar_size / 2
-                )
+        avatar_y = int(
+            circle_y
+            - (
+                avatar_size / 2
             )
+        )
 
-            # =================================================
-            # دمج Avatar
-            # =================================================
+        # =================================================
+        # دمج Avatar
+        # =================================================
 
-            image = image.convert(
-                "RGBA"
+        image = image.convert(
+            "RGBA"
+        )
+
+        image.alpha_composite(
+            avatar_image,
+            (
+                avatar_x,
+                avatar_y
             )
+        )
 
-            image.alpha_composite(
-                avatar_image,
-                (
-                    avatar_x,
-                    avatar_y
-                )
-            )
-
-            image = image.convert(
-                "RGB"
-            )
+        image = image.convert(
+            "RGB"
+        )
 
         # =================================================
         # حفظ الصورة النهائية
@@ -601,7 +703,7 @@ class WelcomeCog(commands.Cog):
         return output
 
     # =====================================================
-    # أمر تعيين خلفية الترحيب
+    # أمر تغيير خلفية الترحيب
     # =====================================================
 
     @commands.command(
@@ -616,7 +718,7 @@ class WelcomeCog(commands.Cog):
             return
 
         # =================================================
-        # صلاحية الموقع
+        # صلاحيات الموقع
         # =================================================
 
         if not self.website_command_allowed(
@@ -641,7 +743,7 @@ class WelcomeCog(commands.Cog):
         attachment = ctx.message.attachments[0]
 
         # =================================================
-        # أنواع الصور المسموحة
+        # أنواع الملفات
         # =================================================
 
         allowed_extensions = (
@@ -680,7 +782,7 @@ class WelcomeCog(commands.Cog):
             image_bytes = await attachment.read()
 
             # =================================================
-            # التأكد أن الملف صورة فعلية
+            # فحص الصورة
             # =================================================
 
             test_image = Image.open(
@@ -698,17 +800,16 @@ class WelcomeCog(commands.Cog):
             ).convert("RGB")
 
             # =================================================
-            # ضبط الصورة وحفظها
+            # ضبطها إلى 1200 × 500
             # =================================================
 
-            (
-                normalized_image,
-                _,
-                _,
-                _
-            ) = self.prepare_background(
+            normalized_image = self.prepare_background(
                 source_image
             )
+
+            # =================================================
+            # حفظ PNG
+            # =================================================
 
             output = io.BytesIO()
 
@@ -721,7 +822,7 @@ class WelcomeCog(commands.Cog):
             normalized_bytes = output.getvalue()
 
             # =================================================
-            # حفظ الخلفية
+            # MongoDB
             # =================================================
 
             welcome_settings_collection.update_one(
@@ -749,7 +850,8 @@ class WelcomeCog(commands.Cog):
         except Exception as e:
 
             print(
-                f"[WelcomeCog] Background Error: {e}"
+                f"[WelcomeCog] "
+                f"Background Error: {e}"
             )
 
             await ctx.send(
@@ -853,7 +955,7 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # Avatar صغير
+        # صورة العضو الصغيرة
         # =================================================
 
         if settings.get(
@@ -913,7 +1015,7 @@ class WelcomeCog(commands.Cog):
         return embed
 
     # =====================================================
-    # Member Join
+    # عند دخول عضو
     # =====================================================
 
     @commands.Cog.listener()
@@ -967,7 +1069,7 @@ class WelcomeCog(commands.Cog):
                 return
 
             # =================================================
-            # إنشاء صورة الترحيب
+            # إنشاء الصورة
             # =================================================
 
             generated_image = settings.get(
@@ -1003,6 +1105,10 @@ class WelcomeCog(commands.Cog):
                 member
             )
 
+            # =================================================
+            # Embed
+            # =================================================
+
             embed = None
 
             if settings.get(
@@ -1016,7 +1122,7 @@ class WelcomeCog(commands.Cog):
                 )
 
             # =================================================
-            # الإرسال
+            # إرسال الترحيب
             # =================================================
 
             if image_file and embed:
@@ -1075,14 +1181,16 @@ class WelcomeCog(commands.Cog):
         except discord.Forbidden:
 
             print(
-                f"[WelcomeCog] لا توجد صلاحية كافية "
+                f"[WelcomeCog] "
+                f"لا توجد صلاحية كافية "
                 f"في السيرفر {member.guild.id}"
             )
 
         except discord.HTTPException as e:
 
             print(
-                f"[WelcomeCog] Discord API Error: {e}"
+                f"[WelcomeCog] "
+                f"Discord API Error: {e}"
             )
 
         except Exception as e:
