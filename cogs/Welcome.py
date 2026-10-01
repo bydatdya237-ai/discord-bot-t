@@ -54,7 +54,7 @@ FINAL_CIRCLE_DIAMETER = 294
 AVATAR_PADDING = 12
 
 # تحريك الأفاتار لليمين قليلًا
-AVATAR_OFFSET_X = 0
+AVATAR_OFFSET_X = 1
 
 # بدون تحريك عمودي
 AVATAR_OFFSET_Y = 0
