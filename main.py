@@ -55,6 +55,7 @@ website_command_settings = db[
     "website_command_settings"
 ]
 
+
 # ========================================================
 # اختصارات الموقع
 # ========================================================
@@ -152,27 +153,33 @@ def get_message_first_word(content):
     )
 
 
-def find_website_alias_for_command(
+# ========================================================
+# استخراج كل اختصارات الأمر
+# ========================================================
+
+def find_all_website_aliases_for_command(
     guild_id,
     command_name
 ):
     """
-    يبحث عن الاختصار المرتبط بالأمر الأصلي.
+    يرجع جميع الاختصارات المرتبطة بالأمر.
 
-    يدعم أكثر من شكل لاسم الأمر داخل MongoDB
-    حتى لا ينكسر النظام إذا كان الموقع يستخدم
-    command أو command_name أو target أو original_command.
+    يدعم:
+    command
+    command_name
+    target
+    original_command
     """
 
     if guild_id is None:
-        return None
+        return []
 
     command_name = normalize_command_name(
         command_name
     )
 
     if not command_name:
-        return None
+        return []
 
     guild_values = [
         str(guild_id),
@@ -197,38 +204,45 @@ def find_website_alias_for_command(
                 ]
             },
             {
-                "$or": [
-                    {
-                        "command": value
-                    }
-                    for value in command_values
-                ]
-                + [
-                    {
-                        "command_name": value
-                    }
-                    for value in command_values
-                ]
-                + [
-                    {
-                        "target": value
-                    }
-                    for value in command_values
-                ]
-                + [
-                    {
-                        "original_command": value
-                    }
-                    for value in command_values
-                ]
+                "$or": (
+                    [
+                        {
+                            "command": value
+                        }
+                        for value in command_values
+                    ]
+                    +
+                    [
+                        {
+                            "command_name": value
+                        }
+                        for value in command_values
+                    ]
+                    +
+                    [
+                        {
+                            "target": value
+                        }
+                        for value in command_values
+                    ]
+                    +
+                    [
+                        {
+                            "original_command": value
+                        }
+                        for value in command_values
+                    ]
+                )
             }
         ]
     }
 
     try:
 
-        return website_command_aliases.find_one(
-            query
+        documents = list(
+            website_command_aliases.find(
+                query
+            )
         )
 
     except Exception as e:
@@ -249,13 +263,145 @@ def find_website_alias_for_command(
             "=================================================="
         )
 
+        return []
+
+    aliases = []
+    seen = set()
+
+    for document in documents:
+
+        if not document:
+            continue
+
+        alias = (
+            document.get("alias")
+            or document.get("shortcut")
+            or document.get("short")
+        )
+
+        if not alias:
+            continue
+
+        alias = normalize_alias(alias)
+
+        if not alias:
+            continue
+
+        alias_key = alias.casefold()
+
+        if alias_key in seen:
+            continue
+
+        seen.add(alias_key)
+
+        aliases.append(alias)
+
+    return aliases
+
+
+# ========================================================
+# البحث عن اختصار معين
+# ========================================================
+
+def find_website_alias(
+    guild_id,
+    typed_alias
+):
+    """
+    يبحث عن الاختصار الذي كتبه المستخدم.
+    """
+
+    if guild_id is None:
+        return None
+
+    typed_alias = normalize_alias(
+        typed_alias
+    )
+
+    if not typed_alias:
+        return None
+
+    guild_values = [
+        str(guild_id),
+        guild_id
+    ]
+
+    alias_values = [
+        typed_alias,
+        f"-{typed_alias}",
+        f".{typed_alias}",
+        f"/{typed_alias}"
+    ]
+
+    query = {
+        "$and": [
+            {
+                "$or": [
+                    {
+                        "guild_id": value
+                    }
+                    for value in guild_values
+                ]
+            },
+            {
+                "$or": (
+                    [
+                        {
+                            "alias": value
+                        }
+                        for value in alias_values
+                    ]
+                    +
+                    [
+                        {
+                            "shortcut": value
+                        }
+                        for value in alias_values
+                    ]
+                    +
+                    [
+                        {
+                            "short": value
+                        }
+                        for value in alias_values
+                    ]
+                )
+            }
+        ]
+    }
+
+    try:
+
+        return website_command_aliases.find_one(
+            query
+        )
+
+    except Exception as e:
+
+        print(
+            "=================================================="
+        )
+
+        print(
+            "❌ [WEBSITE ALIAS SEARCH ERROR]"
+        )
+
+        print(
+            f"❌ الخطأ: {type(e).__name__}: {e}"
+        )
+
+        print(
+            "=================================================="
+        )
+
         return None
 
 
+# ========================================================
+# استخراج الاختصار من مستند MongoDB
+# ========================================================
+
 def get_alias_from_document(data):
-    """
-    استخراج اسم الاختصار من مستند MongoDB.
-    """
 
     if not data:
         return None
@@ -269,7 +415,9 @@ def get_alias_from_document(data):
     if not alias:
         return None
 
-    alias = normalize_alias(alias)
+    alias = normalize_alias(
+        alias
+    )
 
     if not alias:
         return None
@@ -330,8 +478,6 @@ def website_command_allowed(ctx):
 
     # ====================================================
     # لا توجد إعدادات
-    #
-    # نخلي الأمر يعمل مثل السابق
     # ====================================================
 
     if not setting:
@@ -499,12 +645,6 @@ async def on_message(message):
 
     # ====================================================
     # منع Prefix
-    #
-    # -رصيد
-    # .رصيد
-    # /رصيد
-    #
-    # كلها يتم تجاهلها نهائياً.
     # ====================================================
 
     if content[0] in ("-", ".", "/"):
@@ -512,24 +652,35 @@ async def on_message(message):
         print(
             "=================================================="
         )
-        print("🚫 [BLOCKED PREFIX]")
+
+        print(
+            "🚫 [BLOCKED PREFIX]"
+        )
+
         print(
             f"👤 المستخدم: "
             f"{message.author} "
             f"(ID: {message.author.id})"
         )
+
         print(
             f"💬 الرسالة: {message.content!r}"
         )
+
         print(
             f"🔤 Prefix الممنوع: {content[0]!r}"
         )
-        print("📌 لم يتم تشغيل أي أمر")
+
+        print(
+            "📌 لم يتم تشغيل أي أمر"
+        )
+
         print(
             "=================================================="
         )
 
         return
+
 
     # ====================================================
     # تسجيل الرسالة
@@ -538,19 +689,107 @@ async def on_message(message):
     print(
         "=================================================="
     )
-    print("📨 [MESSAGE RECEIVED]")
+
+    print(
+        "📨 [MESSAGE RECEIVED]"
+    )
+
     print(
         f"👤 المستخدم: "
         f"{message.author} "
         f"(ID: {message.author.id})"
     )
+
     print(
         f"💬 الرسالة: {message.content!r}"
     )
-    print("📌 محاولة معالجة الأمر بدون Prefix")
+
+    print(
+        "📌 محاولة معالجة الأمر بدون Prefix"
+    )
+
     print(
         "=================================================="
     )
+
+
+    # ====================================================
+    # اختصارات الموقع
+    #
+    # مهم جدًا:
+    #
+    # لأن Main عندك يحتوي on_message خاص به،
+    # فإن on_message داخل Cog الاختصارات لن يكون
+    # كافيًا وحده.
+    #
+    # لذلك نستدعي المعالج الذي سجله WebsiteCommands.
+    # ====================================================
+
+    alias_processor = getattr(
+        bot,
+        "website_alias_processor",
+        None
+    )
+
+    if alias_processor:
+
+        try:
+
+            alias_handled = await alias_processor(
+                message,
+                bot
+            )
+
+            if alias_handled:
+
+                print(
+                    "=================================================="
+                )
+
+                print(
+                    "✅ [WEBSITE ALIAS HANDLED]"
+                )
+
+                print(
+                    f"👤 المستخدم: "
+                    f"{message.author} "
+                    f"(ID: {message.author.id})"
+                )
+
+                print(
+                    f"💬 الرسالة: "
+                    f"{message.content!r}"
+                )
+
+                print(
+                    "📌 تم تنفيذ الاختصار"
+                )
+
+                print(
+                    "=================================================="
+                )
+
+                return
+
+        except Exception as e:
+
+            print(
+                "=================================================="
+            )
+
+            print(
+                "❌ [WEBSITE ALIAS PROCESSOR ERROR]"
+            )
+
+            print(
+                f"❌ الخطأ: "
+                f"{type(e).__name__}: {e}"
+            )
+
+            print(
+                "=================================================="
+            )
+
 
     # ====================================================
     # قراءة الأمر قبل تشغيله
@@ -560,28 +799,9 @@ async def on_message(message):
         message
     )
 
+
     # ====================================================
-    # منع الأمر الأصلي إذا كان له اختصار من الموقع
-    #
-    # مثال:
-    #
-    # الأمر الأصلي:
-    # استدعاء
-    #
-    # الاختصار من الموقع:
-    # ث
-    #
-    # إذا كتب المستخدم:
-    # استدعاء @شخص
-    #
-    # البوت لا ينفذ الأمر ويخبره باستخدام:
-    # ث @شخص
-    #
-    # أما إذا كتب:
-    # ث @شخص
-    #
-    # فسيتم التعامل معه بواسطة Cog الخاص
-    # باختصارات الموقع.
+    # فحص الأمر الأصلي
     # ====================================================
 
     if ctx.command:
@@ -594,97 +814,105 @@ async def on_message(message):
             message.content
         )
 
-        # ------------------------------------------------
-        # نتأكد أن المستخدم كتب اسم الأمر الأصلي نفسه
-        # وليس اسمًا آخر مثل اختصار الموقع.
-        # ------------------------------------------------
+
+        # =================================================
+        # إذا المستخدم كتب الأمر الأصلي نفسه
+        # =================================================
 
         if first_word == command_name:
 
-            alias_data = find_website_alias_for_command(
-                message.guild.id,
-                command_name
+            aliases = (
+                find_all_website_aliases_for_command(
+                    message.guild.id,
+                    command_name
+                )
             )
 
-            if alias_data:
 
-                alias = get_alias_from_document(
-                    alias_data
+            # =============================================
+            # إذا عند الأمر اختصار واحد أو أكثر
+            # =============================================
+
+            if aliases:
+
+                aliases_text = "، ".join(
+                    aliases
                 )
 
-                if alias:
+                print(
+                    "=================================================="
+                )
+
+                print(
+                    "🚫 [ORIGINAL COMMAND BLOCKED]"
+                )
+
+                print(
+                    f"👤 المستخدم: "
+                    f"{message.author} "
+                    f"(ID: {message.author.id})"
+                )
+
+                print(
+                    f"📌 الأمر الأصلي: "
+                    f"{command_name}"
+                )
+
+                print(
+                    f"🔤 الاختصارات المتاحة: "
+                    f"{aliases_text}"
+                )
+
+                print(
+                    "📌 تم منع استخدام الأمر الأصلي"
+                )
+
+                print(
+                    "=================================================="
+                )
+
+
+                try:
+
+                    await message.channel.send(
+                        "❌ هذا الأمر غير متاح حاليًا.\n"
+                        f"🔤 الاختصارات المتاحة: `{aliases_text}`"
+                    )
+
+                except Exception as e:
 
                     print(
-                        "=================================================="
+                        "❌ فشل إرسال رسالة منع الأمر:"
                     )
 
                     print(
-                        "🚫 [ORIGINAL COMMAND BLOCKED]"
+                        f"{type(e).__name__}: {e}"
                     )
 
-                    print(
-                        f"👤 المستخدم: "
-                        f"{message.author} "
-                        f"(ID: {message.author.id})"
-                    )
+                return
 
-                    print(
-                        f"📌 الأمر الأصلي: "
-                        f"{command_name}"
-                    )
 
-                    print(
-                        f"🔤 الاختصار المطلوب: "
-                        f"{alias}"
-                    )
-
-                    print(
-                        "📌 تم منع استخدام الأمر الأصلي"
-                    )
-
-                    print(
-                        "=================================================="
-                    )
-
-                    try:
-
-                        await message.channel.send(
-                            f"❌ الأمر `{command_name}` غير متاح حاليًا.\n"
-                            f"استخدم الاختصار: `{alias}`"
-                        )
-
-                    except Exception as e:
-
-                        print(
-                            "❌ فشل إرسال رسالة منع الأمر:"
-                        )
-
-                        print(
-                            f"{type(e).__name__}: {e}"
-                        )
-
-                    return
-
-        # ------------------------------------------------
-        # بعد التأكد من عدم وجود اختصار يمنع الأمر
-        # نتحقق من إعدادات الموقع للرومات والرتب.
-        # ------------------------------------------------
+        # =================================================
+        # بعد التأكد من عدم منع الأمر
+        # نتحقق من إعدادات الموقع
+        # =================================================
 
         if not website_command_allowed(ctx):
 
-            # ------------------------------------------------
-            # مهم:
-            # لا نرسل رسالة للمستخدم.
-            # الأمر يتجاهل بصمت.
-            # ------------------------------------------------
+            # =================================================
+            # تجاهل بصمت
+            # =================================================
 
             return
+
 
     # ====================================================
     # تشغيل الأوامر
     # ====================================================
 
-    await bot.process_commands(message)
+    await bot.process_commands(
+        message
+    )
 
 
 # ========================================================
@@ -692,63 +920,95 @@ async def on_message(message):
 # ========================================================
 
 @bot.event
-async def on_command_error(ctx, error):
+async def on_command_error(
+    ctx,
+    error
+):
 
     # ====================================================
     # أمر غير موجود
     # ====================================================
 
-    if isinstance(error, commands.CommandNotFound):
+    if isinstance(
+        error,
+        commands.CommandNotFound
+    ):
 
         print(
             "=================================================="
         )
-        print("⚠️ [COMMAND NOT FOUND]")
+
+        print(
+            "⚠️ [COMMAND NOT FOUND]"
+        )
+
         print(
             f"👤 المستخدم: "
             f"{ctx.author} "
             f"(ID: {ctx.author.id})"
         )
+
         print(
-            f"💬 الرسالة: {ctx.message.content!r}"
+            f"💬 الرسالة: "
+            f"{ctx.message.content!r}"
         )
-        print("📌 لا يوجد أمر بهذا الاسم")
+
+        print(
+            "📌 لا يوجد أمر بهذا الاسم"
+        )
+
         print(
             "=================================================="
         )
 
         return
+
 
     # ====================================================
     # فشل صلاحيات / Check
     # ====================================================
 
-    if isinstance(error, commands.CheckFailure):
+    if isinstance(
+        error,
+        commands.CheckFailure
+    ):
 
         print(
             "=================================================="
         )
-        print("🚫 [COMMAND CHECK FAILED]")
+
+        print(
+            "🚫 [COMMAND CHECK FAILED]"
+        )
+
         print(
             f"👤 المستخدم: "
             f"{ctx.author} "
             f"(ID: {ctx.author.id})"
         )
+
         print(
-            f"💬 الرسالة: {ctx.message.content!r}"
+            f"💬 الرسالة: "
+            f"{ctx.message.content!r}"
         )
 
         if ctx.command:
+
             print(
-                f"📌 الأمر: {ctx.command.name}"
+                f"📌 الأمر: "
+                f"{ctx.command.name}"
             )
 
-        print("📌 أحد شروط الأمر رفض التنفيذ")
+        print(
+            "📌 أحد شروط الأمر رفض التنفيذ"
+        )
+
         print(
             "=================================================="
         )
 
         return
+
 
     # ====================================================
     # متغير ناقص
@@ -762,20 +1022,29 @@ async def on_command_error(ctx, error):
         print(
             "=================================================="
         )
-        print("⚠️ [MISSING ARGUMENT]")
+
+        print(
+            "⚠️ [MISSING ARGUMENT]"
+        )
+
         print(
             f"👤 المستخدم: "
             f"{ctx.author} "
             f"(ID: {ctx.author.id})"
         )
+
         print(
-            f"💬 الرسالة: {ctx.message.content!r}"
+            f"💬 الرسالة: "
+            f"{ctx.message.content!r}"
         )
 
         if ctx.command:
+
             print(
-                f"📌 الأمر: {ctx.command.name}"
+                f"📌 الأمر: "
+                f"{ctx.command.name}"
             )
+
 
         print(
             f"📌 المتغير المطلوب: "
@@ -786,7 +1055,48 @@ async def on_command_error(ctx, error):
             "=================================================="
         )
 
+        # ------------------------------------------------
+        # معرفة الاختصار المستخدم إن وجد
+        # ------------------------------------------------
+
+        alias_context = getattr(
+            ctx,
+            "_website_alias_context",
+            None
+        )
+
+        if not alias_context:
+
+            alias_context = getattr(
+                ctx.message,
+                "_website_alias_context",
+                None
+            )
+
+
+        # ------------------------------------------------
+        # إذا الخطأ جاء من اختصار
+        # ------------------------------------------------
+
+        if alias_context:
+
+            alias_name = normalize_alias(
+                alias_context.get("alias")
+            )
+
+            if alias_name:
+
+                print(
+                    f"🔤 الاختصار المستخدم: "
+                    f"{alias_name}"
+                )
+
+                print(
+                    "📌 الخطأ حدث أثناء استخدام اختصار الموقع"
+                )
+
         return
+
 
     # ====================================================
     # خطأ آخر
@@ -795,19 +1105,27 @@ async def on_command_error(ctx, error):
     print(
         "=================================================="
     )
-    print("❌ [COMMAND ERROR]")
+
+    print(
+        "❌ [COMMAND ERROR]"
+    )
+
     print(
         f"👤 المستخدم: "
         f"{ctx.author} "
         f"(ID: {ctx.author.id})"
     )
+
     print(
-        f"💬 الرسالة: {ctx.message.content!r}"
+        f"💬 الرسالة: "
+        f"{ctx.message.content!r}"
     )
 
     if ctx.command:
+
         print(
-            f"📌 الأمر: {ctx.command.name}"
+            f"📌 الأمر: "
+            f"{ctx.command.name}"
         )
 
     print(
@@ -826,7 +1144,9 @@ async def on_command_error(ctx, error):
 
 async def load_extensions():
 
-    if not os.path.exists("./cogs"):
+    if not os.path.exists(
+        "./cogs"
+    ):
 
         print(
             "❌ مجلد cogs غير موجود!"
@@ -834,15 +1154,26 @@ async def load_extensions():
 
         return
 
-    for filename in os.listdir("./cogs"):
 
-        if not filename.endswith(".py"):
+    for filename in os.listdir(
+        "./cogs"
+    ):
+
+        if not filename.endswith(
+            ".py"
+        ):
             continue
 
-        if filename.startswith("_"):
+        if filename.startswith(
+            "_"
+        ):
             continue
 
-        extension = f"cogs.{filename[:-3]}"
+
+        extension = (
+            f"cogs.{filename[:-3]}"
+        )
+
 
         try:
 
@@ -854,6 +1185,7 @@ async def load_extensions():
                 f"✅ تم تحميل الملف بنجاح: "
                 f"{filename}"
             )
+
 
         except Exception as e:
 
@@ -890,15 +1222,18 @@ async def on_ready():
     )
 
     print(
-        f"🤖 دخلت السيرفر باسم: {bot.user}"
+        f"🤖 دخلت السيرفر باسم: "
+        f"{bot.user}"
     )
 
     print(
-        f"🆔 ID: {bot.user.id}"
+        f"🆔 ID: "
+        f"{bot.user.id}"
     )
 
     print(
-        f"⌨️ Command Prefix: {bot.command_prefix!r}"
+        f"⌨️ Command Prefix: "
+        f"{bot.command_prefix!r}"
     )
 
     print(
@@ -915,6 +1250,10 @@ async def on_ready():
 
     print(
         "🔤 نظام اختصارات الموقع مفعل"
+    )
+
+    print(
+        "🔤 دعم عدة اختصارات لنفس الأمر مفعل"
     )
 
     print(
@@ -942,7 +1281,9 @@ keep_alive()
 # تشغيل البوت
 # ========================================================
 
-TOKEN = os.environ.get("TOKEN")
+TOKEN = os.environ.get(
+    "TOKEN"
+)
 
 if not TOKEN:
 
@@ -955,4 +1296,7 @@ print(
     "🚀 جاري تشغيل البوت..."
 )
 
-bot.run(TOKEN)
+
+bot.run(
+    TOKEN
+)
