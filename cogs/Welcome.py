@@ -40,17 +40,6 @@ IMAGE_HEIGHT = 500
 # =========================================================
 # مكان دائرة الأفاتار في التصميم
 # =========================================================
-#
-# التصميم الذي أرسلته:
-#
-# مركز الدائرة تقريبًا:
-# X = 798
-# Y = 250
-#
-# قطر الدائرة:
-# 294
-#
-# =========================================================
 
 FINAL_CIRCLE_CENTER_X = 798
 FINAL_CIRCLE_CENTER_Y = 250
@@ -61,11 +50,11 @@ FINAL_CIRCLE_DIAMETER = 294
 # إعدادات الأفاتار
 # =========================================================
 
-# تصغير الأفاتار داخل الحلقة
+# المسافة بين الأفاتار وحافة الدائرة
 AVATAR_PADDING = 12
 
-# تحريك الأفاتار لليسار قليلًا
-AVATAR_OFFSET_X = -10
+# تحريك الأفاتار لليمين قليلًا
+AVATAR_OFFSET_X = 10
 
 # بدون تحريك عمودي
 AVATAR_OFFSET_Y = 0
@@ -619,6 +608,8 @@ class WelcomeCog(commands.Cog):
 
         # =================================================
         # مكان Avatar
+        #
+        # تم تحريكه 10 بكسل لليمين
         # =================================================
 
         avatar_x = int(
@@ -842,11 +833,136 @@ class WelcomeCog(commands.Cog):
             )
 
     # =====================================================
+    # معاينة الترحيب
+    #
+    # يستخدم حساب الشخص الذي نفذ الأمر كعضو تجريبي.
+    # نفس الخلفية + نفس الأفاتار + نفس الرسالة.
+    # =====================================================
+
+    @commands.command(
+        name="previewwelcome"
+    )
+    async def preview_welcome(
+        self,
+        ctx
+    ):
+
+        if ctx.guild is None:
+            return
+
+        # =================================================
+        # صلاحيات الموقع
+        # =================================================
+
+        if not self.website_command_allowed(
+            ctx.author,
+            ctx.channel,
+            "previewwelcome"
+        ):
+            return
+
+        try:
+
+            settings = (
+                welcome_settings_collection.find_one({
+                    "guild_id": str(
+                        ctx.guild.id
+                    )
+                })
+            )
+
+            # =================================================
+            # لا توجد إعدادات
+            # =================================================
+
+            if not settings:
+
+                await ctx.send(
+                    "❌ لا توجد إعدادات ترحيب لهذا السيرفر."
+                )
+
+                return
+
+            # =================================================
+            # إنشاء صورة المعاينة
+            #
+            # نستخدم الشخص الذي نفذ الأمر
+            # =================================================
+
+            image_bytes = (
+                await self.generate_welcome_image(
+                    ctx.author,
+                    settings
+                )
+            )
+
+            image_file = discord.File(
+                image_bytes,
+                filename="welcome_preview.png"
+            )
+
+            # =================================================
+            # تجهيز رسالة الترحيب
+            # =================================================
+
+            message = settings.get(
+                "message",
+                ""
+            )
+
+            message = self.replace_variables(
+                message,
+                ctx.author
+            )
+
+            # =================================================
+            # رسالة المعاينة
+            # =================================================
+
+            preview_text = (
+                "👀 **معاينة الترحيب**\n\n"
+            )
+
+            if message:
+
+                preview_text += message
+
+            await ctx.send(
+                content=preview_text,
+                file=image_file
+            )
+
+        except discord.Forbidden:
+
+            print(
+                f"[WelcomeCog] "
+                f"لا توجد صلاحية للمعاينة "
+                f"في السيرفر {ctx.guild.id}"
+            )
+
+        except discord.HTTPException as e:
+
+            print(
+                f"[WelcomeCog] "
+                f"Preview Discord API Error: {e}"
+            )
+
+        except Exception as e:
+
+            print(
+                f"[WelcomeCog] "
+                f"Preview Error: {e}"
+            )
+
+            await ctx.send(
+                "❌ حدث خطأ أثناء إنشاء المعاينة."
+            )
+
+    # =====================================================
     # عند دخول عضو
     #
-    # مهم:
     # يتم إرسال الترحيب كرسالة عادية + صورة Attachment
-    # بدون Embed نهائيًا.
+    # بدون Embed.
     # =====================================================
 
     @commands.Cog.listener()
@@ -944,15 +1060,7 @@ class WelcomeCog(commands.Cog):
             # إرسال الترحيب
             #
             # بدون Embed
-            # بدون Thumbnail
-            # بدون Footer
-            # بدون attachment://
-            #
-            # فقط:
-            #
-            # النص
-            # +
-            # الصورة كملف عادي
+            # فقط النص + الصورة
             # =================================================
 
             if image_file:
