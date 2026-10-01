@@ -45,11 +45,13 @@ aliases_collection = db["website_command_aliases"]
 def normalize_command_name(name):
     """
     إزالة بادئة الأمر:
+
     -
     .
     /
 
-    مثال:
+    أمثلة:
+
     -رصيد  -> رصيد
     .رصيد  -> رصيد
     /رصيد  -> رصيد
@@ -99,8 +101,17 @@ def find_website_alias(guild_id, typed_alias):
     """
     البحث عن الاختصار الخاص بالسيرفر.
 
-    يدعم تخزين guild_id كنص أو رقم.
-    ويدعم الاختصار مع أو بدون بادئة.
+    يدعم:
+
+    guild_id كنص
+    guild_id كرقم
+
+    والاختصار:
+
+    ذ
+    -ذ
+    .ذ
+    /ذ
     """
 
     if not guild_id or not typed_alias:
@@ -116,7 +127,7 @@ def find_website_alias(guild_id, typed_alias):
         return None
 
     # =====================================================
-    # البحث الأساسي
+    # البحث الأساسي - guild_id كنص
     # =====================================================
 
     data = aliases_collection.find_one({
@@ -134,6 +145,30 @@ def find_website_alias(guild_id, typed_alias):
     data = aliases_collection.find_one({
         "guild_id": guild_id,
         "alias": f"-{alias}"
+    })
+
+    if data:
+        return data
+
+    # =====================================================
+    # لو الموقع حفظ الاختصار مع .
+    # =====================================================
+
+    data = aliases_collection.find_one({
+        "guild_id": guild_id,
+        "alias": f".{alias}"
+    })
+
+    if data:
+        return data
+
+    # =====================================================
+    # لو الموقع حفظ الاختصار مع /
+    # =====================================================
+
+    data = aliases_collection.find_one({
+        "guild_id": guild_id,
+        "alias": f"/{alias}"
     })
 
     if data:
@@ -165,18 +200,160 @@ def find_website_alias(guild_id, typed_alias):
         if data:
             return data
 
+        data = aliases_collection.find_one({
+            "guild_id": numeric_guild_id,
+            "alias": f".{alias}"
+        })
+
+        if data:
+            return data
+
+        data = aliases_collection.find_one({
+            "guild_id": numeric_guild_id,
+            "alias": f"/{alias}"
+        })
+
+        if data:
+            return data
+
     except Exception:
         pass
 
     return None
 
 
+# =========================================================
+# البحث عن اختصار الأمر الحقيقي
+# =========================================================
+
+def find_website_alias_for_command(
+    guild_id,
+    command_name
+):
+    """
+    البحث العكسي:
+
+    ق -> قفل
+
+    هنا نبحث:
+
+    قفل -> ق
+
+    لاستخدامها لاحقًا عندما يكتب المستخدم
+    الأمر الأصلي بدل الاختصار.
+    """
+
+    if not guild_id or not command_name:
+        return None
+
+    guild_id = str(guild_id)
+
+    command_name = normalize_command_name(
+        command_name
+    )
+
+    if not command_name:
+        return None
+
+    possible_queries = [
+        {
+            "guild_id": guild_id,
+            "command": command_name
+        },
+        {
+            "guild_id": guild_id,
+            "command_name": command_name
+        },
+        {
+            "guild_id": guild_id,
+            "target": command_name
+        },
+        {
+            "guild_id": guild_id,
+            "original_command": command_name
+        },
+    ]
+
+    # =====================================================
+    # البحث بالنص
+    # =====================================================
+
+    for query in possible_queries:
+
+        data = aliases_collection.find_one(
+            query
+        )
+
+        if data:
+            alias = normalize_alias(
+                data.get("alias")
+            )
+
+            if alias:
+                return alias
+
+    # =====================================================
+    # البحث برقم السيرفر
+    # =====================================================
+
+    try:
+
+        numeric_guild_id = int(
+            guild_id
+        )
+
+        for query in [
+            {
+                "guild_id": numeric_guild_id,
+                "command": command_name
+            },
+            {
+                "guild_id": numeric_guild_id,
+                "command_name": command_name
+            },
+            {
+                "guild_id": numeric_guild_id,
+                "target": command_name
+            },
+            {
+                "guild_id": numeric_guild_id,
+                "original_command": command_name
+            },
+        ]:
+
+            data = aliases_collection.find_one(
+                query
+            )
+
+            if data:
+
+                alias = normalize_alias(
+                    data.get("alias")
+                )
+
+                if alias:
+                    return alias
+
+    except Exception:
+        pass
+
+    return None
+
+
+# =========================================================
+# استخراج الأمر الحقيقي من بيانات الاختصار
+# =========================================================
+
 def get_alias_target(data):
     """
     استخراج الأمر الحقيقي من بيانات الاختصار.
 
-    يدعم أكثر من اسم للحقل حتى يكون
-    متوافقًا مع نسخ الموقع المختلفة.
+    يدعم أكثر من اسم للحقل:
+
+    command
+    command_name
+    target
+    original_command
     """
 
     if not data:
@@ -192,6 +369,30 @@ def get_alias_target(data):
 
     return normalize_command_name(
         target
+    )
+
+
+# =========================================================
+# استخراج الاختصار من بيانات الاختصار
+# =========================================================
+
+def get_alias_value(data):
+    """
+    استخراج الاختصار نفسه من سجل MongoDB.
+    """
+
+    if not data:
+        return ""
+
+    alias = (
+        data.get("alias")
+        or data.get("shortcut")
+        or data.get("abbreviation")
+        or ""
+    )
+
+    return normalize_alias(
+        alias
     )
 
 
@@ -219,16 +420,16 @@ async def process_website_alias(
 
     المستخدم يكتب:
 
-    ث @شخص
+    ق @شخص
 
     MongoDB:
 
-    alias = ث
-    command = الاستدعاء
+    alias = ق
+    command = قفل
 
     يصبح:
 
-    الاستدعاء @شخص
+    قفل @شخص
 
     ثم يتم تشغيل الأمر الأصلي.
     """
@@ -265,10 +466,6 @@ async def process_website_alias(
 
     # =====================================================
     # استخراج أول كلمة
-    #
-    # ث
-    # ث @شخص
-    # ث السبب
     # =====================================================
 
     parts = content.split()
@@ -312,15 +509,20 @@ async def process_website_alias(
         return False
 
     # =====================================================
+    # استخراج الاختصار الحقيقي
+    # =====================================================
+
+    actual_alias = get_alias_value(
+        alias_data
+    )
+
+    if not actual_alias:
+        actual_alias = normalize_alias(
+            typed_alias
+        )
+
+    # =====================================================
     # بناء الأمر الجديد
-    #
-    # ث
-    # ↓
-    # الاستدعاء
-    #
-    # ث @أحمد
-    # ↓
-    # الاستدعاء @أحمد
     # =====================================================
 
     new_content = target_command
@@ -349,7 +551,11 @@ async def process_website_alias(
     )
 
     print(
-        f"📌 الاختصار: {old_content}"
+        f"🔤 الاختصار: {actual_alias}"
+    )
+
+    print(
+        f"📌 الرسالة الأصلية: {old_content}"
     )
 
     print(
@@ -384,8 +590,7 @@ async def process_website_alias(
     try:
 
         # =================================================
-        # أولًا:
-        # محاولة العثور على أمر discord.py
+        # محاولة العثور على أمر Discord.py
         # =================================================
 
         ctx = await bot.get_context(
@@ -393,7 +598,7 @@ async def process_website_alias(
         )
 
         # =================================================
-        # إذا كان الأمر مسجلًا في bot.commands
+        # إذا كان الأمر مسجلًا في Discord.py
         # =================================================
 
         if ctx.command is not None:
@@ -410,14 +615,7 @@ async def process_website_alias(
             return True
 
         # =================================================
-        # ثانيًا:
-        #
         # إذا كان الأمر يدويًا داخل on_message
-        #
-        # مثال:
-        #
-        # if message.content.startswith("الاستدعاء"):
-        #
         # =================================================
 
         print(
@@ -547,15 +745,6 @@ def detect_manual_commands(bot):
 
                 continue
 
-            # -------------------------------------------------
-            # أنماط مثل:
-            #
-            # message.content.startswith("-رتبة")
-            # message.content.startswith(".رتبة")
-            # message.content.startswith("/رتبة")
-            # message.content.startswith("رتبة")
-            # -------------------------------------------------
-
             patterns = [
 
                 r'\.content\.startswith\(\s*["\']([\-\.\/][^"\']+)["\']',
@@ -585,10 +774,6 @@ def detect_manual_commands(bot):
 
                     if not command_name:
                         continue
-
-                    # -------------------------------------------------
-                    # استبعاد الأشياء التي ليست أوامر
-                    # -------------------------------------------------
 
                     if command_name.lower() in {
                         "http",
@@ -754,10 +939,6 @@ def save_command(command_data):
         )
     }
 
-    # -----------------------------------------------------
-    # بيانات إضافية للأوامر المكتشفة تلقائيًا
-    # -----------------------------------------------------
-
     if command_data.get(
         "auto_detected",
         False
@@ -891,7 +1072,6 @@ def save_bot_commands(bot):
         if not command_name:
             continue
 
-        # الأمر اليدوي لا يستبدل أمر Discord الحقيقي
         if command_name not in all_commands:
 
             all_commands[
@@ -947,15 +1127,6 @@ def save_bot_commands(bot):
 
     # =====================================================
     # 5 - مزامنة الأوامر المحذوفة
-    #
-    # أي أمر موجود في MongoDB ولكنه لم يعد موجودًا
-    # ضمن الأوامر الحالية للبوت سيتم حذفه من:
-    #
-    # website_commands
-    #
-    # وكذلك إعداداته القديمة من:
-    #
-    # website_command_settings
     # =====================================================
 
     current_command_names = {
@@ -967,10 +1138,6 @@ def save_bot_commands(bot):
             command_name
         )
     }
-
-    # -----------------------------------------------------
-    # قراءة جميع الأوامر الموجودة حاليًا في الموقع
-    # -----------------------------------------------------
 
     old_commands = list(
         commands_collection.find(
@@ -992,10 +1159,6 @@ def save_bot_commands(bot):
 
         if not old_name:
             continue
-
-        # -------------------------------------------------
-        # إذا الأمر القديم غير موجود في البوت
-        # -------------------------------------------------
 
         if old_name not in current_command_names:
 
@@ -1028,9 +1191,9 @@ def save_bot_commands(bot):
                     f"{error}"
                 )
 
-    # -----------------------------------------------------
+    # =====================================================
     # حذف إعدادات الأوامر التي لم تعد موجودة
-    # -----------------------------------------------------
+    # =====================================================
 
     if deleted_command_names:
 
@@ -1476,7 +1639,6 @@ class WebsiteCommands(
 
         # =================================================
         # إذا لا يوجد إعداد للموقع
-        # نخلي الأمر يعمل طبيعي
         # =================================================
 
         if not setting:
