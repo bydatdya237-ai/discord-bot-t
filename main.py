@@ -100,9 +100,6 @@ print(f"⌨️ Command Prefix: {bot.command_prefix!r}")
 # ========================================================
 
 def normalize_command_name(value):
-    """
-    تنظيف اسم الأمر أو الاختصار.
-    """
 
     if value is None:
         return ""
@@ -118,9 +115,6 @@ def normalize_command_name(value):
 
 
 def normalize_alias(value):
-    """
-    تنظيف الاختصار القادم من الموقع.
-    """
 
     if value is None:
         return ""
@@ -136,9 +130,6 @@ def normalize_alias(value):
 
 
 def get_message_first_word(content):
-    """
-    الحصول على أول كلمة من الرسالة.
-    """
 
     if not content:
         return ""
@@ -161,15 +152,6 @@ def find_all_website_aliases_for_command(
     guild_id,
     command_name
 ):
-    """
-    يرجع جميع الاختصارات المرتبطة بالأمر.
-
-    يدعم:
-    command
-    command_name
-    target
-    original_command
-    """
 
     if guild_id is None:
         return []
@@ -307,9 +289,6 @@ def find_website_alias(
     guild_id,
     typed_alias
 ):
-    """
-    يبحث عن الاختصار الذي كتبه المستخدم.
-    """
 
     if guild_id is None:
         return None
@@ -431,42 +410,15 @@ def get_alias_from_document(data):
 
 def website_command_allowed(ctx):
 
-    # ====================================================
-    # إذا ما فيه سيرفر
-    # ====================================================
-
     if ctx.guild is None:
         return True
-
-    # ====================================================
-    # إذا ما فيه أمر
-    # ====================================================
 
     if ctx.command is None:
         return True
 
-    # ====================================================
-    # اسم الأمر الحقيقي
-    # ====================================================
-
-    command_name = str(
+    command_name = normalize_command_name(
         ctx.command.name
     )
-
-    # ====================================================
-    # إزالة Prefix احتياطيًا
-    # ====================================================
-
-    for prefix in ("-", ".", "/"):
-
-        if command_name.startswith(prefix):
-
-            command_name = command_name[1:]
-
-
-    # ====================================================
-    # البحث عن إعدادات الأمر
-    # ====================================================
 
     setting = website_command_settings.find_one(
         {
@@ -475,37 +427,33 @@ def website_command_allowed(ctx):
         }
     )
 
-
-    # ====================================================
-    # لا توجد إعدادات
-    # ====================================================
-
+    # دعم name أيضًا
     if not setting:
 
+        setting = website_command_settings.find_one(
+            {
+                "guild_id": str(ctx.guild.id),
+                "name": command_name
+            }
+        )
+
+    if not setting:
         return True
-
-
-    # ====================================================
-    # التحكم غير مفعل
-    # ====================================================
 
     if not setting.get(
         "enabled",
         False
     ):
-
         return True
 
-
     # ====================================================
-    # الرومات المسموح فيها
+    # الرومات
     # ====================================================
 
     allowed_channels = setting.get(
         "channel_ids",
         []
     )
-
 
     if allowed_channels:
 
@@ -550,16 +498,14 @@ def website_command_allowed(ctx):
 
             return False
 
-
     # ====================================================
-    # الرتب المسموح لها
+    # الرتب
     # ====================================================
 
     allowed_roles = setting.get(
         "role_ids",
         []
     )
-
 
     if allowed_roles:
 
@@ -605,10 +551,243 @@ def website_command_allowed(ctx):
 
             return False
 
+    return True
+
+
+# ========================================================
+# تحويل اسم المتغير إلى شكل مفهوم للمستخدم
+# ========================================================
+
+def get_usage_name(param):
+
+    if param is None:
+        return "المطلوب"
+
+    name = str(
+        getattr(
+            param,
+            "name",
+            "المطلوب"
+        )
+    )
+
+    name_lower = name.lower()
+
+    member_names = {
+        "member",
+        "user",
+        "person",
+        "target",
+        "person_member",
+        "عضو",
+        "شخص"
+    }
+
+    role_names = {
+        "role",
+        "رتبة",
+        "group",
+        "مجموعة"
+    }
+
+    if name_lower in member_names:
+        return "@الشخص"
+
+    if name_lower in role_names:
+        return "@الرتبة"
+
+    return f"<{name}>"
+
+
+# ========================================================
+# بناء استخدام الأمر بواسطة الاختصار
+# ========================================================
+
+def build_alias_usage(
+    ctx,
+    alias_context,
+    error
+):
+
+    if not alias_context:
+        return None
+
+    alias_name = normalize_alias(
+        alias_context.get("alias")
+    )
+
+    if not alias_name:
+        return None
+
+    command = ctx.command
+
+    if command is None:
+        return None
 
     # ====================================================
-    # مسموح
+    # إذا الأمر لديه usage مخصص
     # ====================================================
+
+    usage = getattr(
+        command,
+        "usage",
+        None
+    )
+
+    if usage:
+
+        usage = str(usage).strip()
+
+        if usage:
+
+            # إزالة اسم الأمر الأصلي إذا كان
+            # موجودًا في بداية usage
+            usage_parts = usage.split()
+
+            if usage_parts:
+
+                first = normalize_command_name(
+                    usage_parts[0]
+                )
+
+                command_name = normalize_command_name(
+                    command.name
+                )
+
+                if first == command_name:
+
+                    usage = " ".join(
+                        usage_parts[1:]
+                    )
+
+            if usage:
+
+                return (
+                    f"{alias_name} {usage}"
+                )
+
+    # ====================================================
+    # استخدام signature الخاص بالأمر
+    # ====================================================
+
+    signature = str(
+        getattr(
+            command,
+            "signature",
+            ""
+        ) or ""
+    ).strip()
+
+    if signature:
+
+        return (
+            f"{alias_name} {signature}"
+        )
+
+    # ====================================================
+    # آخر حل: اسم المتغير الناقص
+    # ====================================================
+
+    param = getattr(
+        error,
+        "param",
+        None
+    )
+
+    parameter_name = get_usage_name(
+        param
+    )
+
+    return (
+        f"{alias_name} {parameter_name}"
+    )
+
+
+# ========================================================
+# معالجة خطأ المتغير الناقص للاختصار
+# ========================================================
+
+async def handle_alias_missing_argument(
+    ctx,
+    error
+):
+
+    alias_context = getattr(
+        ctx,
+        "_website_alias_context",
+        None
+    )
+
+    if not alias_context:
+
+        alias_context = getattr(
+            ctx.message,
+            "_website_alias_context",
+            None
+        )
+
+    if not alias_context:
+        return False
+
+    usage = build_alias_usage(
+        ctx,
+        alias_context,
+        error
+    )
+
+    if not usage:
+        return False
+
+    try:
+
+        await ctx.send(
+            "❌ الاستخدام الصحيح:\n"
+            f"`{usage}`"
+        )
+
+    except Exception as send_error:
+
+        print(
+            "❌ فشل إرسال استخدام الاختصار"
+        )
+
+        print(
+            f"❌ {type(send_error).__name__}: "
+            f"{send_error}"
+        )
+
+    print(
+        "=================================================="
+    )
+
+    print(
+        "⚠️ [ALIAS MISSING ARGUMENT]"
+    )
+
+    print(
+        f"👤 المستخدم: "
+        f"{ctx.author} "
+        f"(ID: {ctx.author.id})"
+    )
+
+    print(
+        f"🔤 الاختصار: "
+        f"{alias_context.get('alias')}"
+    )
+
+    print(
+        f"📌 الأمر الحقيقي: "
+        f"{alias_context.get('target_command')}"
+    )
+
+    print(
+        f"📖 الاستخدام: "
+        f"{usage}"
+    )
+
+    print(
+        "=================================================="
+    )
 
     return True
 
@@ -635,10 +814,6 @@ async def on_message(message):
         return
 
     content = message.content.strip()
-
-    # ====================================================
-    # رسالة فارغة
-    # ====================================================
 
     if not content:
         return
@@ -681,7 +856,6 @@ async def on_message(message):
 
         return
 
-
     # ====================================================
     # تسجيل الرسالة
     # ====================================================
@@ -712,17 +886,12 @@ async def on_message(message):
         "=================================================="
     )
 
-
     # ====================================================
-    # اختصارات الموقع
+    # الاختصارات
     #
-    # مهم جدًا:
-    #
-    # لأن Main عندك يحتوي on_message خاص به،
-    # فإن on_message داخل Cog الاختصارات لن يكون
-    # كافيًا وحده.
-    #
-    # لذلك نستدعي المعالج الذي سجله WebsiteCommands.
+    # مهم:
+    # Main هو المكان الوحيد الذي يشغل الاختصار.
+    # لا يوجد on_message للاختصار داخل WebsiteCommands.
     # ====================================================
 
     alias_processor = getattr(
@@ -757,12 +926,7 @@ async def on_message(message):
                 )
 
                 print(
-                    f"💬 الرسالة: "
-                    f"{message.content!r}"
-                )
-
-                print(
-                    "📌 تم تنفيذ الاختصار"
+                    "📌 تم تنفيذ الاختصار مرة واحدة"
                 )
 
                 print(
@@ -790,15 +954,13 @@ async def on_message(message):
                 "=================================================="
             )
 
-
     # ====================================================
-    # قراءة الأمر قبل تشغيله
+    # قراءة الأمر
     # ====================================================
 
     ctx = await bot.get_context(
         message
     )
-
 
     # ====================================================
     # فحص الأمر الأصلي
@@ -814,9 +976,8 @@ async def on_message(message):
             message.content
         )
 
-
         # =================================================
-        # إذا المستخدم كتب الأمر الأصلي نفسه
+        # منع الأمر الأصلي إذا كان له اختصار
         # =================================================
 
         if first_word == command_name:
@@ -827,11 +988,6 @@ async def on_message(message):
                     command_name
                 )
             )
-
-
-            # =============================================
-            # إذا عند الأمر اختصار واحد أو أكثر
-            # =============================================
 
             if aliases:
 
@@ -871,7 +1027,6 @@ async def on_message(message):
                     "=================================================="
                 )
 
-
                 try:
 
                     await message.channel.send(
@@ -891,20 +1046,12 @@ async def on_message(message):
 
                 return
 
-
         # =================================================
-        # بعد التأكد من عدم منع الأمر
-        # نتحقق من إعدادات الموقع
+        # صلاحيات الموقع
         # =================================================
 
         if not website_command_allowed(ctx):
-
-            # =================================================
-            # تجاهل بصمت
-            # =================================================
-
             return
-
 
     # ====================================================
     # تشغيل الأوامر
@@ -924,6 +1071,28 @@ async def on_command_error(
     ctx,
     error
 ):
+
+    # ====================================================
+    # منع تكرار معالجة الخطأ
+    # ====================================================
+
+    if getattr(
+        ctx,
+        "_website_error_handled",
+        False
+    ):
+        return
+
+    try:
+
+        setattr(
+            ctx,
+            "_website_error_handled",
+            True
+        )
+
+    except Exception:
+        pass
 
     # ====================================================
     # أمر غير موجود
@@ -963,9 +1132,8 @@ async def on_command_error(
 
         return
 
-
     # ====================================================
-    # فشل صلاحيات / Check
+    # فشل Check
     # ====================================================
 
     if isinstance(
@@ -1009,7 +1177,6 @@ async def on_command_error(
 
         return
 
-
     # ====================================================
     # متغير ناقص
     # ====================================================
@@ -1018,6 +1185,22 @@ async def on_command_error(
         error,
         commands.MissingRequiredArgument
     ):
+
+        # =================================================
+        # إذا الأمر جاء من اختصار
+        # =================================================
+
+        handled = await handle_alias_missing_argument(
+            ctx,
+            error
+        )
+
+        if handled:
+            return
+
+        # =================================================
+        # أمر عادي
+        # =================================================
 
         print(
             "=================================================="
@@ -1045,7 +1228,6 @@ async def on_command_error(
                 f"{ctx.command.name}"
             )
 
-
         print(
             f"📌 المتغير المطلوب: "
             f"{error.param.name}"
@@ -1055,48 +1237,7 @@ async def on_command_error(
             "=================================================="
         )
 
-        # ------------------------------------------------
-        # معرفة الاختصار المستخدم إن وجد
-        # ------------------------------------------------
-
-        alias_context = getattr(
-            ctx,
-            "_website_alias_context",
-            None
-        )
-
-        if not alias_context:
-
-            alias_context = getattr(
-                ctx.message,
-                "_website_alias_context",
-                None
-            )
-
-
-        # ------------------------------------------------
-        # إذا الخطأ جاء من اختصار
-        # ------------------------------------------------
-
-        if alias_context:
-
-            alias_name = normalize_alias(
-                alias_context.get("alias")
-            )
-
-            if alias_name:
-
-                print(
-                    f"🔤 الاختصار المستخدم: "
-                    f"{alias_name}"
-                )
-
-                print(
-                    "📌 الخطأ حدث أثناء استخدام اختصار الموقع"
-                )
-
         return
-
 
     # ====================================================
     # خطأ آخر
@@ -1154,7 +1295,6 @@ async def load_extensions():
 
         return
 
-
     for filename in os.listdir(
         "./cogs"
     ):
@@ -1169,11 +1309,9 @@ async def load_extensions():
         ):
             continue
 
-
         extension = (
             f"cogs.{filename[:-3]}"
         )
-
 
         try:
 
@@ -1185,7 +1323,6 @@ async def load_extensions():
                 f"✅ تم تحميل الملف بنجاح: "
                 f"{filename}"
             )
-
 
         except Exception as e:
 
