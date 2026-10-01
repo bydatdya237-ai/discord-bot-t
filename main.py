@@ -55,6 +55,14 @@ website_command_settings = db[
     "website_command_settings"
 ]
 
+# ========================================================
+# اختصارات الموقع
+# ========================================================
+
+website_command_aliases = db[
+    "website_command_aliases"
+]
+
 
 # ========================================================
 # Intents
@@ -84,6 +92,189 @@ bot = commands.Bot(
 print("🔥🔥🔥 MAIN FILE RUNNING 🔥🔥🔥")
 print(f"📁 الملف الحالي: {__file__}")
 print(f"⌨️ Command Prefix: {bot.command_prefix!r}")
+
+
+# ========================================================
+# أدوات اختصارات الموقع
+# ========================================================
+
+def normalize_command_name(value):
+    """
+    تنظيف اسم الأمر أو الاختصار.
+    """
+
+    if value is None:
+        return ""
+
+    value = str(value).strip()
+
+    while value.startswith(
+        ("-", ".", "/")
+    ):
+        value = value[1:].strip()
+
+    return value
+
+
+def normalize_alias(value):
+    """
+    تنظيف الاختصار القادم من الموقع.
+    """
+
+    if value is None:
+        return ""
+
+    value = str(value).strip()
+
+    while value.startswith(
+        ("-", ".", "/")
+    ):
+        value = value[1:].strip()
+
+    return value
+
+
+def get_message_first_word(content):
+    """
+    الحصول على أول كلمة من الرسالة.
+    """
+
+    if not content:
+        return ""
+
+    parts = content.strip().split()
+
+    if not parts:
+        return ""
+
+    return normalize_command_name(
+        parts[0]
+    )
+
+
+def find_website_alias_for_command(
+    guild_id,
+    command_name
+):
+    """
+    يبحث عن الاختصار المرتبط بالأمر الأصلي.
+
+    يدعم أكثر من شكل لاسم الأمر داخل MongoDB
+    حتى لا ينكسر النظام إذا كان الموقع يستخدم
+    command أو command_name أو target أو original_command.
+    """
+
+    if guild_id is None:
+        return None
+
+    command_name = normalize_command_name(
+        command_name
+    )
+
+    if not command_name:
+        return None
+
+    guild_values = [
+        str(guild_id),
+        guild_id
+    ]
+
+    command_values = [
+        command_name,
+        f"-{command_name}",
+        f".{command_name}",
+        f"/{command_name}"
+    ]
+
+    query = {
+        "$and": [
+            {
+                "$or": [
+                    {
+                        "guild_id": value
+                    }
+                    for value in guild_values
+                ]
+            },
+            {
+                "$or": [
+                    {
+                        "command": value
+                    }
+                    for value in command_values
+                ]
+                + [
+                    {
+                        "command_name": value
+                    }
+                    for value in command_values
+                ]
+                + [
+                    {
+                        "target": value
+                    }
+                    for value in command_values
+                ]
+                + [
+                    {
+                        "original_command": value
+                    }
+                    for value in command_values
+                ]
+            }
+        ]
+    }
+
+    try:
+
+        return website_command_aliases.find_one(
+            query
+        )
+
+    except Exception as e:
+
+        print(
+            "=================================================="
+        )
+
+        print(
+            "❌ [WEBSITE ALIAS DATABASE ERROR]"
+        )
+
+        print(
+            f"❌ الخطأ: {type(e).__name__}: {e}"
+        )
+
+        print(
+            "=================================================="
+        )
+
+        return None
+
+
+def get_alias_from_document(data):
+    """
+    استخراج اسم الاختصار من مستند MongoDB.
+    """
+
+    if not data:
+        return None
+
+    alias = (
+        data.get("alias")
+        or data.get("shortcut")
+        or data.get("short")
+    )
+
+    if not alias:
+        return None
+
+    alias = normalize_alias(alias)
+
+    if not alias:
+        return None
+
+    return alias
 
 
 # ========================================================
@@ -370,11 +561,114 @@ async def on_message(message):
     )
 
     # ====================================================
-    # إذا كان أمرًا معروفًا
-    # نتحقق من إعدادات الموقع
+    # منع الأمر الأصلي إذا كان له اختصار من الموقع
+    #
+    # مثال:
+    #
+    # الأمر الأصلي:
+    # استدعاء
+    #
+    # الاختصار من الموقع:
+    # ث
+    #
+    # إذا كتب المستخدم:
+    # استدعاء @شخص
+    #
+    # البوت لا ينفذ الأمر ويخبره باستخدام:
+    # ث @شخص
+    #
+    # أما إذا كتب:
+    # ث @شخص
+    #
+    # فسيتم التعامل معه بواسطة Cog الخاص
+    # باختصارات الموقع.
     # ====================================================
 
     if ctx.command:
+
+        command_name = normalize_command_name(
+            ctx.command.name
+        )
+
+        first_word = get_message_first_word(
+            message.content
+        )
+
+        # ------------------------------------------------
+        # نتأكد أن المستخدم كتب اسم الأمر الأصلي نفسه
+        # وليس اسمًا آخر مثل اختصار الموقع.
+        # ------------------------------------------------
+
+        if first_word == command_name:
+
+            alias_data = find_website_alias_for_command(
+                message.guild.id,
+                command_name
+            )
+
+            if alias_data:
+
+                alias = get_alias_from_document(
+                    alias_data
+                )
+
+                if alias:
+
+                    print(
+                        "=================================================="
+                    )
+
+                    print(
+                        "🚫 [ORIGINAL COMMAND BLOCKED]"
+                    )
+
+                    print(
+                        f"👤 المستخدم: "
+                        f"{message.author} "
+                        f"(ID: {message.author.id})"
+                    )
+
+                    print(
+                        f"📌 الأمر الأصلي: "
+                        f"{command_name}"
+                    )
+
+                    print(
+                        f"🔤 الاختصار المطلوب: "
+                        f"{alias}"
+                    )
+
+                    print(
+                        "📌 تم منع استخدام الأمر الأصلي"
+                    )
+
+                    print(
+                        "=================================================="
+                    )
+
+                    try:
+
+                        await message.channel.send(
+                            f"❌ الأمر `{command_name}` غير متاح حاليًا.\n"
+                            f"استخدم الاختصار: `{alias}`"
+                        )
+
+                    except Exception as e:
+
+                        print(
+                            "❌ فشل إرسال رسالة منع الأمر:"
+                        )
+
+                        print(
+                            f"{type(e).__name__}: {e}"
+                        )
+
+                    return
+
+        # ------------------------------------------------
+        # بعد التأكد من عدم وجود اختصار يمنع الأمر
+        # نتحقق من إعدادات الموقع للرومات والرتب.
+        # ------------------------------------------------
 
         if not website_command_allowed(ctx):
 
@@ -617,6 +911,14 @@ async def on_ready():
 
     print(
         "🌐 تحكم الموقع بالرومات والرتب مفعل"
+    )
+
+    print(
+        "🔤 نظام اختصارات الموقع مفعل"
+    )
+
+    print(
+        "🚫 الأمر الأصلي يتم منعه إذا كان له اختصار"
     )
 
     print(
