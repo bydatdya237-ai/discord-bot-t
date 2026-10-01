@@ -14,7 +14,12 @@ from pymongo import MongoClient
 # =========================================================
 
 GAME_CHANNEL_ID = 1545143660469813250
-RESET_ROLE_ID = 1554555624057086024
+
+# رتبة التحكم بالفعالية والأوامر
+CONTROL_ROLE_ID = 1554555624057086024
+
+# الرتبة التي يسمح لها بالتسجيل في THE TRIAL
+REGISTER_ROLE_ID = 1544078847253811331
 
 MONGO_URI = os.getenv("MONGO_URI")
 
@@ -72,17 +77,33 @@ def get_player_ids(event):
 
 
 def get_score(event, user_id):
-    return int(event.get("scores", {}).get(str(user_id), 0))
+    return int(
+        event.get("scores", {}).get(
+            str(user_id),
+            0
+        )
+    )
 
 
 def set_score(event, user_id, value):
     event.setdefault("scores", {})
-    event["scores"][str(user_id)] = int(value)
+
+    event["scores"][
+        str(user_id)
+    ] = int(value)
 
 
 def add_score(event, user_id, amount):
-    current = get_score(event, user_id)
-    set_score(event, user_id, current + amount)
+    current = get_score(
+        event,
+        user_id
+    )
+
+    set_score(
+        event,
+        user_id,
+        current + amount
+    )
 
 
 def remove_player(event, user_id):
@@ -99,12 +120,18 @@ def remove_player(event, user_id):
 def active_players(event):
     eliminated = set(
         str(x)
-        for x in event.get("eliminated", [])
+        for x in event.get(
+            "eliminated",
+            []
+        )
     )
 
     return [
         str(x)
-        for x in event.get("players", [])
+        for x in event.get(
+            "players",
+            []
+        )
         if str(x) not in eliminated
     ]
 
@@ -114,7 +141,8 @@ def sort_players(event):
 
     return sorted(
         players,
-        key=lambda uid: get_score(event, uid),
+        key=lambda uid:
+            get_score(event, uid),
         reverse=True
     )
 
@@ -123,7 +151,9 @@ def save_event(event):
     event["updated_at"] = utc_now()
 
     events_collection.replace_one(
-        {"_id": event["_id"]},
+        {
+            "_id": event["_id"]
+        },
         event,
         upsert=True
     )
@@ -136,12 +166,12 @@ def load_active_event(guild_id):
             "status": {
                 "$in": [
                     "registration",
+                    "starting",
                     "round_1",
                     "round_2",
                     "round_3",
                     "round_4",
                     "round_5",
-                    "starting",
                 ]
             }
         }
@@ -159,12 +189,15 @@ def delete_event(guild_id):
 def make_event(guild_id):
     return {
         "_id": f"trial_{guild_id}",
+
         "guild_id": int(guild_id),
 
         "status": "registration",
+
         "round": 0,
 
         "players": [],
+
         "eliminated": [],
 
         "scores": {},
@@ -191,16 +224,17 @@ def make_event(guild_id):
 class TrialGame(commands.Cog):
 
     def __init__(self, bot):
+
         self.bot = bot
 
         # يمنع تشغيل بلش-1 مرتين بنفس اللحظة
         self.start_locks = {}
 
-        # مهام الفعالية الحالية
+        # المهام الحالية
         self.running_tasks = {}
 
     # =====================================================
-    # GET START LOCK
+    # START LOCK
     # =====================================================
 
     def get_start_lock(self, guild_id):
@@ -208,9 +242,30 @@ class TrialGame(commands.Cog):
         guild_id = int(guild_id)
 
         if guild_id not in self.start_locks:
-            self.start_locks[guild_id] = asyncio.Lock()
+
+            self.start_locks[guild_id] = (
+                asyncio.Lock()
+            )
 
         return self.start_locks[guild_id]
+
+    # =====================================================
+    # ROLE CHECK
+    # =====================================================
+
+    def has_control_role(self, member):
+
+        return any(
+            role.id == CONTROL_ROLE_ID
+            for role in member.roles
+        )
+
+    def has_register_role(self, member):
+
+        return any(
+            role.id == REGISTER_ROLE_ID
+            for role in member.roles
+        )
 
     # =====================================================
     # CHANNEL CHECK
@@ -219,6 +274,7 @@ class TrialGame(commands.Cog):
     async def cog_check(self, ctx):
 
         if ctx.channel.id != GAME_CHANNEL_ID:
+
             return False
 
         return True
@@ -233,6 +289,7 @@ class TrialGame(commands.Cog):
         description,
         color=0x9B59B6
     ):
+
         embed = discord.Embed(
             title=title,
             description=description,
@@ -257,14 +314,25 @@ class TrialGame(commands.Cog):
             """
 **بلش-1**
 يبدأ فعالية THE TRIAL ويفتح التسجيل.
-متاح فقط للرتبة المحددة.
+متاح فقط لرتبة التحكم.
 
 **توم**
 يعرض أوامر اللعبة.
 
+**اعادة-تسجل**
+يمسح جميع المسجلين ويعيد التسجيل من الصفر.
+متاح فقط لرتبة التحكم.
+
 **خلصنا**
-ينهي الفعالية الحالية ويمسح بياناتها بالكامل.
-متاح فقط للرتبة المحددة.
+ينهي الفعالية ويمسح بياناتها بالكامل.
+متاح فقط لرتبة التحكم.
+
+━━━━━━━━━━━━━━━━━━
+
+### 🎟️ التسجيل
+
+التسجيل متاح فقط للأعضاء الذين
+يمتلكون رتبة التسجيل المحددة.
 
 ━━━━━━━━━━━━━━━━━━
 
@@ -277,7 +345,7 @@ class TrialGame(commands.Cog):
 تذكر رموز وترتيبها تحت ضغط الوقت.
 
 **الجولة 3 — 🎲 المخاطرة**
-تقرر هل تحافظ على نقاطك أو تخاطر بمضاعفتها.
+تقرر هل تحافظ على نقاطك أو تخاطر.
 
 **الجولة 4 — 🕵️ الخائن**
 تحقيق واستنتاج وتصويت.
@@ -287,13 +355,86 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
 ━━━━━━━━━━━━━━━━━━
 
-🎟️ التسجيل يتم من خلال الزر الموجود في رسالة البداية.
-
-💾 جميع النتائج محفوظة في MongoDB.
+🎟️ التسجيل يتم من خلال الزر الموجود
+في رسالة بداية الفعالية.
             """
         )
 
-        await ctx.send(embed=embed)
+        await ctx.send(
+            embed=embed
+        )
+
+    # =====================================================
+    # COMMAND: اعادة-تسجل
+    # =====================================================
+
+    @commands.command(name="اعادة-تسجل")
+    async def reset_registration(self, ctx):
+
+        # -----------------------------------------------
+        # CONTROL ROLE
+        # -----------------------------------------------
+
+        if not self.has_control_role(
+            ctx.author
+        ):
+
+            await ctx.send(
+                "❌ هذا الأمر مخصص لرتبة التحكم فقط.",
+                delete_after=5
+            )
+
+            return
+
+        # -----------------------------------------------
+        # LOAD EVENT
+        # -----------------------------------------------
+
+        event = load_active_event(
+            ctx.guild.id
+        )
+
+        if not event:
+
+            await ctx.send(
+                "ℹ️ لا توجد فعالية حالية.",
+                delete_after=5
+            )
+
+            return
+
+        # -----------------------------------------------
+        # ONLY DURING REGISTRATION
+        # -----------------------------------------------
+
+        if event.get("status") != "registration":
+
+            await ctx.send(
+                "❌ لا يمكن إعادة التسجيل بعد إغلاق التسجيل وبدء الجولة الأولى.",
+                delete_after=6
+            )
+
+            return
+
+        # -----------------------------------------------
+        # RESET REGISTRATION
+        # -----------------------------------------------
+
+        event["players"] = []
+
+        event["scores"] = {}
+
+        event["eliminated"] = []
+
+        event["cards"] = {}
+
+        save_event(event)
+
+        await ctx.send(
+            "🔄 **تمت إعادة التسجيل.**\n\n"
+            "تم مسح جميع المسجلين ويمكن الآن "
+            "لأصحاب رتبة التسجيل الدخول من جديد."
+        )
 
     # =====================================================
     # COMMAND: خلصنا
@@ -302,23 +443,33 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
     @commands.command(name="خلصنا")
     async def reset_game(self, ctx):
 
-        role = ctx.guild.get_role(RESET_ROLE_ID)
+        # -----------------------------------------------
+        # CONTROL ROLE
+        # -----------------------------------------------
 
-        if role is None or role not in ctx.author.roles:
+        if not self.has_control_role(
+            ctx.author
+        ):
 
             await ctx.send(
-                "❌ هذا الأمر مخصص للرتبة المحددة فقط.",
+                "❌ هذا الأمر مخصص لرتبة التحكم فقط.",
                 delete_after=5
             )
 
             return
 
-        # حذف أي فعالية موجودة، سواء كانت شغالة أو انتهت
-        active = load_active_event(ctx.guild.id)
+        # -----------------------------------------------
+        # CHECK EVENT
+        # -----------------------------------------------
+
+        active = load_active_event(
+            ctx.guild.id
+        )
 
         existing_event = events_collection.find_one(
             {
-                "_id": f"trial_{ctx.guild.id}"
+                "_id":
+                    f"trial_{ctx.guild.id}"
             }
         )
 
@@ -331,10 +482,18 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             return
 
-        # حذف بيانات الفعالية
-        delete_event(ctx.guild.id)
+        # -----------------------------------------------
+        # DELETE EVENT
+        # -----------------------------------------------
 
-        # إلغاء المهمة الحالية
+        delete_event(
+            ctx.guild.id
+        )
+
+        # -----------------------------------------------
+        # CANCEL TASK
+        # -----------------------------------------------
+
         task = self.running_tasks.pop(
             ctx.guild.id,
             None
@@ -356,13 +515,13 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
     @commands.command(name="بلش-1")
     async def start_game(self, ctx):
 
-        # =================================================
-        # التحقق من الرتبة
-        # =================================================
+        # -----------------------------------------------
+        # CONTROL ROLE
+        # -----------------------------------------------
 
-        role = ctx.guild.get_role(RESET_ROLE_ID)
-
-        if role is None or role not in ctx.author.roles:
+        if not self.has_control_role(
+            ctx.author
+        ):
 
             await ctx.send(
                 "❌ ما عندك صلاحية بدء الفعالية.",
@@ -371,14 +530,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             return
 
-        # =================================================
+        # -----------------------------------------------
         # LOCK
-        # =================================================
-        #
-        # إذا شخصين كتبوا بلش-1 بنفس اللحظة:
-        # أول واحد يدخل الـ lock يبدأ الفعالية.
-        # الثاني يجد فعالية شغالة ويسكت تمامًا.
-        #
+        # -----------------------------------------------
 
         lock = self.get_start_lock(
             ctx.guild.id
@@ -386,23 +540,23 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         async with lock:
 
-            # =================================================
-            # التحقق من وجود فعالية
-            # =================================================
+            # -------------------------------------------
+            # CHECK ACTIVE EVENT
+            # -------------------------------------------
 
             active = load_active_event(
                 ctx.guild.id
             )
 
             # إذا الفعالية شغالة:
-            # لا يرسل البوت أي شيء إطلاقًا.
+            # لا يرد البوت نهائيًا
             if active:
 
                 return
 
-            # =================================================
-            # إنشاء فعالية جديدة
-            # =================================================
+            # -------------------------------------------
+            # CREATE EVENT
+            # -------------------------------------------
 
             event = make_event(
                 ctx.guild.id
@@ -429,6 +583,7 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
 ### القواعد
 
+• التسجيل متاح فقط لأصحاب رتبة التسجيل.
 • لكل لاعب فرصة واحدة للتسجيل.
 • لا يمكنك دخول اللعبة بعد بدء الجولة الأولى.
 • النتائج والنقاط محفوظة.
@@ -530,6 +685,7 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             )
 
         except asyncio.CancelledError:
+
             return
 
         except Exception as e:
@@ -557,15 +713,14 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_1"
+
         event["round"] = 1
 
         save_event(event)
 
-        players = active_players(event)
-
-        # -----------------------------------------------
-        # PHASE 1
-        # -----------------------------------------------
+        players = active_players(
+            event
+        )
 
         await channel.send(
             embed=self.embed(
@@ -629,7 +784,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             view.message = msg
 
             try:
+
                 await view.wait()
+
             except Exception:
                 pass
 
@@ -638,7 +795,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 selected[uid] = view.choice
 
             try:
+
                 await msg.delete()
+
             except Exception:
                 pass
 
@@ -646,7 +805,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         for uid in players:
 
-            choice = selected.get(uid)
+            choice = selected.get(
+                uid
+            )
 
             if choice in danger_numbers:
 
@@ -658,7 +819,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             else:
 
-                survivors.append(uid)
+                survivors.append(
+                    uid
+                )
 
                 add_score(
                     event,
@@ -779,6 +942,7 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         memory_answers = {}
 
         def normalize(text):
+
             return " ".join(
                 text.strip().split()
             )
@@ -798,7 +962,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         try:
 
-            end_time = time.time() + 18
+            end_time = (
+                time.time() + 18
+            )
 
             while time.time() < end_time:
 
@@ -988,7 +1154,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                     100
                 )
 
-                final_r1.append(uid)
+                final_r1.append(
+                    uid
+                )
 
             else:
 
@@ -1079,11 +1247,14 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_2"
+
         event["round"] = 2
 
         save_event(event)
 
-        players = active_players(event)
+        players = active_players(
+            event
+        )
 
         if not players:
 
@@ -1224,7 +1395,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                     msg.content.strip().split()
                 )
 
-                expected = " ".join(seq)
+                expected = " ".join(
+                    seq
+                )
 
                 results[uid] = (
                     answer == expected
@@ -1331,11 +1504,14 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_3"
+
         event["round"] = 3
 
         save_event(event)
 
-        players = active_players(event)
+        players = active_players(
+            event
+        )
 
         await channel.send(
             embed=self.embed(
@@ -1535,11 +1711,14 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_4"
+
         event["round"] = 4
 
         save_event(event)
 
-        players = active_players(event)
+        players = active_players(
+            event
+        )
 
         if len(players) <= 3:
 
@@ -1576,6 +1755,7 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         traitor_count = 1
 
         if len(players) >= 10:
+
             traitor_count = 2
 
         traitors = random.sample(
@@ -1647,17 +1827,20 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         def vote_check(message):
 
             if message.channel.id != channel.id:
+
                 return False
 
             if message.author.id not in [
                 int(x)
                 for x in players
             ]:
+
                 return False
 
             if not message.content.startswith(
                 "اتهام"
             ):
+
                 return False
 
             return True
@@ -1710,8 +1893,10 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         for target in votes.values():
 
             vote_counts[target] = (
-                vote_counts.get(target, 0)
-                + 1
+                vote_counts.get(
+                    target,
+                    0
+                ) + 1
             )
 
         if vote_counts:
@@ -1864,11 +2049,14 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_5"
+
         event["round"] = 5
 
         save_event(event)
 
-        players = active_players(event)
+        players = active_players(
+            event
+        )
 
         if not players:
 
@@ -2017,7 +2205,7 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 timeout=20
             )
 
-            msg = await channel.send(
+            await channel.send(
                 f"<@{uid}> اختر:",
                 view=view
             )
@@ -2075,13 +2263,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         # -----------------------------------------------
         # FINAL PHASE 3
         # -----------------------------------------------
-
-        ranked = sorted(
-            players,
-            key=lambda uid:
-                get_score(event, uid),
-            reverse=True
-        )
 
         await channel.send(
             embed=self.embed(
@@ -2174,7 +2355,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         event = events_collection.find_one(
             {
-                "_id": f"trial_{guild_id}"
+                "_id":
+                    f"trial_{guild_id}"
             }
         )
 
@@ -2182,11 +2364,14 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "finished"
+
         event["round"] = 5
 
         save_event(event)
 
-        players = get_player_ids(event)
+        players = get_player_ids(
+            event
+        )
 
         ranked = sorted(
             players,
@@ -2287,7 +2472,9 @@ class RegistrationView(discord.ui.View):
         )
 
         self.cog = cog
+
         self.guild_id = guild_id
+
         self.message = None
 
     @discord.ui.button(
@@ -2301,6 +2488,10 @@ class RegistrationView(discord.ui.View):
         button: discord.ui.Button
     ):
 
+        # -----------------------------------------------
+        # CHANNEL
+        # -----------------------------------------------
+
         if interaction.channel.id != GAME_CHANNEL_ID:
 
             await interaction.response.send_message(
@@ -2309,6 +2500,38 @@ class RegistrationView(discord.ui.View):
             )
 
             return
+
+        # -----------------------------------------------
+        # REGISTER ROLE
+        # -----------------------------------------------
+
+        member = interaction.guild.get_member(
+            interaction.user.id
+        )
+
+        if member is None:
+
+            await interaction.response.send_message(
+                "❌ تعذر التحقق من رتبتك.",
+                ephemeral=True
+            )
+
+            return
+
+        if not self.cog.has_register_role(
+            member
+        ):
+
+            await interaction.response.send_message(
+                "❌ التسجيل متاح فقط لأصحاب رتبة التسجيل.",
+                ephemeral=True
+            )
+
+            return
+
+        # -----------------------------------------------
+        # LOAD EVENT
+        # -----------------------------------------------
 
         event = load_active_event(
             self.guild_id
@@ -2332,11 +2555,17 @@ class RegistrationView(discord.ui.View):
 
             return
 
+        # -----------------------------------------------
+        # CHECK ALREADY REGISTERED
+        # -----------------------------------------------
+
         uid = str(
             interaction.user.id
         )
 
-        if uid in get_player_ids(event):
+        if uid in get_player_ids(
+            event
+        ):
 
             await interaction.response.send_message(
                 "⚠️ أنت مسجل بالفعل.",
@@ -2345,7 +2574,13 @@ class RegistrationView(discord.ui.View):
 
             return
 
-        event["players"].append(uid)
+        # -----------------------------------------------
+        # REGISTER
+        # -----------------------------------------------
+
+        event["players"].append(
+            uid
+        )
 
         event["scores"][uid] = 0
 
@@ -2355,6 +2590,10 @@ class RegistrationView(discord.ui.View):
             "✅ تم تسجيلك في THE TRIAL.",
             ephemeral=True
         )
+
+        # -----------------------------------------------
+        # UPDATE MESSAGE
+        # -----------------------------------------------
 
         if self.message:
 
@@ -2372,6 +2611,8 @@ class RegistrationView(discord.ui.View):
 👥 **المسجلون الآن: {len(event["players"])}**
 
 ⏳ التسجيل مستمر...
+
+🎟️ التسجيل متاح لأصحاب رتبة التسجيل فقط.
                     """
                 )
 
@@ -2388,7 +2629,9 @@ class RegistrationView(discord.ui.View):
 # NUMBER CHOICE
 # =========================================================
 
-class NumberChoiceView(discord.ui.View):
+class NumberChoiceView(
+    discord.ui.View
+):
 
     def __init__(
         self,
@@ -2401,8 +2644,12 @@ class NumberChoiceView(discord.ui.View):
             timeout=timeout
         )
 
-        self.user_id = int(user_id)
+        self.user_id = int(
+            user_id
+        )
+
         self.cog = cog
+
         self.choice = None
 
         for number in range(1, 10):
@@ -2433,7 +2680,9 @@ class NumberButton(
         )
 
         self.number = number
+
         self.user_id = user_id
+
         self.parent_view = parent_view
 
     async def callback(
@@ -2450,7 +2699,9 @@ class NumberButton(
 
             return
 
-        self.parent_view.choice = self.number
+        self.parent_view.choice = (
+            self.number
+        )
 
         await interaction.response.send_message(
             f"تم اختيار الرقم **{self.number}**.",
@@ -2464,7 +2715,9 @@ class NumberButton(
 # GAMBLE VIEW
 # =========================================================
 
-class GambleView(discord.ui.View):
+class GambleView(
+    discord.ui.View
+):
 
     def __init__(
         self,
@@ -2477,8 +2730,12 @@ class GambleView(discord.ui.View):
             timeout=timeout
         )
 
-        self.user_id = int(user_id)
+        self.user_id = int(
+            user_id
+        )
+
         self.cog = cog
+
         self.choice = None
 
     async def choose(
@@ -2555,7 +2812,9 @@ class GambleView(discord.ui.View):
 # FINAL CHOICE
 # =========================================================
 
-class FinalChoiceView(discord.ui.View):
+class FinalChoiceView(
+    discord.ui.View
+):
 
     def __init__(
         self,
@@ -2568,8 +2827,12 @@ class FinalChoiceView(discord.ui.View):
             timeout=timeout
         )
 
-        self.user_id = int(user_id)
+        self.user_id = int(
+            user_id
+        )
+
         self.cog = cog
+
         self.choice = None
 
     async def choose(
