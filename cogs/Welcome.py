@@ -38,18 +38,18 @@ IMAGE_HEIGHT = 500
 
 
 # =========================================================
-# معلومات دائرة الأفاتار في التصميم الجديد
+# مكان دائرة الأفاتار في التصميم
+# =========================================================
 #
-# الصورة التي أرسلتها:
-# 1536 × 857
+# التصميم الذي أرسلته:
 #
-# وبعد تحويلها إلى:
-# 1200 × 500
-#
-# مكان الدائرة النهائي تقريبًا:
+# مركز الدائرة تقريبًا:
 # X = 798
 # Y = 250
-# القطر = 294
+#
+# قطر الدائرة:
+# 294
+#
 # =========================================================
 
 FINAL_CIRCLE_CENTER_X = 798
@@ -61,13 +61,13 @@ FINAL_CIRCLE_DIAMETER = 294
 # إعدادات الأفاتار
 # =========================================================
 
-# كلما زادت القيمة صغر الأفاتار داخل الحلقة
+# تصغير الأفاتار داخل الحلقة
 AVATAR_PADDING = 12
 
 # تحريك الأفاتار لليسار قليلًا
 AVATAR_OFFSET_X = -10
 
-# لا يوجد تحريك عمودي
+# بدون تحريك عمودي
 AVATAR_OFFSET_Y = 0
 
 
@@ -135,28 +135,23 @@ class WelcomeCog(commands.Cog):
                 {
                     "$or": [
                         {
-                            "guild_id":
-                            guild_id_str
+                            "guild_id": guild_id_str
                         },
                         {
-                            "guild_id":
-                            guild_id
+                            "guild_id": guild_id
                         }
                     ]
                 },
                 {
                     "$or": [
                         {
-                            "command_name":
-                            command_name
+                            "command_name": command_name
                         },
                         {
-                            "name":
-                            command_name
+                            "name": command_name
                         },
                         {
-                            "command":
-                            command_name
+                            "command": command_name
                         }
                     ]
                 }
@@ -256,8 +251,7 @@ class WelcomeCog(commands.Cog):
     # =====================================================
     # تجهيز الخلفية إلى 1200 × 500
     #
-    # يتم القص من المنتصف فقط.
-    # لا يوجد Stretch للصورة.
+    # يتم القص من المنتصف بدون تشويه.
     # =====================================================
 
     def prepare_background(
@@ -314,7 +308,6 @@ class WelcomeCog(commands.Cog):
         )
 
         right = left + crop_width
-
         bottom = top + crop_height
 
         cropped = source_image.crop(
@@ -366,8 +359,8 @@ class WelcomeCog(commands.Cog):
                 ).convert("RGB")
 
                 # =================================================
-                # إذا كانت الخلفية محفوظة أصلًا 1200×500
-                # لا نعيد قصها مرة أخرى
+                # إذا كانت محفوظة أصلًا 1200×500
+                # نستخدمها مباشرة
                 # =================================================
 
                 if source_image.size == (
@@ -378,7 +371,7 @@ class WelcomeCog(commands.Cog):
                     return source_image
 
                 # =================================================
-                # إذا كانت خلفية قديمة أو بحجم مختلف
+                # إذا كانت قديمة أو بحجم مختلف
                 # نضبطها مرة واحدة
                 # =================================================
 
@@ -600,7 +593,7 @@ class WelcomeCog(commands.Cog):
             return output
 
         # =================================================
-        # حجم Avatar داخل الحلقة
+        # حجم الأفاتار
         # =================================================
 
         avatar_size = int(
@@ -625,7 +618,7 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # تحديد مكان Avatar
+        # مكان Avatar
         # =================================================
 
         avatar_x = int(
@@ -665,7 +658,7 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # حفظ الصورة النهائية
+        # حفظ الصورة
         # =================================================
 
         output = io.BytesIO()
@@ -722,7 +715,7 @@ class WelcomeCog(commands.Cog):
         )
 
         # =================================================
-        # أنواع الملفات المسموحة
+        # أنواع الملفات
         # =================================================
 
         allowed_extensions = (
@@ -807,7 +800,7 @@ class WelcomeCog(commands.Cog):
             )
 
             # =================================================
-            # حفظ في MongoDB
+            # MongoDB
             # =================================================
 
             welcome_settings_collection.update_one(
@@ -849,175 +842,11 @@ class WelcomeCog(commands.Cog):
             )
 
     # =====================================================
-    # لون الـ Embed
-    # =====================================================
-
-    def get_color(
-        self,
-        color_value
-    ):
-
-        if not color_value:
-
-            return discord.Color.blue()
-
-        try:
-
-            if isinstance(
-                color_value,
-                int
-            ):
-
-                return discord.Color(
-                    color_value
-                )
-
-            color_value = str(
-                color_value
-            ).strip()
-
-            if color_value.startswith(
-                "#"
-            ):
-
-                color_value = (
-                    color_value[1:]
-                )
-
-            if color_value.lower().startswith(
-                "0x"
-            ):
-
-                color_value = (
-                    color_value[2:]
-                )
-
-            return discord.Color(
-                int(
-                    color_value,
-                    16
-                )
-            )
-
-        except Exception:
-
-            return discord.Color.blue()
-
-    # =====================================================
-    # Embed الترحيب
-    # =====================================================
-
-    def build_welcome_embed(
-        self,
-        member,
-        settings
-    ):
-
-        title = settings.get(
-            "title",
-            "🎉 أهلاً وسهلاً بك!"
-        )
-
-        description = settings.get(
-            "description",
-            "{user}\n\n"
-            "نورت السيرفر ونتمنى لك وقتًا ممتعًا معنا 💙"
-        )
-
-        footer = settings.get(
-            "footer",
-            "نتمنى لك تجربة ممتعة معنا ✨"
-        )
-
-        title = self.replace_variables(
-            title,
-            member
-        )
-
-        description = self.replace_variables(
-            description,
-            member
-        )
-
-        footer = self.replace_variables(
-            footer,
-            member
-        )
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=self.get_color(
-                settings.get(
-                    "color",
-                    "#1877D2"
-                )
-            ),
-            timestamp=discord.utils.utcnow()
-        )
-
-        # =================================================
-        # صورة العضو الصغيرة داخل الـ Embed
-        # =================================================
-
-        if settings.get(
-            "show_avatar",
-            True
-        ):
-
-            try:
-
-                embed.set_thumbnail(
-                    url=member.display_avatar.url
-                )
-
-            except Exception:
-                pass
-
-        # =================================================
-        # صورة الترحيب
-        # =================================================
-
-        if settings.get(
-            "generated_image",
-            True
-        ):
-
-            embed.set_image(
-                url="attachment://welcome.png"
-            )
-
-        # =================================================
-        # Footer
-        # =================================================
-
-        if footer:
-
-            try:
-
-                if member.guild.icon:
-
-                    embed.set_footer(
-                        text=footer,
-                        icon_url=member.guild.icon.url
-                    )
-
-                else:
-
-                    embed.set_footer(
-                        text=footer
-                    )
-
-            except Exception:
-
-                embed.set_footer(
-                    text=footer
-                )
-
-        return embed
-
-    # =====================================================
     # عند دخول عضو
+    #
+    # مهم:
+    # يتم إرسال الترحيب كرسالة عادية + صورة Attachment
+    # بدون Embed نهائيًا.
     # =====================================================
 
     @commands.Cog.listener()
@@ -1073,7 +902,7 @@ class WelcomeCog(commands.Cog):
                 return
 
             # =================================================
-            # إنشاء صورة الترحيب
+            # إنشاء الصورة
             # =================================================
 
             generated_image = settings.get(
@@ -1098,7 +927,7 @@ class WelcomeCog(commands.Cog):
                 )
 
             # =================================================
-            # الرسالة
+            # الرسالة النصية
             # =================================================
 
             message = settings.get(
@@ -1112,58 +941,21 @@ class WelcomeCog(commands.Cog):
             )
 
             # =================================================
-            # Embed
-            # =================================================
-
-            embed = None
-
-            if settings.get(
-                "embed_enabled",
-                True
-            ):
-
-                embed = self.build_welcome_embed(
-                    member,
-                    settings
-                )
-
-            # =================================================
             # إرسال الترحيب
+            #
+            # بدون Embed
+            # بدون Thumbnail
+            # بدون Footer
+            # بدون attachment://
+            #
+            # فقط:
+            #
+            # النص
+            # +
+            # الصورة كملف عادي
             # =================================================
 
-            if image_file and embed:
-
-                if message:
-
-                    await channel.send(
-                        content=message,
-                        embed=embed,
-                        file=image_file
-                    )
-
-                else:
-
-                    await channel.send(
-                        embed=embed,
-                        file=image_file
-                    )
-
-            elif embed:
-
-                if message:
-
-                    await channel.send(
-                        content=message,
-                        embed=embed
-                    )
-
-                else:
-
-                    await channel.send(
-                        embed=embed
-                    )
-
-            elif image_file:
+            if image_file:
 
                 if message:
 
@@ -1181,7 +973,7 @@ class WelcomeCog(commands.Cog):
             elif message:
 
                 await channel.send(
-                    message
+                    content=message
                 )
 
         except discord.Forbidden:
