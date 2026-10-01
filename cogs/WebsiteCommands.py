@@ -97,7 +97,65 @@ def normalize_alias(value):
     return normalize_command_name(value)
 
 
-def find_website_alias(guild_id, typed_alias):
+# =========================================================
+# الحصول على قيم guild_id المحتملة
+# =========================================================
+
+def get_guild_id_values(guild_id):
+
+    if guild_id is None:
+        return []
+
+    values = []
+
+    try:
+        string_id = str(guild_id)
+
+        if string_id:
+            values.append(string_id)
+
+    except Exception:
+        pass
+
+    try:
+        numeric_id = int(guild_id)
+
+        if numeric_id not in values:
+            values.append(numeric_id)
+
+    except Exception:
+        pass
+
+    return values
+
+
+# =========================================================
+# الحصول على قيم الاختصار المحتملة
+# =========================================================
+
+def get_alias_values(alias):
+
+    alias = normalize_alias(alias)
+
+    if not alias:
+        return []
+
+    return [
+        alias,
+        f"-{alias}",
+        f".{alias}",
+        f"/{alias}"
+    ]
+
+
+# =========================================================
+# البحث عن الاختصار
+# =========================================================
+
+def find_website_alias(
+    guild_id,
+    typed_alias
+):
     """
     البحث عن الاختصار الخاص بالسيرفر.
 
@@ -114,116 +172,158 @@ def find_website_alias(guild_id, typed_alias):
     /ذ
     """
 
-    if not guild_id or not typed_alias:
+    if guild_id is None or not typed_alias:
         return None
 
-    guild_id = str(guild_id)
-
-    alias = normalize_alias(
+    alias_values = get_alias_values(
         typed_alias
     )
 
-    if not alias:
+    guild_values = get_guild_id_values(
+        guild_id
+    )
+
+    if not alias_values or not guild_values:
         return None
-
-    # =====================================================
-    # البحث الأساسي - guild_id كنص
-    # =====================================================
-
-    data = aliases_collection.find_one({
-        "guild_id": guild_id,
-        "alias": alias
-    })
-
-    if data:
-        return data
-
-    # =====================================================
-    # لو الموقع حفظ الاختصار مع -
-    # =====================================================
-
-    data = aliases_collection.find_one({
-        "guild_id": guild_id,
-        "alias": f"-{alias}"
-    })
-
-    if data:
-        return data
-
-    # =====================================================
-    # لو الموقع حفظ الاختصار مع .
-    # =====================================================
-
-    data = aliases_collection.find_one({
-        "guild_id": guild_id,
-        "alias": f".{alias}"
-    })
-
-    if data:
-        return data
-
-    # =====================================================
-    # لو الموقع حفظ الاختصار مع /
-    # =====================================================
-
-    data = aliases_collection.find_one({
-        "guild_id": guild_id,
-        "alias": f"/{alias}"
-    })
-
-    if data:
-        return data
-
-    # =====================================================
-    # لو الموقع حفظ guild_id كرقم
-    # =====================================================
 
     try:
 
-        numeric_guild_id = int(
-            guild_id
+        data = aliases_collection.find_one({
+            "guild_id": {
+                "$in": guild_values
+            },
+            "alias": {
+                "$in": alias_values
+            }
+        })
+
+        if data:
+            return data
+
+    except Exception as error:
+
+        print(
+            "❌ [ALIAS] خطأ أثناء البحث عن الاختصار"
         )
 
-        data = aliases_collection.find_one({
-            "guild_id": numeric_guild_id,
-            "alias": alias
-        })
-
-        if data:
-            return data
-
-        data = aliases_collection.find_one({
-            "guild_id": numeric_guild_id,
-            "alias": f"-{alias}"
-        })
-
-        if data:
-            return data
-
-        data = aliases_collection.find_one({
-            "guild_id": numeric_guild_id,
-            "alias": f".{alias}"
-        })
-
-        if data:
-            return data
-
-        data = aliases_collection.find_one({
-            "guild_id": numeric_guild_id,
-            "alias": f"/{alias}"
-        })
-
-        if data:
-            return data
-
-    except Exception:
-        pass
+        print(
+            f"❌ {type(error).__name__}: {error}"
+        )
 
     return None
 
 
 # =========================================================
-# البحث عن اختصار الأمر الحقيقي
+# البحث عن جميع اختصارات الأمر الحقيقي
+# =========================================================
+
+def find_all_website_aliases_for_command(
+    guild_id,
+    command_name
+):
+    """
+    البحث عن جميع الاختصارات المرتبطة بأمر واحد.
+
+    مثال:
+
+    لاتتكلم -> طوط
+    لاتتكلم -> صمت
+    لاتتكلم -> سكوت
+
+    النتيجة:
+
+    ["طوط", "صمت", "سكوت"]
+    """
+
+    if guild_id is None or not command_name:
+        return []
+
+    command_name = normalize_command_name(
+        command_name
+    )
+
+    if not command_name:
+        return []
+
+    guild_values = get_guild_id_values(
+        guild_id
+    )
+
+    if not guild_values:
+        return []
+
+    command_values = [
+        command_name,
+        f"-{command_name}",
+        f".{command_name}",
+        f"/{command_name}"
+    ]
+
+    aliases = []
+
+    try:
+
+        query = {
+            "guild_id": {
+                "$in": guild_values
+            },
+            "$or": [
+                {
+                    "command": {
+                        "$in": command_values
+                    }
+                },
+                {
+                    "command_name": {
+                        "$in": command_values
+                    }
+                },
+                {
+                    "target": {
+                        "$in": command_values
+                    }
+                },
+                {
+                    "original_command": {
+                        "$in": command_values
+                    }
+                }
+            ]
+        }
+
+        cursor = aliases_collection.find(
+            query
+        )
+
+        for data in cursor:
+
+            alias = get_alias_value(
+                data
+            )
+
+            if not alias:
+                continue
+
+            if alias not in aliases:
+                aliases.append(
+                    alias
+                )
+
+    except Exception as error:
+
+        print(
+            "❌ [ALIAS] خطأ أثناء جلب جميع الاختصارات"
+        )
+
+        print(
+            f"❌ {type(error).__name__}: {error}"
+        )
+
+    return aliases
+
+
+# =========================================================
+# البحث عن اختصار واحد للأمر
 # =========================================================
 
 def find_website_alias_for_command(
@@ -231,111 +331,26 @@ def find_website_alias_for_command(
     command_name
 ):
     """
-    البحث العكسي:
+    البحث عن أول اختصار للأمر.
 
-    ق -> قفل
+    هذه الدالة موجودة للتوافق مع أي كود قديم
+    يستخدمها.
 
-    هنا نبحث:
+    إذا كان هناك أكثر من اختصار، سيتم استخدام
+    أول اختصار فقط.
 
-    قفل -> ق
+    للحصول على جميع الاختصارات استخدم:
 
-    لاستخدامها لاحقًا عندما يكتب المستخدم
-    الأمر الأصلي بدل الاختصار.
+    find_all_website_aliases_for_command()
     """
 
-    if not guild_id or not command_name:
-        return None
-
-    guild_id = str(guild_id)
-
-    command_name = normalize_command_name(
+    aliases = find_all_website_aliases_for_command(
+        guild_id,
         command_name
     )
 
-    if not command_name:
-        return None
-
-    possible_queries = [
-        {
-            "guild_id": guild_id,
-            "command": command_name
-        },
-        {
-            "guild_id": guild_id,
-            "command_name": command_name
-        },
-        {
-            "guild_id": guild_id,
-            "target": command_name
-        },
-        {
-            "guild_id": guild_id,
-            "original_command": command_name
-        },
-    ]
-
-    # =====================================================
-    # البحث بالنص
-    # =====================================================
-
-    for query in possible_queries:
-
-        data = aliases_collection.find_one(
-            query
-        )
-
-        if data:
-            alias = normalize_alias(
-                data.get("alias")
-            )
-
-            if alias:
-                return alias
-
-    # =====================================================
-    # البحث برقم السيرفر
-    # =====================================================
-
-    try:
-
-        numeric_guild_id = int(
-            guild_id
-        )
-
-        for query in [
-            {
-                "guild_id": numeric_guild_id,
-                "command": command_name
-            },
-            {
-                "guild_id": numeric_guild_id,
-                "command_name": command_name
-            },
-            {
-                "guild_id": numeric_guild_id,
-                "target": command_name
-            },
-            {
-                "guild_id": numeric_guild_id,
-                "original_command": command_name
-            },
-        ]:
-
-            data = aliases_collection.find_one(
-                query
-            )
-
-            if data:
-
-                alias = normalize_alias(
-                    data.get("alias")
-                )
-
-                if alias:
-                    return alias
-
-    except Exception:
-        pass
+    if aliases:
+        return aliases[0]
 
     return None
 
@@ -378,7 +393,7 @@ def get_alias_target(data):
 
 def get_alias_value(data):
     """
-    استخراج الاختصار نفسه من سجل MongoDB.
+    استخراج الاختصار من سجل MongoDB.
     """
 
     if not data:
@@ -397,11 +412,102 @@ def get_alias_value(data):
 
 
 # =========================================================
+# الحصول على بيانات جميع الاختصارات
+# =========================================================
+
+def get_all_alias_documents_for_command(
+    guild_id,
+    command_name
+):
+    """
+    إرجاع جميع سجلات الاختصارات لأمر معين.
+    """
+
+    if guild_id is None or not command_name:
+        return []
+
+    command_name = normalize_command_name(
+        command_name
+    )
+
+    guild_values = get_guild_id_values(
+        guild_id
+    )
+
+    command_values = [
+        command_name,
+        f"-{command_name}",
+        f".{command_name}",
+        f"/{command_name}"
+    ]
+
+    if not guild_values:
+        return []
+
+    try:
+
+        query = {
+            "guild_id": {
+                "$in": guild_values
+            },
+            "$or": [
+                {
+                    "command": {
+                        "$in": command_values
+                    }
+                },
+                {
+                    "command_name": {
+                        "$in": command_values
+                    }
+                },
+                {
+                    "target": {
+                        "$in": command_values
+                    }
+                },
+                {
+                    "original_command": {
+                        "$in": command_values
+                    }
+                }
+            ]
+        }
+
+        return list(
+            aliases_collection.find(
+                query
+            )
+        )
+
+    except Exception as error:
+
+        print(
+            "❌ [ALIAS] فشل جلب بيانات الاختصارات"
+        )
+
+        print(
+            f"❌ {type(error).__name__}: {error}"
+        )
+
+        return []
+
+
+# =========================================================
 # منع تكرار معالجة الاختصار
 # =========================================================
 
 _ALIAS_GUARD_ATTRIBUTE = (
     "_website_alias_processing"
+)
+
+
+# =========================================================
+# حفظ معلومات الاختصار الحالي
+# =========================================================
+
+_ALIAS_CONTEXT_ATTRIBUTE = (
+    "_website_alias_context"
 )
 
 
@@ -420,16 +526,16 @@ async def process_website_alias(
 
     المستخدم يكتب:
 
-    ق @شخص
+    طوط @شخص
 
     MongoDB:
 
-    alias = ق
-    command = قفل
+    alias = طوط
+    command = لاتتكلم
 
     يصبح:
 
-    قفل @شخص
+    لاتتكلم @شخص
 
     ثم يتم تشغيل الأمر الأصلي.
     """
@@ -517,6 +623,7 @@ async def process_website_alias(
     )
 
     if not actual_alias:
+
         actual_alias = normalize_alias(
             typed_alias
         )
@@ -567,6 +674,38 @@ async def process_website_alias(
     )
 
     # =====================================================
+    # حفظ معلومات الاختصار
+    #
+    # نحتاجها حتى نعرف أن الأمر تم تشغيله
+    # من خلال الاختصار، وبالتالي لو حصل
+    # MissingRequiredArgument نعرض:
+    #
+    # طوط @الشخص
+    #
+    # بدل:
+    #
+    # لاتتكلم @الشخص
+    # =====================================================
+
+    alias_context = {
+        "alias": actual_alias,
+        "target_command": target_command,
+        "original_content": old_content,
+        "new_content": new_content
+    }
+
+    try:
+
+        setattr(
+            message,
+            _ALIAS_CONTEXT_ATTRIBUTE,
+            alias_context
+        )
+
+    except Exception:
+        pass
+
+    # =====================================================
     # وضع علامة حماية
     # =====================================================
 
@@ -607,6 +746,21 @@ async def process_website_alias(
                 f"✅ [ALIAS] الأمر مسجل في Discord.py: "
                 f"{ctx.command.qualified_name}"
             )
+
+            # ------------------------------------------------
+            # حفظ معلومات الاختصار داخل Context أيضًا
+            # ------------------------------------------------
+
+            try:
+
+                setattr(
+                    ctx,
+                    _ALIAS_CONTEXT_ATTRIBUTE,
+                    alias_context
+                )
+
+            except Exception:
+                pass
 
             await bot.invoke(
                 ctx
@@ -673,6 +827,36 @@ async def process_website_alias(
 
         except Exception:
             pass
+
+        # =================================================
+        # لا نحذف ALIAS_CONTEXT هنا
+        #
+        # لأن on_command_error قد يحتاجه
+        # بعد تنفيذ الأمر.
+        # =================================================
+
+
+# =========================================================
+# دالة عامة يستطيع Main استخدامها
+# =========================================================
+
+async def process_website_alias_message(
+    message,
+    bot
+):
+    """
+    دالة عامة للـ Main.
+
+    ترجع:
+
+    True  = تم العثور على اختصار ومعالجته
+    False = الرسالة ليست اختصارًا
+    """
+
+    return await process_website_alias(
+        message,
+        bot
+    )
 
 
 # =========================================================
@@ -1550,6 +1734,31 @@ class WebsiteCommands(
 
         self.updated = False
 
+        # =================================================
+        # تسجيل دالة الاختصارات داخل البوت
+        #
+        # الـ Main يستطيع استخدامها:
+        #
+        # bot.website_alias_processor
+        #
+        # =================================================
+
+        self.bot.website_alias_processor = (
+            process_website_alias_message
+        )
+
+        self.bot.website_alias_finder = (
+            find_all_website_aliases_for_command
+        )
+
+        self.bot.website_alias_normalizer = (
+            normalize_alias
+        )
+
+        self.bot.website_alias_target = (
+            get_alias_target
+        )
+
         self.bot.add_check(
             self.website_permission_check
         )
@@ -1961,6 +2170,32 @@ class WebsiteCommands(
         except Exception:
 
             pass
+
+        # =================================================
+        # تنظيف الدوال المضافة للبوت
+        # =================================================
+
+        for attribute in (
+            "website_alias_processor",
+            "website_alias_finder",
+            "website_alias_normalizer",
+            "website_alias_target"
+        ):
+
+            try:
+
+                if hasattr(
+                    self.bot,
+                    attribute
+                ):
+
+                    delattr(
+                        self.bot,
+                        attribute
+                    )
+
+            except Exception:
+                pass
 
 
 # =========================================================
