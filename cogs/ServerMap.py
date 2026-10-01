@@ -425,11 +425,6 @@ def create_welcome_embed(
         color=discord.Color.blurple()
     )
 
-    # =====================================================
-    # صورة السيرفر داخل نفس الإيمبد
-    # وتظهر تحت النص مباشرة
-    # =====================================================
-
     icon_url = get_server_icon_url(
         guild
     )
@@ -1324,9 +1319,6 @@ async def update_server_map(
 
     # =====================================================
     # إرسال الإيمبد
-    #
-    # صورة السيرفر موجودة داخل نفس الإيمبد
-    # باستخدام set_image()
     # =====================================================
 
     try:
@@ -1344,7 +1336,6 @@ async def update_server_map(
 
         # =================================================
         # محاولة إرسال الإيمبد بدون الصورة
-        # في حال كان رابط الأيقونة فيه مشكلة
         # =================================================
 
         try:
@@ -1560,7 +1551,7 @@ class RulesModal(
 
 
 # =========================================================
-# Modal الإيمبد المخصص
+# Modal إنشاء الإيمبد المخصص
 # =========================================================
 
 class CustomEmbedModal(
@@ -1619,7 +1610,6 @@ class CustomEmbedModal(
         ).strip()
 
         if not title:
-
             title = "معلومات السيرفر"
 
         collection.update_one(
@@ -1640,6 +1630,218 @@ class CustomEmbedModal(
             f"✅ تم حفظ الإيمبد باسم **{title}**.\n"
             "🔄 اضغط تحديث الخريطة حتى تظهر التغييرات.",
             ephemeral=True
+        )
+
+
+# =========================================================
+# Modal تعديل الإيمبد المخصص
+# =========================================================
+
+class EditCustomEmbedModal(
+    ui.Modal,
+    title="✏️ تعديل الإيمبد المخصص"
+):
+
+    title_input = ui.TextInput(
+        label="عنوان الإيمبد",
+        placeholder="اكتب عنوان الإيمبد...",
+        required=False,
+        max_length=256
+    )
+
+    description_input = ui.TextInput(
+        label="محتوى الإيمبد",
+        placeholder="اكتب محتوى الإيمبد...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=4000
+    )
+
+    def __init__(
+        self,
+        guild_id,
+        current_title,
+        current_description
+    ):
+
+        super().__init__()
+
+        self.guild_id = guild_id
+
+        # =================================================
+        # تعبئة البيانات الحالية داخل نافذة التعديل
+        # =================================================
+
+        current_title = str(
+            current_title or ""
+        ).strip()
+
+        current_description = str(
+            current_description or ""
+        ).strip()
+
+        if not current_title:
+            current_title = "معلومات السيرفر"
+
+        self.title_input.default = current_title
+        self.description_input.default = current_description
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if not website_command_allowed(
+            interaction.user,
+            interaction.channel,
+            SETUP_COMMAND_NAME
+        ):
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        title = str(
+            self.title_input.value or ""
+        ).strip()
+
+        description = str(
+            self.description_input.value or ""
+        ).strip()
+
+        if not title:
+            title = "معلومات السيرفر"
+
+        if not description:
+
+            await interaction.response.send_message(
+                "❌ لا يمكن حفظ إيمبد بدون محتوى.",
+                ephemeral=True
+            )
+
+            return
+
+        collection.update_one(
+            {
+                "guild_id": self.guild_id
+            },
+            {
+                "$set": {
+                    "custom_embed_title": title,
+                    "custom_embed_description": description,
+                    "custom_embed_enabled": True
+                }
+            },
+            upsert=True
+        )
+
+        await interaction.response.send_message(
+            f"✅ تم تعديل الإيمبد **{title}** بنجاح.\n"
+            "🔄 اضغط تحديث الخريطة حتى تظهر التغييرات.",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# View تأكيد حذف الإيمبد
+# =========================================================
+
+class DeleteCustomEmbedConfirmView(
+    ui.View
+):
+
+    def __init__(
+        self,
+        guild_id
+    ):
+
+        super().__init__(
+            timeout=60
+        )
+
+        self.guild_id = guild_id
+
+    # =====================================================
+    # تأكيد الحذف
+    # =====================================================
+
+    @ui.button(
+        label="نعم، احذف الإيمبد",
+        style=discord.ButtonStyle.danger,
+        emoji="🗑️"
+    )
+    async def confirm_delete(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if interaction.guild is None:
+            return
+
+        if not website_command_allowed(
+            interaction.user,
+            interaction.channel,
+            SETUP_COMMAND_NAME
+        ):
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        collection.update_one(
+            {
+                "guild_id": self.guild_id
+            },
+            {
+                "$set": {
+                    "custom_embed_title": "",
+                    "custom_embed_description": "",
+                    "custom_embed_enabled": False
+                }
+            },
+            upsert=True
+        )
+
+        # تعطيل أزرار التأكيد
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.edit_message(
+            content=(
+                "✅ تم حذف الإيمبد المخصص بنجاح.\n"
+                "🔄 اضغط **تحديث الخريطة** حتى يختفي زر الإيمبد من الخريطة."
+            ),
+            view=self
+        )
+
+    # =====================================================
+    # إلغاء الحذف
+    # =====================================================
+
+    @ui.button(
+        label="إلغاء",
+        style=discord.ButtonStyle.secondary,
+        emoji="↩️"
+    )
+    async def cancel_delete(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.edit_message(
+            content="ℹ️ تم إلغاء حذف الإيمبد.",
+            view=self
         )
 
 
@@ -1801,7 +2003,7 @@ class ServerMapSetupView(
         )
 
     # =====================================================
-    # الإيمبد المخصص
+    # إنشاء إيمبد مخصص
     # =====================================================
 
     @ui.button(
@@ -1834,6 +2036,134 @@ class ServerMapSetupView(
         )
 
     # =====================================================
+    # تعديل الإيمبد
+    # =====================================================
+
+    @ui.button(
+        label="تعديل الإيمبد",
+        style=discord.ButtonStyle.secondary,
+        emoji="✏️",
+        row=2
+    )
+    async def edit_custom_embed_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if not await self.check_permission(
+            interaction
+        ):
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        settings = get_settings(
+            self.guild_id
+        )
+
+        enabled = settings.get(
+            "custom_embed_enabled",
+            False
+        )
+
+        title = str(
+            settings.get(
+                "custom_embed_title",
+                ""
+            ) or ""
+        ).strip()
+
+        description = str(
+            settings.get(
+                "custom_embed_description",
+                ""
+            ) or ""
+        ).strip()
+
+        if not enabled or not description:
+
+            await interaction.response.send_message(
+                "ℹ️ لا يوجد إيمبد مخصص لتعديله حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_modal(
+            EditCustomEmbedModal(
+                self.guild_id,
+                title,
+                description
+            )
+        )
+
+    # =====================================================
+    # حذف الإيمبد المخصص
+    # =====================================================
+
+    @ui.button(
+        label="حذف الإيمبد المخصص",
+        style=discord.ButtonStyle.danger,
+        emoji="🗑️",
+        row=2
+    )
+    async def delete_custom_embed_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        if not await self.check_permission(
+            interaction
+        ):
+
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+
+            return
+
+        settings = get_settings(
+            self.guild_id
+        )
+
+        enabled = settings.get(
+            "custom_embed_enabled",
+            False
+        )
+
+        description = str(
+            settings.get(
+                "custom_embed_description",
+                ""
+            ) or ""
+        ).strip()
+
+        if not enabled or not description:
+
+            await interaction.response.send_message(
+                "ℹ️ لا يوجد إيمبد مخصص لحذفه حاليًا.",
+                ephemeral=True
+            )
+
+            return
+
+        await interaction.response.send_message(
+            "⚠️ هل أنت متأكد أنك تريد حذف الإيمبد المخصص؟\n\n"
+            "سيتم حذف العنوان والمحتوى المحفوظين.",
+            view=DeleteCustomEmbedConfirmView(
+                self.guild_id
+            ),
+            ephemeral=True
+        )
+
+    # =====================================================
     # تحديث الخريطة
     # =====================================================
 
@@ -1841,7 +2171,7 @@ class ServerMapSetupView(
         label="تحديث الخريطة",
         style=discord.ButtonStyle.success,
         emoji="🔄",
-        row=2
+        row=3
     )
     async def refresh_button(
         self,
@@ -2008,14 +2338,25 @@ class ServerMapCog(
             title="🗺️ إعداد خريطة السيرفر",
             description=(
                 "من هنا تقدر تتحكم في محتوى خريطة السيرفر.\n\n"
+
                 "🔔 **رتب الإشعارات**\n"
                 "حدد الرتب التي يستطيع الأعضاء اختيارها.\n\n"
+
                 "🗺️ **قنوات الخريطة**\n"
                 "حدد القنوات التي ستظهر للأعضاء.\n\n"
+
                 "📜 **القوانين**\n"
                 "اكتب قوانين السيرفر.\n\n"
+
                 "📝 **إيمبد مخصص**\n"
-                "اكتب أي عنوان ومحتوى تريده، وسيظهر الزر بنفس الاسم الذي اخترته.\n\n"
+                "أنشئ إيمبد مخصص وسيظهر في خريطة السيرفر.\n\n"
+
+                "✏️ **تعديل الإيمبد**\n"
+                "عدل عنوان أو محتوى الإيمبد المخصص الحالي.\n\n"
+
+                "🗑️ **حذف الإيمبد المخصص**\n"
+                "احذف الإيمبد المخصص الحالي من خريطة السيرفر.\n\n"
+
                 "🔄 **تحديث الخريطة**\n"
                 "يعيد بناء رسالة الخريطة بالإعدادات الحالية."
             ),
