@@ -97,7 +97,10 @@ def remove_player(event, user_id):
 
 
 def active_players(event):
-    eliminated = set(str(x) for x in event.get("eliminated", []))
+    eliminated = set(
+        str(x)
+        for x in event.get("eliminated", [])
+    )
 
     return [
         str(x)
@@ -138,6 +141,7 @@ def load_active_event(guild_id):
                     "round_3",
                     "round_4",
                     "round_5",
+                    "starting",
                 ]
             }
         }
@@ -188,7 +192,25 @@ class TrialGame(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+
+        # يمنع تشغيل بلش-1 مرتين بنفس اللحظة
+        self.start_locks = {}
+
+        # مهام الفعالية الحالية
         self.running_tasks = {}
+
+    # =====================================================
+    # GET START LOCK
+    # =====================================================
+
+    def get_start_lock(self, guild_id):
+
+        guild_id = int(guild_id)
+
+        if guild_id not in self.start_locks:
+            self.start_locks[guild_id] = asyncio.Lock()
+
+        return self.start_locks[guild_id]
 
     # =====================================================
     # CHANNEL CHECK
@@ -235,13 +257,14 @@ class TrialGame(commands.Cog):
             """
 **بلش-1**
 يبدأ فعالية THE TRIAL ويفتح التسجيل.
+متاح فقط للرتبة المحددة.
 
 **توم**
 يعرض أوامر اللعبة.
 
-**تصفير**
-يمسح الفعالية الحالية بالكامل ويعيد اللعبة من البداية.
-هذا الأمر متاح فقط لرتبة الإدارة المحددة.
+**خلصنا**
+ينهي الفعالية الحالية ويمسح بياناتها بالكامل.
+متاح فقط للرتبة المحددة.
 
 ━━━━━━━━━━━━━━━━━━
 
@@ -273,10 +296,10 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         await ctx.send(embed=embed)
 
     # =====================================================
-    # COMMAND: تصفير
+    # COMMAND: خلصنا
     # =====================================================
 
-    @commands.command(name="تصفير")
+    @commands.command(name="خلصنا")
     async def reset_game(self, ctx):
 
         role = ctx.guild.get_role(RESET_ROLE_ID)
@@ -290,26 +313,39 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             return
 
+        # حذف أي فعالية موجودة، سواء كانت شغالة أو انتهت
         active = load_active_event(ctx.guild.id)
 
-        if not active:
+        existing_event = events_collection.find_one(
+            {
+                "_id": f"trial_{ctx.guild.id}"
+            }
+        )
+
+        if not active and not existing_event:
 
             await ctx.send(
-                "ℹ️ لا توجد فعالية حالية لتصفيتها.",
+                "ℹ️ لا توجد فعالية حالية لإنهائها.",
                 delete_after=5
             )
 
             return
 
+        # حذف بيانات الفعالية
         delete_event(ctx.guild.id)
 
-        task = self.running_tasks.pop(ctx.guild.id, None)
+        # إلغاء المهمة الحالية
+        task = self.running_tasks.pop(
+            ctx.guild.id,
+            None
+        )
 
         if task and not task.done():
+
             task.cancel()
 
         await ctx.send(
-            "🧹 **تم تصفير THE TRIAL بالكامل.**\n\n"
+            "🧹 **خلصنا — تم إنهاء THE TRIAL ومسح بياناتها بالكامل.**\n\n"
             "يمكن الآن بدء فعالية جديدة باستخدام `بلش-1`."
         )
 
@@ -320,30 +356,68 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
     @commands.command(name="بلش-1")
     async def start_game(self, ctx):
 
-        active = load_active_event(ctx.guild.id)
+        # =================================================
+        # التحقق من الرتبة
+        # =================================================
 
-        if active:
+        role = ctx.guild.get_role(RESET_ROLE_ID)
+
+        if role is None or role not in ctx.author.roles:
 
             await ctx.send(
-                "⚠️ توجد فعالية قائمة بالفعل.\n"
-                "استخدم `تصفير` لإلغائها إذا كنت تملك صلاحية التصفير.",
-                delete_after=8
+                "❌ ما عندك صلاحية بدء الفعالية.",
+                delete_after=5
             )
 
             return
 
-        event = make_event(ctx.guild.id)
+        # =================================================
+        # LOCK
+        # =================================================
+        #
+        # إذا شخصين كتبوا بلش-1 بنفس اللحظة:
+        # أول واحد يدخل الـ lock يبدأ الفعالية.
+        # الثاني يجد فعالية شغالة ويسكت تمامًا.
+        #
 
-        save_event(event)
-
-        view = RegistrationView(
-            self,
+        lock = self.get_start_lock(
             ctx.guild.id
         )
 
-        embed = self.embed(
-            "⚔️ THE TRIAL",
-            """
+        async with lock:
+
+            # =================================================
+            # التحقق من وجود فعالية
+            # =================================================
+
+            active = load_active_event(
+                ctx.guild.id
+            )
+
+            # إذا الفعالية شغالة:
+            # لا يرسل البوت أي شيء إطلاقًا.
+            if active:
+
+                return
+
+            # =================================================
+            # إنشاء فعالية جديدة
+            # =================================================
+
+            event = make_event(
+                ctx.guild.id
+            )
+
+            save_event(event)
+
+            view = RegistrationView(
+                self,
+                ctx.guild.id
+            )
+
+            embed = self.embed(
+                "⚔️ THE TRIAL",
+                """
 # 🎟️ التسجيل مفتوح
 
 خمس جولات.
@@ -365,24 +439,26 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 👥 **المسجلون الآن: 0**
 
 اضغط الزر بالأسفل للدخول.
-            """
-        )
-
-        message = await ctx.send(
-            embed=embed,
-            view=view
-        )
-
-        view.message = message
-
-        task = asyncio.create_task(
-            self.registration_timer(
-                ctx.guild.id,
-                message
+                """
             )
-        )
 
-        self.running_tasks[ctx.guild.id] = task
+            message = await ctx.send(
+                embed=embed,
+                view=view
+            )
+
+            view.message = message
+
+            task = asyncio.create_task(
+                self.registration_timer(
+                    ctx.guild.id,
+                    message
+                )
+            )
+
+            self.running_tasks[
+                ctx.guild.id
+            ] = task
 
     # =====================================================
     # REGISTRATION TIMER
@@ -396,9 +472,13 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         try:
 
-            await asyncio.sleep(REGISTRATION_TIME)
+            await asyncio.sleep(
+                REGISTRATION_TIME
+            )
 
-            event = load_active_event(guild_id)
+            event = load_active_event(
+                guild_id
+            )
 
             if not event:
                 return
@@ -444,21 +524,34 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             await asyncio.sleep(4)
 
-            await self.round_1(guild_id, message.channel)
+            await self.round_1(
+                guild_id,
+                message.channel
+            )
 
         except asyncio.CancelledError:
             return
 
         except Exception as e:
-            print("Trial registration error:", repr(e))
+
+            print(
+                "Trial registration error:",
+                repr(e)
+            )
 
     # =====================================================
     # ROUND 1
     # =====================================================
 
-    async def round_1(self, guild_id, channel):
+    async def round_1(
+        self,
+        guild_id,
+        channel
+    ):
 
-        event = load_active_event(guild_id)
+        event = load_active_event(
+            guild_id
+        )
 
         if not event:
             return
@@ -513,7 +606,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         )
 
         danger_numbers = [
-            x for x in range(1, 10)
+            x
+            for x in range(1, 10)
             if x not in safe_numbers
         ]
 
@@ -540,6 +634,7 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 pass
 
             if view.choice is not None:
+
                 selected[uid] = view.choice
 
             try:
@@ -555,23 +650,41 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             if choice in danger_numbers:
 
-                add_score(event, uid, -25)
+                add_score(
+                    event,
+                    uid,
+                    -25
+                )
 
             else:
 
                 survivors.append(uid)
-                add_score(event, uid, 25)
 
-        # Make sure not everyone gets removed
+                add_score(
+                    event,
+                    uid,
+                    25
+                )
+
         if len(survivors) < 2 and len(players) >= 2:
 
             survivors = players[:]
 
             for uid in survivors:
-                add_score(event, uid, 20)
 
-        event["round_1"]["danger_numbers"] = danger_numbers
-        event["round_1"]["survivors"] = survivors
+                add_score(
+                    event,
+                    uid,
+                    20
+                )
+
+        event["round_1"][
+            "danger_numbers"
+        ] = danger_numbers
+
+        event["round_1"][
+            "survivors"
+        ] = survivors
 
         save_event(event)
 
@@ -617,11 +730,16 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             12
         )
 
-        sequence = random.sample(symbols, length)
+        sequence = random.sample(
+            symbols,
+            length
+        )
 
-        sequence_text = " ".join(sequence)
+        sequence_text = " ".join(
+            sequence
+        )
 
-        await channel.send(
+        memory_message = await channel.send(
             embed=self.embed(
                 "🧠 ذاكرة الخطر",
                 f"""
@@ -640,13 +758,10 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         try:
 
-            last_message = channel.last_message
-
-            if last_message:
-                await last_message.edit(
-                    embed=self.embed(
-                        "🧠 اختفت الرموز",
-                        """
+            await memory_message.edit(
+                embed=self.embed(
+                    "🧠 اختفت الرموز",
+                    """
 اكتب الرموز بالترتيب.
 
 مثال:
@@ -654,9 +769,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 🍎 🐺 🔥 ...
 
 لديك وقت محدود.
-                        """
-                    )
+                    """
                 )
+            )
 
         except Exception:
             pass
@@ -664,7 +779,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         memory_answers = {}
 
         def normalize(text):
-            return " ".join(text.strip().split())
+            return " ".join(
+                text.strip().split()
+            )
 
         def memory_check(message):
 
@@ -672,7 +789,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 return False
 
             if message.author.id not in [
-                int(x) for x in survivors
+                int(x)
+                for x in survivors
             ]:
                 return False
 
@@ -684,7 +802,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             while time.time() < end_time:
 
-                remaining = end_time - time.time()
+                remaining = (
+                    end_time - time.time()
+                )
 
                 if remaining <= 0:
                     break
@@ -698,49 +818,75 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                     )
 
                 except asyncio.TimeoutError:
+
                     break
 
-                uid = str(msg.author.id)
+                uid = str(
+                    msg.author.id
+                )
 
                 if uid in memory_answers:
                     continue
 
-                memory_answers[uid] = normalize(msg.content)
+                memory_answers[uid] = normalize(
+                    msg.content
+                )
 
         except Exception:
             pass
 
-        correct = normalize(sequence_text)
+        correct = normalize(
+            sequence_text
+        )
 
         memory_survivors = []
 
         for uid in survivors:
 
-            answer = memory_answers.get(uid, "")
+            answer = memory_answers.get(
+                uid,
+                ""
+            )
 
             if answer == correct:
 
-                memory_survivors.append(uid)
+                memory_survivors.append(
+                    uid
+                )
 
-                add_score(event, uid, 75)
+                add_score(
+                    event,
+                    uid,
+                    75
+                )
 
             else:
 
-                add_score(event, uid, -20)
+                add_score(
+                    event,
+                    uid,
+                    -20
+                )
 
         if len(memory_survivors) < 2:
 
             ranked = sorted(
                 survivors,
-                key=lambda uid: get_score(event, uid),
+                key=lambda uid:
+                    get_score(event, uid),
                 reverse=True
             )
 
             memory_survivors = ranked[
-                :min(2, len(ranked))
+                :min(
+                    2,
+                    len(ranked)
+                )
             ]
 
-        event["round_1"]["memory_survivors"] = memory_survivors
+        event["round_1"][
+            "memory_survivors"
+        ] = memory_survivors
 
         # -----------------------------------------------
         # PUZZLE
@@ -771,7 +917,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             ("7، 14، 28، 56، ؟", "112"),
         ]
 
-        puzzle, answer = random.choice(puzzles)
+        puzzle, answer = random.choice(
+            puzzles
+        )
 
         await channel.send(
             embed=self.embed(
@@ -802,7 +950,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         while time.time() < end:
 
-            remaining = end - time.time()
+            remaining = (
+                end - time.time()
+            )
 
             try:
 
@@ -813,12 +963,18 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 )
 
             except asyncio.TimeoutError:
+
                 break
 
-            uid = str(msg.author.id)
+            uid = str(
+                msg.author.id
+            )
 
             if uid not in puzzle_answers:
-                puzzle_answers[uid] = msg.content.strip()
+
+                puzzle_answers[uid] = (
+                    msg.content.strip()
+                )
 
         final_r1 = []
 
@@ -826,37 +982,60 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             if puzzle_answers.get(uid) == answer:
 
-                add_score(event, uid, 100)
+                add_score(
+                    event,
+                    uid,
+                    100
+                )
 
                 final_r1.append(uid)
 
             else:
 
-                add_score(event, uid, -35)
+                add_score(
+                    event,
+                    uid,
+                    -35
+                )
 
-        # Prevent impossible wipeout
         if not final_r1:
 
             final_r1 = sorted(
                 memory_survivors,
-                key=lambda uid: get_score(event, uid),
+                key=lambda uid:
+                    get_score(event, uid),
                 reverse=True
-            )[:min(3, len(memory_survivors))]
+            )[
+                :min(
+                    3,
+                    len(memory_survivors)
+                )
+            ]
 
-        event["round_1"]["final_survivors"] = final_r1
+        event["round_1"][
+            "final_survivors"
+        ] = final_r1
 
-        # Give cards
         ranked = sorted(
             final_r1,
-            key=lambda uid: get_score(event, uid),
+            key=lambda uid:
+                get_score(event, uid),
             reverse=True
         )
 
-        cards = ["ذهبية", "فضية", "برونزية"]
+        cards = [
+            "ذهبية",
+            "فضية",
+            "برونزية"
+        ]
 
-        for index, uid in enumerate(ranked[:3]):
+        for index, uid in enumerate(
+            ranked[:3]
+        ):
 
-            event["cards"][uid] = cards[index]
+            event["cards"][
+                uid
+            ] = cards[index]
 
         save_event(event)
 
@@ -877,15 +1056,24 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         await asyncio.sleep(5)
 
-        await self.round_2(guild_id, channel)
+        await self.round_2(
+            guild_id,
+            channel
+        )
 
     # =====================================================
     # ROUND 2
     # =====================================================
 
-    async def round_2(self, guild_id, channel):
+    async def round_2(
+        self,
+        guild_id,
+        channel
+    ):
 
-        event = load_active_event(guild_id)
+        event = load_active_event(
+            guild_id
+        )
 
         if not event:
             return
@@ -898,7 +1086,12 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         players = active_players(event)
 
         if not players:
-            await self.finish_game(guild_id, channel)
+
+            await self.finish_game(
+                guild_id,
+                channel
+            )
+
             return
 
         await channel.send(
@@ -954,7 +1147,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             sequences[uid] = seq
 
-        # Send individual sequences
         for uid in players:
 
             seq = sequences[uid]
@@ -981,7 +1173,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 )
 
             except Exception:
-
                 pass
 
         await channel.send(
@@ -1000,7 +1191,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         await asyncio.sleep(8)
 
-        # Ask sequence through DM
         results = {}
 
         for uid in players:
@@ -1020,7 +1210,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 def check(message):
 
                     return (
-                        message.author.id == int(uid)
+                        message.author.id
+                        == int(uid)
                     )
 
                 msg = await self.bot.wait_for(
@@ -1035,13 +1226,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
                 expected = " ".join(seq)
 
-                if answer == expected:
-
-                    results[uid] = True
-
-                else:
-
-                    results[uid] = False
+                results[uid] = (
+                    answer == expected
+                )
 
             except Exception:
 
@@ -1051,16 +1238,24 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
             if results.get(uid):
 
-                add_score(event, uid, 150)
+                add_score(
+                    event,
+                    uid,
+                    150
+                )
 
             else:
 
-                add_score(event, uid, -50)
+                add_score(
+                    event,
+                    uid,
+                    -50
+                )
 
-        # Eliminate bottom players
         ranked = sorted(
             players,
-            key=lambda uid: get_score(event, uid),
+            key=lambda uid:
+                get_score(event, uid),
             reverse=True
         )
 
@@ -1074,15 +1269,23 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             len(ranked)
         )
 
-        survivors = ranked[:keep_count]
+        survivors = ranked[
+            :keep_count
+        ]
 
-        for uid in ranked[keep_count:]:
+        for uid in ranked[
+            keep_count:
+        ]:
 
             if uid not in event["eliminated"]:
 
-                event["eliminated"].append(uid)
+                event["eliminated"].append(
+                    uid
+                )
 
-        event["round_2"]["survivors"] = survivors
+        event["round_2"][
+            "survivors"
+        ] = survivors
 
         save_event(event)
 
@@ -1105,15 +1308,24 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         await asyncio.sleep(5)
 
-        await self.round_3(guild_id, channel)
+        await self.round_3(
+            guild_id,
+            channel
+        )
 
     # =====================================================
     # ROUND 3
     # =====================================================
 
-    async def round_3(self, guild_id, channel):
+    async def round_3(
+        self,
+        guild_id,
+        channel
+    ):
 
-        event = load_active_event(guild_id)
+        event = load_active_event(
+            guild_id
+        )
 
         if not event:
             return
@@ -1167,11 +1379,18 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
                 choice = "safe"
 
-            current = get_score(event, uid)
+            current = get_score(
+                event,
+                uid
+            )
 
             if choice == "safe":
 
-                add_score(event, uid, 50)
+                add_score(
+                    event,
+                    uid,
+                    50
+                )
 
             elif choice == "risk":
 
@@ -1239,11 +1458,11 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         ranked = sorted(
             players,
-            key=lambda uid: get_score(event, uid),
+            key=lambda uid:
+                get_score(event, uid),
             reverse=True
         )
 
-        # Keep 60%
         keep_count = max(
             3,
             int(len(ranked) * 0.60)
@@ -1254,15 +1473,23 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             len(ranked)
         )
 
-        survivors = ranked[:keep_count]
+        survivors = ranked[
+            :keep_count
+        ]
 
-        for uid in ranked[keep_count:]:
+        for uid in ranked[
+            keep_count:
+        ]:
 
             if uid not in event["eliminated"]:
 
-                event["eliminated"].append(uid)
+                event["eliminated"].append(
+                    uid
+                )
 
-        event["round_3"]["survivors"] = survivors
+        event["round_3"][
+            "survivors"
+        ] = survivors
 
         save_event(event)
 
@@ -1285,15 +1512,24 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         await asyncio.sleep(5)
 
-        await self.round_4(guild_id, channel)
+        await self.round_4(
+            guild_id,
+            channel
+        )
 
     # =====================================================
     # ROUND 4
     # =====================================================
 
-    async def round_4(self, guild_id, channel):
+    async def round_4(
+        self,
+        guild_id,
+        channel
+    ):
 
-        event = load_active_event(guild_id)
+        event = load_active_event(
+            guild_id
+        )
 
         if not event:
             return
@@ -1347,7 +1583,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             traitor_count
         )
 
-        # Tell traitors privately
         for uid in traitors:
 
             try:
@@ -1394,7 +1629,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             ROUND_4_TIME
         )
 
-        # Voting
         await channel.send(
             embed=self.embed(
                 "🗳️ التصويت",
@@ -1421,7 +1655,9 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             ]:
                 return False
 
-            if not message.content.startswith("اتهام"):
+            if not message.content.startswith(
+                "اتهام"
+            ):
                 return False
 
             return True
@@ -1442,9 +1678,12 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 )
 
             except asyncio.TimeoutError:
+
                 break
 
-            voter = str(msg.author.id)
+            voter = str(
+                msg.author.id
+            )
 
             if voter in votes:
                 continue
@@ -1471,7 +1710,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         for target in votes.values():
 
             vote_counts[target] = (
-                vote_counts.get(target, 0) + 1
+                vote_counts.get(target, 0)
+                + 1
             )
 
         if vote_counts:
@@ -1489,7 +1729,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         if accused in traitors:
 
-            # Citizens win
             for uid in players:
 
                 if uid == accused:
@@ -1512,11 +1751,12 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 f"🎯 تم اكتشاف الخائن: <@{accused}>"
             )
 
-            event["round_4"]["citizens_win"] = True
+            event["round_4"][
+                "citizens_win"
+            ] = True
 
         else:
 
-            # Traitors win
             for uid in players:
 
                 if uid in traitors:
@@ -1540,14 +1780,22 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 f"تم اتهام <@{accused}> بالخطأ."
             )
 
-            event["round_4"]["citizens_win"] = False
+            event["round_4"][
+                "citizens_win"
+            ] = False
 
-        event["round_4"]["traitors"] = traitors
-        event["round_4"]["accused"] = accused
+        event["round_4"][
+            "traitors"
+        ] = traitors
+
+        event["round_4"][
+            "accused"
+        ] = accused
 
         ranked = sorted(
             players,
-            key=lambda uid: get_score(event, uid),
+            key=lambda uid:
+                get_score(event, uid),
             reverse=True
         )
 
@@ -1556,15 +1804,23 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             len(ranked)
         )
 
-        survivors = ranked[:keep_count]
+        survivors = ranked[
+            :keep_count
+        ]
 
-        for uid in ranked[keep_count:]:
+        for uid in ranked[
+            keep_count:
+        ]:
 
             if uid not in event["eliminated"]:
 
-                event["eliminated"].append(uid)
+                event["eliminated"].append(
+                    uid
+                )
 
-        event["round_4"]["survivors"] = survivors
+        event["round_4"][
+            "survivors"
+        ] = survivors
 
         save_event(event)
 
@@ -1594,9 +1850,15 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
     # ROUND 5
     # =====================================================
 
-    async def round_5(self, guild_id, channel):
+    async def round_5(
+        self,
+        guild_id,
+        channel
+    ):
 
-        event = load_active_event(guild_id)
+        event = load_active_event(
+            guild_id
+        )
 
         if not event:
             return
@@ -1688,12 +1950,18 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 )
 
             except asyncio.TimeoutError:
+
                 break
 
-            uid = str(msg.author.id)
+            uid = str(
+                msg.author.id
+            )
 
             if uid not in answers:
-                answers[uid] = msg.content.strip()
+
+                answers[uid] = (
+                    msg.content.strip()
+                )
 
         for uid in players:
 
@@ -1810,7 +2078,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         ranked = sorted(
             players,
-            key=lambda uid: get_score(event, uid),
+            key=lambda uid:
+                get_score(event, uid),
             reverse=True
         )
 
@@ -1853,9 +2122,12 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 )
 
             except asyncio.TimeoutError:
+
                 break
 
-            uid = str(msg.author.id)
+            uid = str(
+                msg.author.id
+            )
 
             if uid not in final_answers:
 
@@ -1910,7 +2182,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "finished"
-
         event["round"] = 5
 
         save_event(event)
@@ -1919,7 +2190,8 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
 
         ranked = sorted(
             players,
-            key=lambda uid: get_score(event, uid),
+            key=lambda uid:
+                get_score(event, uid),
             reverse=True
         )
 
