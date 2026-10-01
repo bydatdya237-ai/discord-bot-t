@@ -320,7 +320,8 @@ class TrialGame(commands.Cog):
 يعرض أوامر اللعبة.
 
 **اعادة-تسجل**
-يمسح جميع المسجلين ويعيد التسجيل من الصفر.
+يلغي الفعالية الحالية بالكامل.
+بعدها يمكن بدء فعالية جديدة من الصفر.
 متاح فقط لرتبة التحكم.
 
 **خلصنا**
@@ -387,54 +388,69 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         # -----------------------------------------------
-        # LOAD EVENT
+        # LOCK
         # -----------------------------------------------
 
-        event = load_active_event(
+        lock = self.get_start_lock(
             ctx.guild.id
         )
 
-        if not event:
+        async with lock:
 
-            await ctx.send(
-                "ℹ️ لا توجد فعالية حالية.",
-                delete_after=5
+            # -------------------------------------------
+            # CHECK EVENT
+            # -------------------------------------------
+
+            active = load_active_event(
+                ctx.guild.id
             )
 
-            return
-
-        # -----------------------------------------------
-        # ONLY DURING REGISTRATION
-        # -----------------------------------------------
-
-        if event.get("status") != "registration":
-
-            await ctx.send(
-                "❌ لا يمكن إعادة التسجيل بعد إغلاق التسجيل وبدء الجولة الأولى.",
-                delete_after=6
+            existing_event = events_collection.find_one(
+                {
+                    "_id":
+                        f"trial_{ctx.guild.id}"
+                }
             )
 
-            return
+            if not active and not existing_event:
 
-        # -----------------------------------------------
-        # RESET REGISTRATION
-        # -----------------------------------------------
+                await ctx.send(
+                    "ℹ️ لا توجد فعالية حالية.",
+                    delete_after=5
+                )
 
-        event["players"] = []
+                return
 
-        event["scores"] = {}
+            # -------------------------------------------
+            # DELETE CURRENT EVENT
+            # -------------------------------------------
 
-        event["eliminated"] = []
+            delete_event(
+                ctx.guild.id
+            )
 
-        event["cards"] = {}
+            # -------------------------------------------
+            # CANCEL OLD TASK
+            # -------------------------------------------
 
-        save_event(event)
+            task = self.running_tasks.pop(
+                ctx.guild.id,
+                None
+            )
 
-        await ctx.send(
-            "🔄 **تمت إعادة التسجيل.**\n\n"
-            "تم مسح جميع المسجلين ويمكن الآن "
-            "لأصحاب رتبة التسجيل الدخول من جديد."
-        )
+            if task and not task.done():
+
+                task.cancel()
+
+            # -------------------------------------------
+            # CONFIRM
+            # -------------------------------------------
+
+            await ctx.send(
+                "🔄 **تمت إعادة التسجيل بالكامل.**\n\n"
+                "تم إلغاء الفعالية الحالية ومسح جميع المسجلين والبيانات.\n\n"
+                "يمكن الآن استخدام `بلش-1` لبدء فعالية جديدة من الصفر."
+            )
 
     # =====================================================
     # COMMAND: خلصنا
@@ -459,54 +475,64 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         # -----------------------------------------------
-        # CHECK EVENT
+        # LOCK
         # -----------------------------------------------
 
-        active = load_active_event(
+        lock = self.get_start_lock(
             ctx.guild.id
         )
 
-        existing_event = events_collection.find_one(
-            {
-                "_id":
-                    f"trial_{ctx.guild.id}"
-            }
-        )
+        async with lock:
 
-        if not active and not existing_event:
+            # -------------------------------------------
+            # CHECK EVENT
+            # -------------------------------------------
 
-            await ctx.send(
-                "ℹ️ لا توجد فعالية حالية لإنهائها.",
-                delete_after=5
+            active = load_active_event(
+                ctx.guild.id
             )
 
-            return
+            existing_event = events_collection.find_one(
+                {
+                    "_id":
+                        f"trial_{ctx.guild.id}"
+                }
+            )
 
-        # -----------------------------------------------
-        # DELETE EVENT
-        # -----------------------------------------------
+            if not active and not existing_event:
 
-        delete_event(
-            ctx.guild.id
-        )
+                await ctx.send(
+                    "ℹ️ لا توجد فعالية حالية لإنهائها.",
+                    delete_after=5
+                )
 
-        # -----------------------------------------------
-        # CANCEL TASK
-        # -----------------------------------------------
+                return
 
-        task = self.running_tasks.pop(
-            ctx.guild.id,
-            None
-        )
+            # -------------------------------------------
+            # DELETE EVENT
+            # -------------------------------------------
 
-        if task and not task.done():
+            delete_event(
+                ctx.guild.id
+            )
 
-            task.cancel()
+            # -------------------------------------------
+            # CANCEL TASK
+            # -------------------------------------------
 
-        await ctx.send(
-            "🧹 **خلصنا — تم إنهاء THE TRIAL ومسح بياناتها بالكامل.**\n\n"
-            "يمكن الآن بدء فعالية جديدة باستخدام `بلش-1`."
-        )
+            task = self.running_tasks.pop(
+                ctx.guild.id,
+                None
+            )
+
+            if task and not task.done():
+
+                task.cancel()
+
+            await ctx.send(
+                "🧹 **خلصنا — تم إنهاء THE TRIAL ومسح بياناتها بالكامل.**\n\n"
+                "يمكن الآن بدء فعالية جديدة باستخدام `بلش-1`."
+            )
 
     # =====================================================
     # COMMAND: بلش-1
@@ -553,6 +579,17 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             if active:
 
                 return
+
+            # -------------------------------------------
+            # REMOVE OLD FINISHED/CANCELLED EVENT
+            # -------------------------------------------
+
+            events_collection.delete_one(
+                {
+                    "_id":
+                        f"trial_{ctx.guild.id}"
+                }
+            )
 
             # -------------------------------------------
             # CREATE EVENT
@@ -713,7 +750,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_1"
-
         event["round"] = 1
 
         save_event(event)
@@ -742,10 +778,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         )
 
         await asyncio.sleep(5)
-
-        # -----------------------------------------------
-        # DANGER CHOICE
-        # -----------------------------------------------
 
         danger_count = max(
             2,
@@ -784,20 +816,15 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             view.message = msg
 
             try:
-
                 await view.wait()
-
             except Exception:
                 pass
 
             if view.choice is not None:
-
                 selected[uid] = view.choice
 
             try:
-
                 await msg.delete()
-
             except Exception:
                 pass
 
@@ -867,10 +894,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         )
 
         await asyncio.sleep(4)
-
-        # -----------------------------------------------
-        # MEMORY
-        # -----------------------------------------------
 
         symbols = [
             "🍎",
@@ -1053,10 +1076,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         event["round_1"][
             "memory_survivors"
         ] = memory_survivors
-
-        # -----------------------------------------------
-        # PUZZLE
-        # -----------------------------------------------
 
         await channel.send(
             embed=self.embed(
@@ -1247,7 +1266,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_2"
-
         event["round"] = 2
 
         save_event(event)
@@ -1504,7 +1522,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_3"
-
         event["round"] = 3
 
         save_event(event)
@@ -1711,7 +1728,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_4"
-
         event["round"] = 4
 
         save_event(event)
@@ -2049,7 +2065,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "round_5"
-
         event["round"] = 5
 
         save_event(event)
@@ -2089,10 +2104,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
         )
 
         await asyncio.sleep(5)
-
-        # -----------------------------------------------
-        # FINAL PHASE 1
-        # -----------------------------------------------
 
         await channel.send(
             embed=self.embed(
@@ -2170,10 +2181,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                 )
 
         save_event(event)
-
-        # -----------------------------------------------
-        # FINAL PHASE 2
-        # -----------------------------------------------
 
         await channel.send(
             embed=self.embed(
@@ -2259,10 +2266,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
                     )
 
         save_event(event)
-
-        # -----------------------------------------------
-        # FINAL PHASE 3
-        # -----------------------------------------------
 
         await channel.send(
             embed=self.embed(
@@ -2364,7 +2367,6 @@ Final Boss يجمع السرعة والتفكير والمخاطرة.
             return
 
         event["status"] = "finished"
-
         event["round"] = 5
 
         save_event(event)
