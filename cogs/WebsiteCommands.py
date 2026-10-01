@@ -170,6 +170,11 @@ def find_website_alias(
     -ذ
     .ذ
     /ذ
+
+    ويدعم حقول:
+    alias
+    shortcut
+    abbreviation
     """
 
     if guild_id is None or not typed_alias:
@@ -192,9 +197,23 @@ def find_website_alias(
             "guild_id": {
                 "$in": guild_values
             },
-            "alias": {
-                "$in": alias_values
-            }
+            "$or": [
+                {
+                    "alias": {
+                        "$in": alias_values
+                    }
+                },
+                {
+                    "shortcut": {
+                        "$in": alias_values
+                    }
+                },
+                {
+                    "abbreviation": {
+                        "$in": alias_values
+                    }
+                }
+            ]
         })
 
         if data:
@@ -512,6 +531,196 @@ _ALIAS_CONTEXT_ATTRIBUTE = (
 
 
 # =========================================================
+# بناء طريقة استخدام الاختصار
+# =========================================================
+
+def build_alias_usage(
+    ctx,
+    error
+):
+    """
+    بناء رسالة استخدام الأمر باستخدام الاختصار
+    بدل اسم الأمر الأصلي.
+
+    أمثلة:
+
+    طوط @الشخص
+
+    اس @الشخص
+
+    اس @الشخص @مجموعة
+
+    """
+
+    alias_context = getattr(
+        ctx,
+        _ALIAS_CONTEXT_ATTRIBUTE,
+        None
+    )
+
+    if not alias_context:
+
+        alias_context = getattr(
+            ctx.message,
+            _ALIAS_CONTEXT_ATTRIBUTE,
+            None
+        )
+
+    if alias_context:
+
+        alias = normalize_alias(
+            alias_context.get("alias")
+        )
+
+    else:
+
+        alias = normalize_command_name(
+            ctx.command.qualified_name
+            if ctx.command
+            else ""
+        )
+
+    if not alias:
+        alias = "الأمر"
+
+    command = ctx.command
+
+    if command is None:
+
+        return alias
+
+    # =====================================================
+    # إذا كان الأمر يحتوي على usage مخصص
+    # =====================================================
+
+    custom_usage = getattr(
+        command,
+        "usage",
+        None
+    )
+
+    if custom_usage:
+
+        custom_usage = str(
+            custom_usage
+        ).strip()
+
+        if custom_usage:
+
+            usage_parts = custom_usage.split(
+                maxsplit=1
+            )
+
+            first_part = usage_parts[0]
+
+            if normalize_command_name(
+                first_part
+            ) == normalize_command_name(
+                command.name
+            ):
+
+                if len(usage_parts) > 1:
+
+                    return (
+                        f"{alias} "
+                        f"{usage_parts[1]}"
+                    ).strip()
+
+                return alias
+
+            return (
+                f"{alias} "
+                f"{custom_usage}"
+            ).strip()
+
+    # =====================================================
+    # محاولة معرفة المتغير الناقص
+    # =====================================================
+
+    parameter = getattr(
+        error,
+        "param",
+        None
+    )
+
+    if parameter is not None:
+
+        annotation = getattr(
+            parameter,
+            "annotation",
+            None
+        )
+
+        annotation_text = str(
+            annotation
+        ).lower()
+
+        # -------------------------------------------------
+        # شخص
+        # -------------------------------------------------
+
+        if (
+            "discord.member" in annotation_text
+            or "discord.user" in annotation_text
+            or annotation is discord.Member
+            or annotation is discord.User
+        ):
+
+            return (
+                f"{alias} @الشخص"
+            )
+
+        # -------------------------------------------------
+        # رتبة / مجموعة
+        # -------------------------------------------------
+
+        if (
+            "discord.role" in annotation_text
+            or annotation is discord.Role
+        ):
+
+            return (
+                f"{alias} @المجموعة"
+            )
+
+        # -------------------------------------------------
+        # إذا كان نوع المتغير غير معروف
+        # -------------------------------------------------
+
+        parameter_name = getattr(
+            parameter,
+            "name",
+            "المتغير"
+        )
+
+        return (
+            f"{alias} "
+            f"<{parameter_name}>"
+        ).strip()
+
+    # =====================================================
+    # استخدام Discord.py signature كحل أخير
+    # =====================================================
+
+    signature = str(
+        getattr(
+            command,
+            "signature",
+            ""
+        ) or ""
+    ).strip()
+
+    if signature:
+
+        return (
+            f"{alias} "
+            f"{signature}"
+        ).strip()
+
+    return alias
+
+
+# =========================================================
 # تشغيل الاختصار فعليًا
 # =========================================================
 
@@ -538,6 +747,14 @@ async def process_website_alias(
     لاتتكلم @شخص
 
     ثم يتم تشغيل الأمر الأصلي.
+
+    ملاحظة مهمة:
+
+    أثناء قراءة الأمر بواسطة Discord.py يتم استخدام
+    الأمر الحقيقي.
+
+    لكن عند تنفيذ callback يتم إعادة محتوى الرسالة
+    الأصلي مؤقتًا، حتى تظهر رسائل الاستخدام بالاختصار.
     """
 
     # =====================================================
@@ -674,17 +891,7 @@ async def process_website_alias(
     )
 
     # =====================================================
-    # حفظ معلومات الاختصار
-    #
-    # نحتاجها حتى نعرف أن الأمر تم تشغيله
-    # من خلال الاختصار، وبالتالي لو حصل
-    # MissingRequiredArgument نعرض:
-    #
-    # طوط @الشخص
-    #
-    # بدل:
-    #
-    # لاتتكلم @الشخص
+    # حفظ معلومات الاختصار الحالي
     # =====================================================
 
     alias_context = {
@@ -748,7 +955,7 @@ async def process_website_alias(
             )
 
             # ------------------------------------------------
-            # حفظ معلومات الاختصار داخل Context أيضًا
+            # حفظ معلومات الاختصار داخل Context
             # ------------------------------------------------
 
             try:
@@ -761,6 +968,29 @@ async def process_website_alias(
 
             except Exception:
                 pass
+
+            # ------------------------------------------------
+            # مهم جدًا:
+            #
+            # Discord.py قام بالفعل بقراءة الأمر الحقيقي
+            # والـ arguments من new_content.
+            #
+            # الآن نعيد الرسالة الأصلية مؤقتًا حتى:
+            #
+            # ctx.message.content
+            #
+            # يكون:
+            #
+            # اس @الشخص
+            #
+            # بدل:
+            #
+            # الاستدعاء @الشخص
+            #
+            # وهذا يجعل رسائل الاستخدام تستخدم الاختصار.
+            # ------------------------------------------------
+
+            message.content = old_content
 
             await bot.invoke(
                 ctx
@@ -831,8 +1061,7 @@ async def process_website_alias(
         # =================================================
         # لا نحذف ALIAS_CONTEXT هنا
         #
-        # لأن on_command_error قد يحتاجه
-        # بعد تنفيذ الأمر.
+        # لأن on_command_error قد يحتاجه.
         # =================================================
 
 
@@ -857,6 +1086,129 @@ async def process_website_alias_message(
         message,
         bot
     )
+
+
+# =========================================================
+# اكتشاف نوع المتغير للـ Usage
+# =========================================================
+
+def get_usage_parameter_label(
+    parameter
+):
+    """
+    تحويل نوع المتغير إلى اسم مفهوم للمستخدم.
+
+    Member / User -> @الشخص
+    Role          -> @المجموعة
+    """
+
+    if parameter is None:
+        return None
+
+    annotation = getattr(
+        parameter,
+        "annotation",
+        None
+    )
+
+    annotation_text = str(
+        annotation
+    ).lower()
+
+    # =====================================================
+    # شخص
+    # =====================================================
+
+    if (
+        annotation is discord.Member
+        or annotation is discord.User
+        or "discord.member" in annotation_text
+        or "discord.user" in annotation_text
+    ):
+
+        return "@الشخص"
+
+    # =====================================================
+    # مجموعة / رتبة
+    # =====================================================
+
+    if (
+        annotation is discord.Role
+        or "discord.role" in annotation_text
+    ):
+
+        return "@المجموعة"
+
+    return None
+
+
+# =========================================================
+# إرسال خطأ الاستخدام للاختصار
+# =========================================================
+
+async def send_alias_usage_error(
+    ctx,
+    error
+):
+    """
+    إرسال رسالة استخدام إذا كان الأمر تم تشغيله
+    بواسطة اختصار وكان هناك متغير مطلوب ناقص.
+
+    مثال:
+
+    اس
+
+    تصبح:
+
+    ❌ خطأ في طريقة الاستخدام.
+    الاستخدام الصحيح:
+    اس @الشخص
+    """
+
+    alias_context = getattr(
+        ctx,
+        _ALIAS_CONTEXT_ATTRIBUTE,
+        None
+    )
+
+    if not alias_context:
+
+        alias_context = getattr(
+            ctx.message,
+            _ALIAS_CONTEXT_ATTRIBUTE,
+            None
+        )
+
+    if not alias_context:
+        return False
+
+    usage = build_alias_usage(
+        ctx,
+        error
+    )
+
+    try:
+
+        await ctx.send(
+            "❌ خطأ في طريقة الاستخدام.\n"
+            f"الاستخدام الصحيح:\n"
+            f"`{usage}`"
+        )
+
+        return True
+
+    except Exception as send_error:
+
+        print(
+            "❌ [ALIAS] فشل إرسال رسالة الاستخدام"
+        )
+
+        print(
+            f"❌ {type(send_error).__name__}: "
+            f"{send_error}"
+        )
+
+        return False
 
 
 # =========================================================
@@ -1736,11 +2088,6 @@ class WebsiteCommands(
 
         # =================================================
         # تسجيل دالة الاختصارات داخل البوت
-        #
-        # الـ Main يستطيع استخدامها:
-        #
-        # bot.website_alias_processor
-        #
         # =================================================
 
         self.bot.website_alias_processor = (
@@ -1802,6 +2149,38 @@ class WebsiteCommands(
             )
 
             traceback.print_exc()
+
+    # =====================================================
+    # خطأ المتغير المطلوب للاختصارات
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_command_error(
+        self,
+        ctx,
+        error
+    ):
+
+        # =================================================
+        # نحتاج فقط أخطاء الاختصارات
+        # =================================================
+
+        if not isinstance(
+            error,
+            commands.MissingRequiredArgument
+        ):
+            return
+
+        handled = await send_alias_usage_error(
+            ctx,
+            error
+        )
+
+        if handled:
+            print(
+                "⚠️ [ALIAS] تم إرسال طريقة استخدام "
+                "الاختصار للمستخدم"
+            )
 
     # =====================================================
     # التحقق من صلاحيات الموقع
