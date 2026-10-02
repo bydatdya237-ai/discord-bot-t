@@ -6,6 +6,7 @@ from datetime import timedelta
 import discord
 from discord.ext import commands
 from discord import ui
+
 from pymongo import MongoClient
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -34,23 +35,10 @@ moderation_channel_locks_collection = db["moderation_channel_locks"]
 # MongoDB Async لنظام الموقع
 # =========================================================
 
-if MONGO_URI:
+website_mongo_client = AsyncIOMotorClient(MONGO_URI)
+website_db = website_mongo_client.discord_bot_db
 
-    website_mongo_client = AsyncIOMotorClient(
-        MONGO_URI
-    )
-
-    website_db = website_mongo_client.discord_bot_db
-
-    website_command_settings = (
-        website_db.website_command_settings
-    )
-
-else:
-
-    website_mongo_client = None
-    website_db = None
-    website_command_settings = None
+website_command_settings = website_db.website_command_settings
 
 
 # =========================================================
@@ -93,17 +81,10 @@ COMMAND_SHOW = "اظهار"
 # =========================================================
 
 def guild_id_variants(guild_id):
-
-    variants = [
-        str(guild_id)
-    ]
+    variants = [str(guild_id)]
 
     try:
-
-        variants.append(
-            int(guild_id)
-        )
-
+        variants.append(int(guild_id))
     except Exception:
         pass
 
@@ -114,18 +95,13 @@ def guild_id_variants(guild_id):
 # جلب إعدادات أمر من الموقع
 # =========================================================
 
-async def get_command_setting(
-    guild_id,
-    command_name
-):
-
+async def get_command_setting(guild_id, command_name):
     if website_command_settings is None:
         return None
 
-    guild_ids = guild_id_variants(
-        guild_id
-    )
+    guild_ids = guild_id_variants(guild_id)
 
+    # البحث باستخدام command_name
     setting = await website_command_settings.find_one(
         {
             "guild_id": {
@@ -138,6 +114,7 @@ async def get_command_setting(
     if setting:
         return setting
 
+    # دعم النظام القديم الذي يستخدم name
     setting = await website_command_settings.find_one(
         {
             "guild_id": {
@@ -147,11 +124,41 @@ async def get_command_setting(
         }
     )
 
+    if setting:
+        return setting
+
+    # دعم النظام الذي يستخدم command
+    setting = await website_command_settings.find_one(
+        {
+            "guild_id": {
+                "$in": guild_ids
+            },
+            "command": str(command_name)
+        }
+    )
+
     return setting
 
 
 # =========================================================
 # نظام صلاحيات الموقع
+#
+# القاعدة:
+#
+# 1- لا يوجد إعداد للأمر
+#    = ممنوع
+#
+# 2- الأمر غير مفعّل
+#    = ممنوع
+#
+# 3- لا توجد رتبة محددة
+#    = ممنوع
+#
+# 4- توجد رتبة ولا توجد رومات
+#    = مسموح بكل الرومات
+#
+# 5- توجد رتبة وتوجد رومات
+#    = مسموح فقط في الرومات المحددة
 # =========================================================
 
 async def website_permission_allowed(
@@ -159,7 +166,6 @@ async def website_permission_allowed(
     command_name: str,
     channel_id: int
 ):
-
     if member is None:
         return False
 
@@ -171,20 +177,27 @@ async def website_permission_allowed(
         command_name
     )
 
+    # -----------------------------------------------------
+    # لا يوجد إعداد للأمر في الموقع
+    # -----------------------------------------------------
+
     if not setting:
         return False
 
-    if not setting.get(
-        "enabled",
-        False
-    ):
+    # -----------------------------------------------------
+    # الأمر غير مفعّل
+    # -----------------------------------------------------
+
+    if not setting.get("enabled", False):
         return False
 
-    role_ids = setting.get(
-        "role_ids",
-        []
-    )
+    # -----------------------------------------------------
+    # جلب الرتب من الموقع
+    # -----------------------------------------------------
 
+    role_ids = setting.get("role_ids", [])
+
+    # لا توجد رتبة = الأمر ممنوع
     if not role_ids:
         return False
 
@@ -198,18 +211,31 @@ async def website_permission_allowed(
         for role in member.roles
     }
 
-    if not allowed_role_ids.intersection(
-        user_role_ids
-    ):
+    # -----------------------------------------------------
+    # المستخدم لازم يمتلك إحدى الرتب المحددة
+    # -----------------------------------------------------
+
+    if not allowed_role_ids.intersection(user_role_ids):
         return False
 
-    channel_ids = setting.get(
-        "channel_ids",
-        []
-    )
+    # -----------------------------------------------------
+    # جلب الرومات من الموقع
+    # -----------------------------------------------------
+
+    channel_ids = setting.get("channel_ids", [])
+
+    # -----------------------------------------------------
+    # إذا لم يتم تحديد أي روم:
+    # الأمر يعمل في جميع الرومات
+    # -----------------------------------------------------
 
     if not channel_ids:
-        return False
+        return True
+
+    # -----------------------------------------------------
+    # إذا تم تحديد رومات:
+    # يجب أن يكون الأمر داخل أحدها
+    # -----------------------------------------------------
 
     allowed_channel_ids = {
         str(channel_id)
@@ -230,44 +256,28 @@ async def get_website_role_ids(
     guild_id,
     command_name
 ):
-
     setting = await get_command_setting(
         guild_id,
         command_name
     )
 
     if not setting:
-        return []
+        return set()
 
-    if not setting.get(
-        "enabled",
-        False
-    ):
-        return []
+    if not setting.get("enabled", False):
+        return set()
 
-    role_ids = setting.get(
-        "role_ids",
-        []
-    )
+    role_ids = setting.get("role_ids", [])
 
     if not role_ids:
-        return []
+        return set()
 
     result = set()
 
     for role_id in role_ids:
-
         try:
-
-            result.add(
-                int(role_id)
-            )
-
-        except (
-            TypeError,
-            ValueError
-        ):
-
+            result.add(int(role_id))
+        except (TypeError, ValueError):
             pass
 
     return result
@@ -275,33 +285,22 @@ async def get_website_role_ids(
 
 # =========================================================
 # قفل الروم
-#
-# يحفظ الـ Override القديم حتى نقدر نرجعه عند فتح الروم
 # =========================================================
 
 async def lock_channel(
     channel: discord.abc.GuildChannel,
     allowed_role_ids
 ):
-
     guild = channel.guild
 
-    existing_lock = (
-        moderation_channel_locks_collection.find_one(
-            {
-                "guild_id": guild.id,
-                "channel_id": channel.id
-            }
-        )
+    existing_lock = moderation_channel_locks_collection.find_one(
+        {
+            "guild_id": guild.id,
+            "channel_id": channel.id
+        }
     )
 
-    # =====================================================
-    # إذا الروم مقفول مسبقًا
-    # نستخدم الحالة الموجودة
-    # =====================================================
-
     if existing_lock:
-
         everyone_previous = existing_lock.get(
             "everyone_send_messages"
         )
@@ -310,50 +309,31 @@ async def lock_channel(
             "role_send_messages",
             {}
         )
-
     else:
-
         everyone_overwrite = channel.overwrites_for(
             guild.default_role
         )
 
-        everyone_previous = (
-            everyone_overwrite.send_messages
-        )
-
+        everyone_previous = everyone_overwrite.send_messages
         role_previous = {}
 
-    # =====================================================
-    # حفظ الحالة الأصلية للرتب الجديدة
-    # =====================================================
-
+    # حفظ الحالة الأصلية للرتب
     for role_id in allowed_role_ids:
-
-        role = guild.get_role(
-            role_id
-        )
+        role = guild.get_role(role_id)
 
         if role is None:
             continue
 
-        role_key = str(
-            role.id
-        )
+        role_key = str(role.id)
 
         if role_key not in role_previous:
-
-            overwrite = channel.overwrites_for(
-                role
-            )
+            overwrite = channel.overwrites_for(role)
 
             role_previous[role_key] = (
                 overwrite.send_messages
             )
 
-    # =====================================================
     # قفل @everyone
-    # =====================================================
-
     everyone_overwrite = channel.overwrites_for(
         guild.default_role
     )
@@ -366,24 +346,15 @@ async def lock_channel(
         reason="قفل الروم"
     )
 
-    # =====================================================
-    # السماح للرتب المحددة من الموقع
-    # =====================================================
-
+    # السماح للرتب المحددة
     for role_id in allowed_role_ids:
-
-        role = guild.get_role(
-            role_id
-        )
+        role = guild.get_role(role_id)
 
         if role is None:
             continue
 
         try:
-
-            overwrite = channel.overwrites_for(
-                role
-            )
+            overwrite = channel.overwrites_for(role)
 
             overwrite.send_messages = True
 
@@ -397,13 +368,9 @@ async def lock_channel(
             discord.Forbidden,
             discord.HTTPException
         ):
-
             pass
 
-    # =====================================================
     # حفظ حالة القفل
-    # =====================================================
-
     moderation_channel_locks_collection.update_one(
         {
             "guild_id": guild.id,
@@ -415,9 +382,7 @@ async def lock_channel(
                 "channel_id": channel.id,
                 "everyone_send_messages": everyone_previous,
                 "role_send_messages": role_previous,
-                "allowed_role_ids": list(
-                    allowed_role_ids
-                )
+                "allowed_role_ids": list(allowed_role_ids)
             }
         },
         upsert=True
@@ -431,24 +396,16 @@ async def lock_channel(
 async def unlock_channel(
     channel: discord.abc.GuildChannel
 ):
-
     guild = channel.guild
 
-    lock_data = (
-        moderation_channel_locks_collection.find_one(
-            {
-                "guild_id": guild.id,
-                "channel_id": channel.id
-            }
-        )
+    lock_data = moderation_channel_locks_collection.find_one(
+        {
+            "guild_id": guild.id,
+            "channel_id": channel.id
+        }
     )
 
-    # =====================================================
-    # استرجاع Override @everyone الأصلي
-    # =====================================================
-
     if lock_data:
-
         everyone_previous = lock_data.get(
             "everyone_send_messages"
         )
@@ -457,9 +414,7 @@ async def unlock_channel(
             guild.default_role
         )
 
-        everyone_overwrite.send_messages = (
-            everyone_previous
-        )
+        everyone_overwrite.send_messages = everyone_previous
 
         await channel.set_permissions(
             guild.default_role,
@@ -467,42 +422,29 @@ async def unlock_channel(
             reason="فتح الروم"
         )
 
-        # =================================================
-        # استرجاع Overrides الرتب التي عدلها القفل
-        # =================================================
-
         role_previous = lock_data.get(
             "role_send_messages",
             {}
         )
 
         for role_id, previous_value in role_previous.items():
-
             try:
-
                 role = guild.get_role(
                     int(role_id)
                 )
-
             except (
                 TypeError,
                 ValueError
             ):
-
                 continue
 
             if role is None:
                 continue
 
             try:
+                overwrite = channel.overwrites_for(role)
 
-                overwrite = channel.overwrites_for(
-                    role
-                )
-
-                overwrite.send_messages = (
-                    previous_value
-                )
+                overwrite.send_messages = previous_value
 
                 await channel.set_permissions(
                     role,
@@ -514,7 +456,6 @@ async def unlock_channel(
                 discord.Forbidden,
                 discord.HTTPException
             ):
-
                 pass
 
         moderation_channel_locks_collection.delete_one(
@@ -526,11 +467,7 @@ async def unlock_channel(
 
         return
 
-    # =====================================================
     # لو ما فيه حالة محفوظة
-    # نفتح @everyone
-    # =====================================================
-
     overwrite = channel.overwrites_for(
         guild.default_role
     )
@@ -552,7 +489,6 @@ async def hide_channel(
     channel: discord.abc.GuildChannel,
     allowed_role_ids
 ):
-
     guild = channel.guild
 
     await channel.set_permissions(
@@ -562,16 +498,12 @@ async def hide_channel(
     )
 
     for role_id in allowed_role_ids:
-
-        role = guild.get_role(
-            role_id
-        )
+        role = guild.get_role(role_id)
 
         if role is None:
             continue
 
         try:
-
             await channel.set_permissions(
                 role,
                 view_channel=True,
@@ -582,7 +514,6 @@ async def hide_channel(
             discord.Forbidden,
             discord.HTTPException
         ):
-
             pass
 
 
@@ -593,7 +524,6 @@ async def hide_channel(
 async def show_channel(
     channel: discord.abc.GuildChannel
 ):
-
     guild = channel.guild
 
     await channel.set_permissions(
@@ -608,7 +538,6 @@ async def show_channel(
 # =========================================================
 
 def get_reasons(guild_id: int):
-
     data = moderation_reasons_collection.find_one(
         {
             "guild_id": guild_id
@@ -616,7 +545,6 @@ def get_reasons(guild_id: int):
     )
 
     if not data:
-
         reasons = DEFAULT_REASONS.copy()
 
         moderation_reasons_collection.insert_one(
@@ -643,15 +571,12 @@ def add_reason(
     guild_id: int,
     reason: str
 ):
-
     reason = reason.strip()
 
     if not reason:
         return False
 
-    reasons = get_reasons(
-        guild_id
-    )
+    reasons = get_reasons(guild_id)
 
     normalized_existing = {
         str(item).strip().lower()
@@ -684,7 +609,6 @@ def add_reason(
 # =========================================================
 
 def parse_duration(value: str):
-
     if not value:
         return None
 
@@ -732,7 +656,6 @@ def parse_duration(value: str):
     total_seconds = 0.0
 
     for match in matches:
-
         amount = float(
             match.group(1)
         )
@@ -747,7 +670,6 @@ def parse_duration(value: str):
             "week",
             "weeks"
         }:
-
             total_seconds += (
                 amount * 7 * 24 * 60 * 60
             )
@@ -757,7 +679,6 @@ def parse_duration(value: str):
             "day",
             "days"
         }:
-
             total_seconds += (
                 amount * 24 * 60 * 60
             )
@@ -769,7 +690,6 @@ def parse_duration(value: str):
             "hour",
             "hours"
         }:
-
             total_seconds += (
                 amount * 60 * 60
             )
@@ -781,7 +701,6 @@ def parse_duration(value: str):
             "minute",
             "minutes"
         }:
-
             total_seconds += (
                 amount * 60
             )
@@ -793,11 +712,9 @@ def parse_duration(value: str):
             "second",
             "seconds"
         }:
-
             total_seconds += amount
 
         else:
-
             return None
 
     max_seconds = 28 * 24 * 60 * 60
@@ -820,21 +737,17 @@ def parse_duration(value: str):
 def format_duration(
     duration: timedelta
 ):
-
     total_seconds = int(
         duration.total_seconds()
     )
 
     days = total_seconds // 86400
-
     total_seconds %= 86400
 
     hours = total_seconds // 3600
-
     total_seconds %= 3600
 
     minutes = total_seconds // 60
-
     seconds = total_seconds % 60
 
     parts = []
@@ -874,25 +787,20 @@ def can_moderate(
     moderator: discord.Member,
     target: discord.Member
 ):
-
     if target.id == moderator.id:
-
         return (
             False,
             "❌ ما تقدر تستخدم الأمر على نفسك."
         )
 
     if target.id == moderator.guild.owner_id:
-
         return (
             False,
             "❌ ما تقدر تستخدم الأمر على صاحب السيرفر."
         )
 
     if moderator.id != moderator.guild.owner_id:
-
         if target.top_role >= moderator.top_role:
-
             return (
                 False,
                 "❌ ما تقدر تستخدم الأمر على شخص رتبته مساوية أو أعلى من رتبتك."
@@ -901,14 +809,12 @@ def can_moderate(
     bot_member = moderator.guild.me
 
     if bot_member is None:
-
         return (
             False,
             "❌ ما قدرت أحدد رتبة البوت."
         )
 
     if target.top_role >= bot_member.top_role:
-
         return (
             False,
             "❌ رتبة الشخص أعلى من رتبة البوت أو مساوية لها."
@@ -927,7 +833,6 @@ def save_warning(
     moderator_id: int,
     reason: str
 ):
-
     result = moderation_warnings_collection.insert_one(
         {
             "guild_id": guild_id,
@@ -945,7 +850,6 @@ def get_warnings(
     guild_id: int,
     user_id: int
 ):
-
     return list(
         moderation_warnings_collection.find(
             {
@@ -971,7 +875,6 @@ def save_mute(
     reason: str,
     duration: timedelta
 ):
-
     now = discord.utils.utcnow()
 
     expires_at = now + duration
@@ -997,7 +900,6 @@ def get_mutes(
     guild_id: int,
     user_id: int
 ):
-
     return list(
         moderation_mutes_collection.find(
             {
@@ -1024,7 +926,6 @@ class ModerationPagesView(ui.View):
         records,
         command_name
     ):
-
         super().__init__(
             timeout=300
         )
@@ -1078,12 +979,7 @@ class ModerationPagesView(ui.View):
 
         self.update_buttons()
 
-    # =====================================================
-    # تحديث الأزرار
-    # =====================================================
-
     def update_buttons(self):
-
         self.previous_button.disabled = (
             self.current_page <= 0
         )
@@ -1096,12 +992,7 @@ class ModerationPagesView(ui.View):
             len(self.records) == 0
         )
 
-    # =====================================================
-    # بناء Embed
-    # =====================================================
-
     def build_embed(self):
-
         record = self.records[
             self.current_page
         ]
@@ -1133,22 +1024,14 @@ class ModerationPagesView(ui.View):
         )
 
         if created_at:
-
             created_text = discord.utils.format_dt(
                 created_at,
                 style="R"
             )
-
         else:
-
             created_text = "غير معروف"
 
-        # =================================================
-        # تحذير
-        # =================================================
-
         if record_type == "warning":
-
             embed = discord.Embed(
                 title="⚠️ سجل التحذيرات",
                 description=(
@@ -1160,21 +1043,14 @@ class ModerationPagesView(ui.View):
                 color=discord.Color.orange()
             )
 
-        # =================================================
-        # إسكات
-        # =================================================
-
         else:
-
             duration_seconds = record.get(
                 "duration_seconds",
                 0
             )
 
             duration = timedelta(
-                seconds=int(
-                    duration_seconds
-                )
+                seconds=int(duration_seconds)
             )
 
             expires_at = record.get(
@@ -1182,14 +1058,11 @@ class ModerationPagesView(ui.View):
             )
 
             if expires_at:
-
                 expires_text = discord.utils.format_dt(
                     expires_at,
                     style="R"
                 )
-
             else:
-
                 expires_text = "غير معروف"
 
             embed = discord.Embed(
@@ -1214,15 +1087,10 @@ class ModerationPagesView(ui.View):
 
         return embed
 
-    # =====================================================
-    # التحقق من الصلاحية
-    # =====================================================
-
     async def interaction_check(
         self,
         interaction: discord.Interaction
     ):
-
         allowed = await website_permission_allowed(
             interaction.user,
             self.command_name,
@@ -1230,7 +1098,6 @@ class ModerationPagesView(ui.View):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام هذا الأمر.",
                 ephemeral=True
@@ -1240,17 +1107,11 @@ class ModerationPagesView(ui.View):
 
         return True
 
-    # =====================================================
-    # السابق
-    # =====================================================
-
     async def previous_page(
         self,
         interaction: discord.Interaction
     ):
-
         if self.current_page > 0:
-
             self.current_page -= 1
 
         self.update_buttons()
@@ -1260,17 +1121,11 @@ class ModerationPagesView(ui.View):
             view=self
         )
 
-    # =====================================================
-    # التالي
-    # =====================================================
-
     async def next_page(
         self,
         interaction: discord.Interaction
     ):
-
         if self.current_page < len(self.records) - 1:
-
             self.current_page += 1
 
         self.update_buttons()
@@ -1280,15 +1135,10 @@ class ModerationPagesView(ui.View):
             view=self
         )
 
-    # =====================================================
-    # حذف السجل الحالي
-    # =====================================================
-
     async def delete_current(
         self,
         interaction: discord.Interaction
     ):
-
         if not self.records:
             return
 
@@ -1306,13 +1156,10 @@ class ModerationPagesView(ui.View):
         )
 
         if record_type == "warning":
-
             collection = (
                 moderation_warnings_collection
             )
-
         else:
-
             collection = (
                 moderation_mutes_collection
             )
@@ -1326,7 +1173,6 @@ class ModerationPagesView(ui.View):
         )
 
         if result.deleted_count == 0:
-
             await interaction.response.send_message(
                 "⚠️ هذا السجل محذوف مسبقًا.",
                 ephemeral=True
@@ -1334,42 +1180,28 @@ class ModerationPagesView(ui.View):
 
             return
 
-        # =================================================
-        # إذا كان إسكاتًا
-        # =================================================
-
         if record_type == "mute":
-
             member = interaction.guild.get_member(
                 self.member.id
             )
 
             if member:
-
                 try:
-
                     await member.timeout(
                         None,
                         reason="حذف سجل الإسكات"
                     )
-
                 except (
                     discord.Forbidden,
                     discord.HTTPException
                 ):
-
                     pass
-
-        # =================================================
-        # حذف من القائمة الحالية
-        # =================================================
 
         self.records.pop(
             self.current_page
         )
 
         if not self.records:
-
             self.stop()
 
             await interaction.response.edit_message(
@@ -1383,7 +1215,6 @@ class ModerationPagesView(ui.View):
         if self.current_page >= len(
             self.records
         ):
-
             self.current_page = (
                 len(self.records) - 1
             )
@@ -1395,29 +1226,19 @@ class ModerationPagesView(ui.View):
             view=self
         )
 
-    # =====================================================
-    # انتهاء مدة الأزرار
-    # =====================================================
-
     async def on_timeout(self):
-
         for child in self.children:
-
             child.disabled = True
 
         try:
-
             if hasattr(self, "message") and self.message:
-
                 await self.message.edit(
                     view=self
                 )
-
         except (
             discord.NotFound,
             discord.HTTPException
         ):
-
             pass
 
 
@@ -1431,7 +1252,6 @@ class AddReasonModal(ui.Modal):
         self,
         target: discord.Member
     ):
-
         super().__init__(
             title="إضافة سبب إسكات"
         )
@@ -1453,9 +1273,7 @@ class AddReasonModal(ui.Modal):
         self,
         interaction: discord.Interaction
     ):
-
         if interaction.guild is None:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد السيرفر.",
                 ephemeral=True
@@ -1470,7 +1288,6 @@ class AddReasonModal(ui.Modal):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام إضافة أسباب الإسكات.",
                 ephemeral=True
@@ -1481,7 +1298,6 @@ class AddReasonModal(ui.Modal):
         reason = self.reason_input.value.strip()
 
         if not reason:
-
             await interaction.response.send_message(
                 "❌ اكتب سبب صحيح.",
                 ephemeral=True
@@ -1495,7 +1311,6 @@ class AddReasonModal(ui.Modal):
         )
 
         if not added:
-
             await interaction.response.send_message(
                 "❌ هذا السبب موجود مسبقًا.",
                 ephemeral=True
@@ -1509,7 +1324,6 @@ class AddReasonModal(ui.Modal):
         )
 
         try:
-
             await interaction.followup.send(
                 f"اختر مدة إسكات {self.target.mention}:",
                 view=DurationView(
@@ -1519,7 +1333,6 @@ class AddReasonModal(ui.Modal):
                 ),
                 ephemeral=True
             )
-
         except Exception:
             pass
 
@@ -1536,7 +1349,6 @@ class CustomDurationModal(ui.Modal):
         target,
         reason
     ):
-
         super().__init__(
             title="مدة مخصصة"
         )
@@ -1560,9 +1372,7 @@ class CustomDurationModal(ui.Modal):
         self,
         interaction: discord.Interaction
     ):
-
         if interaction.guild is None:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد السيرفر.",
                 ephemeral=True
@@ -1577,7 +1387,6 @@ class CustomDurationModal(ui.Modal):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام أمر الإسكات.",
                 ephemeral=True
@@ -1590,7 +1399,6 @@ class CustomDurationModal(ui.Modal):
         )
 
         if duration is None:
-
             await interaction.response.send_message(
                 "❌ المدة غير صحيحة.\n\n"
                 "أمثلة:\n"
@@ -1609,7 +1417,6 @@ class CustomDurationModal(ui.Modal):
         )
 
         if cog is None:
-
             await interaction.response.send_message(
                 "❌ تعذر الوصول لنظام الحماية.",
                 ephemeral=True
@@ -1637,7 +1444,6 @@ class DurationView(ui.View):
         target,
         reason
     ):
-
         super().__init__(
             timeout=120
         )
@@ -1650,9 +1456,7 @@ class DurationView(ui.View):
         self,
         interaction: discord.Interaction
     ):
-
         if interaction.user.id != self.moderator.id:
-
             await interaction.response.send_message(
                 "❌ هذه القائمة ليست لك.",
                 ephemeral=True
@@ -1667,7 +1471,6 @@ class DurationView(ui.View):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام أمر الإسكات.",
                 ephemeral=True
@@ -1683,7 +1486,6 @@ class DurationView(ui.View):
         seconds,
         label
     ):
-
         duration = timedelta(
             seconds=seconds
         )
@@ -1693,7 +1495,6 @@ class DurationView(ui.View):
         )
 
         if cog is None:
-
             await interaction.response.send_message(
                 "❌ تعذر الوصول لنظام الحماية.",
                 ephemeral=True
@@ -1717,7 +1518,6 @@ class DurationView(ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await self.apply(
             interaction,
             10,
@@ -1733,7 +1533,6 @@ class DurationView(ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await self.apply(
             interaction,
             60,
@@ -1749,7 +1548,6 @@ class DurationView(ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await self.apply(
             interaction,
             600,
@@ -1765,7 +1563,6 @@ class DurationView(ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await self.apply(
             interaction,
             3600,
@@ -1781,7 +1578,6 @@ class DurationView(ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await self.apply(
             interaction,
             86400,
@@ -1798,7 +1594,6 @@ class DurationView(ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await interaction.response.send_modal(
             CustomDurationModal(
                 moderator=interaction.user,
@@ -1818,7 +1613,6 @@ class ReasonSelect(ui.Select):
         self,
         target: discord.Member
     ):
-
         self.target = target
 
         reasons = get_reasons(
@@ -1830,7 +1624,6 @@ class ReasonSelect(ui.Select):
         for index, reason in enumerate(
             reasons[:24]
         ):
-
             options.append(
                 discord.SelectOption(
                     label=str(reason)[:100],
@@ -1849,9 +1642,7 @@ class ReasonSelect(ui.Select):
         self,
         interaction: discord.Interaction
     ):
-
         if interaction.guild is None:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد السيرفر.",
                 ephemeral=True
@@ -1866,7 +1657,6 @@ class ReasonSelect(ui.Select):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية استخدام أمر الإسكات.",
                 ephemeral=True
@@ -1883,7 +1673,6 @@ class ReasonSelect(ui.Select):
         )
 
         if index >= len(reasons):
-
             await interaction.response.send_message(
                 "❌ السبب غير موجود.",
                 ephemeral=True
@@ -1915,7 +1704,6 @@ class AddReasonButton(ui.Button):
         self,
         target: discord.Member
     ):
-
         super().__init__(
             label="إضافة سبب",
             style=discord.ButtonStyle.success,
@@ -1928,9 +1716,7 @@ class AddReasonButton(ui.Button):
         self,
         interaction: discord.Interaction
     ):
-
         if interaction.guild is None:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد السيرفر.",
                 ephemeral=True
@@ -1945,7 +1731,6 @@ class AddReasonButton(ui.Button):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 "❌ ما عندك صلاحية إضافة أسباب.",
                 ephemeral=True
@@ -1970,7 +1755,6 @@ class ReasonView(ui.View):
         self,
         target: discord.Member
     ):
-
         super().__init__(
             timeout=120
         )
@@ -1994,7 +1778,6 @@ class ModerationCog(commands.Cog):
         self,
         bot
     ):
-
         self.bot = bot
 
     # =====================================================
@@ -2008,7 +1791,6 @@ class ModerationCog(commands.Cog):
         duration: timedelta,
         reason: str
     ):
-
         moderator = interaction.user
 
         allowed, error = can_moderate(
@@ -2017,7 +1799,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not allowed:
-
             await interaction.response.send_message(
                 error,
                 ephemeral=True
@@ -2026,14 +1807,12 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await target.timeout(
                 duration,
                 reason=reason
             )
 
         except discord.Forbidden:
-
             await interaction.response.send_message(
                 "❌ البوت ما عنده صلاحية إسكات هذا الشخص، أو رتبة البوت أقل منه.",
                 ephemeral=True
@@ -2042,7 +1821,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await interaction.response.send_message(
                 "❌ حصل خطأ أثناء تنفيذ الإسكات.",
                 ephemeral=True
@@ -2076,16 +1854,14 @@ class ModerationCog(commands.Cog):
         self,
         ctx
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_LOCK,
             ctx.channel.id
         ):
-
-            return
-
-        if not ctx.guild:
             return
 
         permissions = ctx.channel.permissions_for(
@@ -2093,7 +1869,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not permissions.manage_channels:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
             )
@@ -2101,7 +1876,6 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             allowed_role_ids = await get_website_role_ids(
                 ctx.guild.id,
                 COMMAND_LOCK
@@ -2113,7 +1887,6 @@ class ModerationCog(commands.Cog):
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
             )
@@ -2121,7 +1894,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء قفل الروم."
             )
@@ -2143,16 +1915,14 @@ class ModerationCog(commands.Cog):
         self,
         ctx
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_UNLOCK,
             ctx.channel.id
         ):
-
-            return
-
-        if not ctx.guild:
             return
 
         permissions = ctx.channel.permissions_for(
@@ -2160,7 +1930,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not permissions.manage_channels:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
             )
@@ -2168,13 +1937,11 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await unlock_channel(
                 ctx.channel
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
             )
@@ -2182,7 +1949,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء فتح الروم."
             )
@@ -2204,16 +1970,14 @@ class ModerationCog(commands.Cog):
         self,
         ctx
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_HIDE,
             ctx.channel.id
         ):
-
-            return
-
-        if not ctx.guild:
             return
 
         permissions = ctx.channel.permissions_for(
@@ -2221,7 +1985,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not permissions.manage_channels:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
             )
@@ -2229,7 +1992,6 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             allowed_role_ids = await get_website_role_ids(
                 ctx.guild.id,
                 COMMAND_HIDE
@@ -2241,7 +2003,6 @@ class ModerationCog(commands.Cog):
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
             )
@@ -2249,7 +2010,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء إخفاء الروم."
             )
@@ -2271,16 +2031,14 @@ class ModerationCog(commands.Cog):
         self,
         ctx
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_SHOW,
             ctx.channel.id
         ):
-
-            return
-
-        if not ctx.guild:
             return
 
         permissions = ctx.channel.permissions_for(
@@ -2288,7 +2046,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not permissions.manage_channels:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية **Manage Channels** في هذا الروم."
             )
@@ -2296,13 +2053,11 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await show_channel(
                 ctx.channel
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية تعديل صلاحيات هذا الروم."
             )
@@ -2310,7 +2065,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء إظهار الروم."
             )
@@ -2326,7 +2080,7 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="لاتتكلم"
+        name=COMMAND_MUTE
     )
     async def mute_command(
         self,
@@ -2334,20 +2088,20 @@ class ModerationCog(commands.Cog):
         member: discord.Member = None,
         duration_text: str = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_MUTE,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-لاتتكلم @الشخص 10m`"
+                "`لاتتكلم @الشخص 10m`"
             )
 
             return
@@ -2358,7 +2112,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not allowed:
-
             await ctx.send(
                 error
             )
@@ -2366,13 +2119,11 @@ class ModerationCog(commands.Cog):
             return
 
         if duration_text:
-
             duration = parse_duration(
                 duration_text
             )
 
             if duration is None:
-
                 await ctx.send(
                     "❌ المدة غير صحيحة.\n\n"
                     "أمثلة:\n"
@@ -2387,14 +2138,12 @@ class ModerationCog(commands.Cog):
                 return
 
             try:
-
                 await member.timeout(
                     duration,
                     reason="إسكات يدوي"
                 )
 
             except discord.Forbidden:
-
                 await ctx.send(
                     "❌ البوت ما يقدر يسكت هذا الشخص. "
                     "تأكد أن رتبة البوت أعلى منه."
@@ -2403,7 +2152,6 @@ class ModerationCog(commands.Cog):
                 return
 
             except discord.HTTPException:
-
                 await ctx.send(
                     "❌ حصل خطأ أثناء تنفيذ الإسكات."
                 )
@@ -2436,27 +2184,27 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="احكي"
+        name=COMMAND_UNMUTE
     )
     async def unmute_command(
         self,
         ctx,
         member: discord.Member = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_UNMUTE,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-احكي @الشخص`"
+                "`احكي @الشخص`"
             )
 
             return
@@ -2467,7 +2215,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not allowed:
-
             await ctx.send(
                 error
             )
@@ -2475,14 +2222,12 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await member.timeout(
                 None,
                 reason="إلغاء الإسكات"
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية فك الإسكات."
             )
@@ -2490,7 +2235,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء فك الإسكات."
             )
@@ -2506,7 +2250,7 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="باند"
+        name=COMMAND_BAN
     )
     async def ban_command(
         self,
@@ -2515,20 +2259,20 @@ class ModerationCog(commands.Cog):
         *,
         reason: str = "لا يوجد سبب"
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_BAN,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-باند @الشخص السبب`"
+                "`باند @الشخص السبب`"
             )
 
             return
@@ -2539,7 +2283,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not allowed:
-
             await ctx.send(
                 error
             )
@@ -2547,14 +2290,12 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await member.ban(
                 reason=reason,
                 delete_message_days=0
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية تبنيد هذا الشخص."
             )
@@ -2562,7 +2303,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء التبنيد."
             )
@@ -2579,7 +2319,7 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="انتهاء-التسفير",
+        name=COMMAND_UNBAN,
         aliases=[
             "فك-الباند",
             "انتهاء-الباند"
@@ -2590,20 +2330,20 @@ class ModerationCog(commands.Cog):
         ctx,
         user_input: str = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_UNBAN,
             ctx.channel.id
         ):
-
             return
 
         if not user_input:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-انتهاء-التسفير ID`"
+                "`انتهاء-التسفير ID`"
             )
 
             return
@@ -2614,7 +2354,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not user_id_match:
-
             await ctx.send(
                 "❌ ما قدرت أتعرف على ID الشخص."
             )
@@ -2626,13 +2365,11 @@ class ModerationCog(commands.Cog):
         )
 
         try:
-
             user = await self.bot.fetch_user(
                 user_id
             )
 
         except discord.NotFound:
-
             await ctx.send(
                 "❌ هذا المستخدم غير موجود."
             )
@@ -2640,7 +2377,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء جلب المستخدم."
             )
@@ -2648,14 +2384,12 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await ctx.guild.unban(
                 user,
                 reason=f"فك الباند بواسطة {ctx.author}"
             )
 
         except discord.NotFound:
-
             await ctx.send(
                 "❌ هذا الشخص غير موجود في قائمة المبندين."
             )
@@ -2663,7 +2397,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية فك الباند."
             )
@@ -2671,7 +2404,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء فك الباند."
             )
@@ -2687,7 +2419,7 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="طرد"
+        name=COMMAND_KICK
     )
     async def kick_command(
         self,
@@ -2696,20 +2428,20 @@ class ModerationCog(commands.Cog):
         *,
         reason: str = "لا يوجد سبب"
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_KICK,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-طرد @الشخص السبب`"
+                "`طرد @الشخص السبب`"
             )
 
             return
@@ -2720,7 +2452,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not allowed:
-
             await ctx.send(
                 error
             )
@@ -2728,13 +2459,11 @@ class ModerationCog(commands.Cog):
             return
 
         try:
-
             await member.kick(
                 reason=reason
             )
 
         except discord.Forbidden:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية طرد هذا الشخص."
             )
@@ -2742,7 +2471,6 @@ class ModerationCog(commands.Cog):
             return
 
         except discord.HTTPException:
-
             await ctx.send(
                 "❌ حصل خطأ أثناء الطرد."
             )
@@ -2759,7 +2487,7 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="تحذير"
+        name=COMMAND_WARN
     )
     async def warn_command(
         self,
@@ -2768,20 +2496,20 @@ class ModerationCog(commands.Cog):
         *,
         reason: str = "لا يوجد سبب"
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_WARN,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-تحذير @الشخص السبب`"
+                "`تحذير @الشخص السبب`"
             )
 
             return
@@ -2792,7 +2520,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not allowed:
-
             await ctx.send(
                 error
             )
@@ -2807,14 +2534,12 @@ class ModerationCog(commands.Cog):
         )
 
         try:
-
             await member.send(
                 f"⚠️ تم تحذيرك في سيرفر **{ctx.guild.name}**.\n"
                 f"**السبب:** {reason}"
             )
 
         except discord.HTTPException:
-
             pass
 
         warnings = get_warnings(
@@ -2833,24 +2558,24 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="تحذيرات"
+        name=COMMAND_WARNS
     )
     async def warnings_command(
         self,
         ctx,
         member: discord.Member = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_WARNS,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
                 "`تحذيرات @الشخص`"
@@ -2864,19 +2589,13 @@ class ModerationCog(commands.Cog):
         )
 
         if not warnings:
-
             await ctx.send(
                 f"✅ {member.mention} ما عليه أي تحذيرات."
             )
 
             return
 
-        # =================================================
-        # تحديد نوع كل سجل
-        # =================================================
-
         for warning in warnings:
-
             warning["_record_type"] = "warning"
 
         view = ModerationPagesView(
@@ -2897,24 +2616,24 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="اسكاتات"
+        name=COMMAND_MUTES
     )
     async def mutes_command(
         self,
         ctx,
         member: discord.Member = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_MUTES,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
                 "`اسكاتات @الشخص`"
@@ -2933,7 +2652,6 @@ class ModerationCog(commands.Cog):
         )
 
         if not warnings and not mutes:
-
             await ctx.send(
                 f"✅ {member.mention} ما عليه أي "
                 "تحذيرات أو إسكاتات محفوظة."
@@ -2941,31 +2659,15 @@ class ModerationCog(commands.Cog):
 
             return
 
-        # =================================================
-        # تحويل السجلات إلى نظام موحد
-        # =================================================
-
         records = []
 
         for warning in warnings:
-
             warning["_record_type"] = "warning"
-
-            records.append(
-                warning
-            )
+            records.append(warning)
 
         for mute in mutes:
-
             mute["_record_type"] = "mute"
-
-            records.append(
-                mute
-            )
-
-        # =================================================
-        # ترتيب كل السجلات من الأحدث إلى الأقدم
-        # =================================================
+            records.append(mute)
 
         records.sort(
             key=lambda record: (
@@ -2994,27 +2696,27 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="مسح-تحذيرات"
+        name=COMMAND_CLEAR_WARNS
     )
     async def clear_warnings_command(
         self,
         ctx,
         member: discord.Member = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_CLEAR_WARNS,
             ctx.channel.id
         ):
-
             return
 
         if member is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
-                "`-مسح-تحذيرات @الشخص`"
+                "`مسح-تحذيرات @الشخص`"
             )
 
             return
@@ -3036,24 +2738,24 @@ class ModerationCog(commands.Cog):
     # =====================================================
 
     @commands.command(
-        name="مسح"
+        name=COMMAND_CLEAR
     )
     async def clear_messages_command(
         self,
         ctx,
         amount: int = None
     ):
+        if not ctx.guild:
+            return
 
         if not await website_permission_allowed(
             ctx.author,
             COMMAND_CLEAR,
             ctx.channel.id
         ):
-
             return
 
         if amount is None:
-
             await ctx.send(
                 "❌ استخدم الأمر هكذا:\n"
                 "`مسح 100`"
@@ -3062,7 +2764,6 @@ class ModerationCog(commands.Cog):
             return
 
         if amount <= 0:
-
             await ctx.send(
                 "❌ لازم تكتب رقم أكبر من 0."
             )
@@ -3072,7 +2773,6 @@ class ModerationCog(commands.Cog):
         if not ctx.channel.permissions_for(
             ctx.guild.me
         ).manage_messages:
-
             await ctx.send(
                 "❌ البوت ما عنده صلاحية **Manage Messages** في هذا الروم."
             )
@@ -3089,19 +2789,14 @@ class ModerationCog(commands.Cog):
         )
 
         try:
-
             messages = []
 
             async for message in ctx.channel.history(
                 limit=amount
             ):
-
-                messages.append(
-                    message
-                )
+                messages.append(message)
 
             if not messages:
-
                 await status_message.edit(
                     content="ℹ️ ما لقيت أي رسائل لمسحها."
                 )
@@ -3118,20 +2813,12 @@ class ModerationCog(commands.Cog):
             old_messages = []
 
             for message in messages:
-
                 age = now - message.created_at
 
                 if age < fourteen_days:
-
-                    recent_messages.append(
-                        message
-                    )
-
+                    recent_messages.append(message)
                 else:
-
-                    old_messages.append(
-                        message
-                    )
+                    old_messages.append(message)
 
             deleted_count = 0
 
@@ -3140,7 +2827,6 @@ class ModerationCog(commands.Cog):
                 len(recent_messages),
                 100
             ):
-
                 chunk = recent_messages[
                     index:index + 100
                 ]
@@ -3149,29 +2835,19 @@ class ModerationCog(commands.Cog):
                     continue
 
                 try:
-
                     if len(chunk) == 1:
-
                         await chunk[0].delete()
-
                     else:
-
                         await ctx.channel.delete_messages(
                             chunk
                         )
 
-                    deleted_count += len(
-                        chunk
-                    )
+                    deleted_count += len(chunk)
 
                 except discord.HTTPException:
-
                     for message in chunk:
-
                         try:
-
                             await message.delete()
-
                             deleted_count += 1
 
                         except (
@@ -3179,15 +2855,11 @@ class ModerationCog(commands.Cog):
                             discord.Forbidden,
                             discord.HTTPException
                         ):
-
                             pass
 
             for message in old_messages:
-
                 try:
-
                     await message.delete()
-
                     deleted_count += 1
 
                 except (
@@ -3195,16 +2867,13 @@ class ModerationCog(commands.Cog):
                     discord.Forbidden,
                     discord.HTTPException
                 ):
-
                     pass
 
             try:
-
                 if ctx.message.id not in {
                     message.id
                     for message in messages
                 }:
-
                     await ctx.message.delete()
 
             except (
@@ -3212,7 +2881,6 @@ class ModerationCog(commands.Cog):
                 discord.Forbidden,
                 discord.HTTPException
             ):
-
                 pass
 
             await status_message.edit(
@@ -3223,11 +2891,7 @@ class ModerationCog(commands.Cog):
             )
 
             try:
-
-                await asyncio.sleep(
-                    5
-                )
-
+                await asyncio.sleep(5)
                 await status_message.delete()
 
             except (
@@ -3235,11 +2899,9 @@ class ModerationCog(commands.Cog):
                 discord.Forbidden,
                 discord.HTTPException
             ):
-
                 pass
 
         except discord.Forbidden:
-
             await status_message.edit(
                 content=(
                     "❌ البوت ما عنده صلاحية حذف الرسائل."
@@ -3247,7 +2909,6 @@ class ModerationCog(commands.Cog):
             )
 
         except discord.HTTPException:
-
             await status_message.edit(
                 content=(
                     "❌ حصل خطأ من Discord أثناء مسح الرسائل.\n"
@@ -3256,7 +2917,6 @@ class ModerationCog(commands.Cog):
             )
 
         except Exception as error:
-
             print(
                 f"[CLEAR ERROR] {error}"
             )
@@ -3273,7 +2933,6 @@ class ModerationCog(commands.Cog):
 # =========================================================
 
 async def setup(bot):
-
     await bot.add_cog(
         ModerationCog(bot)
     )
