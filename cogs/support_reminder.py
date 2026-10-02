@@ -7,24 +7,11 @@ from discord.ext import commands
 # SETTINGS
 # =========================================================
 
-# الروم الذي يراقبه البوت فقط
 TARGET_CHANNEL_ID = 1555381169154039828
-
-# روم التكتات
 TICKET_CHANNEL_ID = 1555369541503025273
 
-# الانتظار بعد آخر رسالة
+# مدة الانتظار بعد آخر رسالة
 WAIT_SECONDS = 30
-
-
-# =========================================================
-# MESSAGE
-# =========================================================
-
-REMINDER_MESSAGE = (
-    "يرجى كتابة مشكلتك أو استفسارك مرة واحدة فقط وإنتظار الرد من الإدارة\n"
-    f"وفي حال كانت المشكلة طويلة أو تحتاج إلى شرح مفصل، توجه للتكت من <#{TICKET_CHANNEL_ID}>"
-)
 
 
 # =========================================================
@@ -38,13 +25,13 @@ class SupportReminder(commands.Cog):
         self.pending_tasks = {}
 
     @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
+    async def on_message(self, message):
 
-        # تجاهل البوتات
+        # تجاهل رسائل البوتات
         if message.author.bot:
             return
 
-        # العمل في الروم المحدد فقط
+        # يعمل في الروم المحدد فقط
         if message.channel.id != TARGET_CHANNEL_ID:
             return
 
@@ -56,38 +43,31 @@ class SupportReminder(commands.Cog):
         if old_task and not old_task.done():
             old_task.cancel()
 
-        # بدء مؤقت جديد من آخر رسالة
+        # بدء مؤقت جديد
         task = asyncio.create_task(
-            self.send_reminder_after_delay(
-                message.channel,
-                user_id
-            )
+            self.wait_then_send(message.channel, user_id)
         )
 
         self.pending_tasks[user_id] = task
 
-    async def send_reminder_after_delay(
-        self,
-        channel: discord.TextChannel,
-        user_id: int
-    ):
+    async def wait_then_send(self, channel, user_id):
 
         try:
-            # انتظار 30 ثواني من آخر رسالة
+            # الانتظار 30 ثانية من آخر رسالة
             await asyncio.sleep(WAIT_SECONDS)
 
-            # إرسال الرسالة بدون منشن
-            await channel.send(REMINDER_MESSAGE)
+            await channel.send(
+                "يرجى كتابة مشكلتك أو استفسارك مرة واحدة فقط وإنتظار الرد من الإدارة\n"
+                f"وفي حال كانت المشكلة طويلة أو تحتاج إلى شرح مفصل، توجه للتكت من <#{TICKET_CHANNEL_ID}>"
+            )
 
         except asyncio.CancelledError:
-            # تم إرسال رسالة جديدة قبل انتهاء الـ30 ثواني
+            # تم إرسال رسالة جديدة، لذلك يتم إلغاء المؤقت القديم
             pass
 
         finally:
             # تنظيف المؤقت
-            current_task = self.pending_tasks.get(user_id)
-
-            if current_task is asyncio.current_task():
+            if self.pending_tasks.get(user_id) is asyncio.current_task():
                 self.pending_tasks.pop(user_id, None)
 
 
@@ -97,5 +77,3 @@ class SupportReminder(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(SupportReminder(bot))
-
-الآن الرسالة تطلع بدون منشن نهائيًا، وبعد 10 ثوانٍ من آخر رسالة للشخص.
