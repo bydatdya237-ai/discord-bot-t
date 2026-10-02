@@ -505,7 +505,8 @@ class NotificationRoleSelect(
             placeholder="🔔 اختر رتبة الإشعارات",
             min_values=1,
             max_values=1,
-            options=options
+            options=options,
+            custom_id="server_map_notification_role_select"
         )
 
     async def callback(
@@ -694,7 +695,8 @@ class RemoveNotificationRoleSelect(
             placeholder="🗑️ اختر رتبة لإزالتها",
             min_values=1,
             max_values=1,
-            options=options
+            options=options,
+            custom_id="server_map_remove_role_select"
         )
 
     async def callback(
@@ -1238,6 +1240,47 @@ class ServerMapMainView(
 
 
 # =========================================================
+# Persistent View لخريطة السيرفر
+#
+# هذه الـ View لا تعتمد على إعدادات سيرفر محدد.
+# أزرارها تستخدم interaction.guild لمعرفة السيرفر.
+# =========================================================
+
+class PersistentServerMapView(
+    ui.View
+):
+
+    def __init__(self):
+
+        super().__init__(
+            timeout=None
+        )
+
+        # =================================================
+        # جميع الأزرار الممكنة
+        #
+        # حتى لو كانت الرسالة القديمة تحتوي على زر واحد
+        # فقط، Discord سيجد الـ custom_id الصحيح.
+        # =================================================
+
+        self.add_item(
+            NotificationButton()
+        )
+
+        self.add_item(
+            MapButton()
+        )
+
+        self.add_item(
+            RulesButton()
+        )
+
+        self.add_item(
+            CustomEmbedButton()
+        )
+
+
+# =========================================================
 # تحديث خريطة السيرفر
 # =========================================================
 
@@ -1668,10 +1711,6 @@ class EditCustomEmbedModal(
 
         self.guild_id = guild_id
 
-        # =================================================
-        # تعبئة البيانات الحالية داخل نافذة التعديل
-        # =================================================
-
         current_title = str(
             current_title or ""
         ).strip()
@@ -1809,7 +1848,6 @@ class DeleteCustomEmbedConfirmView(
             upsert=True
         )
 
-        # تعطيل أزرار التأكيد
         for item in self.children:
             item.disabled = True
 
@@ -1855,14 +1893,36 @@ class ServerMapSetupView(
 
     def __init__(
         self,
-        guild_id
+        guild_id=None
     ):
 
+        # =================================================
+        # أصبحت Persistent حتى تبقى لوحة الإعداد تعمل
+        # بعد Restart / Redeploy
+        # =================================================
+
         super().__init__(
-            timeout=300
+            timeout=None
         )
 
         self.guild_id = guild_id
+
+    # =====================================================
+    # الحصول على Guild ID
+    # =====================================================
+
+    def get_guild_id(
+        self,
+        interaction
+    ):
+
+        if interaction.guild is None:
+            return None
+
+        if self.guild_id:
+            return self.guild_id
+
+        return interaction.guild.id
 
     # =====================================================
     # التحقق من الصلاحية
@@ -1890,7 +1950,8 @@ class ServerMapSetupView(
         label="رتب الإشعارات",
         style=discord.ButtonStyle.primary,
         emoji="🔔",
-        row=0
+        row=0,
+        custom_id="server_map_setup_roles"
     )
     async def notification_roles_button(
         self,
@@ -1909,13 +1970,20 @@ class ServerMapSetupView(
 
             return
 
+        guild_id = self.get_guild_id(
+            interaction
+        )
+
+        if guild_id is None:
+            return
+
         view = ui.View(
             timeout=60
         )
 
         view.add_item(
             NotificationAdminRoleSelect(
-                self.guild_id
+                guild_id
             )
         )
 
@@ -1934,7 +2002,8 @@ class ServerMapSetupView(
         label="قنوات الخريطة",
         style=discord.ButtonStyle.primary,
         emoji="🗺️",
-        row=0
+        row=0,
+        custom_id="server_map_setup_channels"
     )
     async def map_channels_button(
         self,
@@ -1953,13 +2022,20 @@ class ServerMapSetupView(
 
             return
 
+        guild_id = self.get_guild_id(
+            interaction
+        )
+
+        if guild_id is None:
+            return
+
         view = ui.View(
             timeout=60
         )
 
         view.add_item(
             MapChannelSelect(
-                self.guild_id
+                guild_id
             )
         )
 
@@ -1977,7 +2053,8 @@ class ServerMapSetupView(
         label="القوانين",
         style=discord.ButtonStyle.primary,
         emoji="📜",
-        row=1
+        row=1,
+        custom_id="server_map_setup_rules"
     )
     async def rules_button(
         self,
@@ -1996,9 +2073,16 @@ class ServerMapSetupView(
 
             return
 
+        guild_id = self.get_guild_id(
+            interaction
+        )
+
+        if guild_id is None:
+            return
+
         await interaction.response.send_modal(
             RulesModal(
-                self.guild_id
+                guild_id
             )
         )
 
@@ -2010,7 +2094,8 @@ class ServerMapSetupView(
         label="إيمبد مخصص",
         style=discord.ButtonStyle.secondary,
         emoji="📝",
-        row=1
+        row=1,
+        custom_id="server_map_setup_custom_embed"
     )
     async def custom_embed_button(
         self,
@@ -2029,9 +2114,16 @@ class ServerMapSetupView(
 
             return
 
+        guild_id = self.get_guild_id(
+            interaction
+        )
+
+        if guild_id is None:
+            return
+
         await interaction.response.send_modal(
             CustomEmbedModal(
-                self.guild_id
+                guild_id
             )
         )
 
@@ -2043,7 +2135,8 @@ class ServerMapSetupView(
         label="تعديل الإيمبد",
         style=discord.ButtonStyle.secondary,
         emoji="✏️",
-        row=2
+        row=2,
+        custom_id="server_map_setup_edit_embed"
     )
     async def edit_custom_embed_button(
         self,
@@ -2062,8 +2155,15 @@ class ServerMapSetupView(
 
             return
 
+        guild_id = self.get_guild_id(
+            interaction
+        )
+
+        if guild_id is None:
+            return
+
         settings = get_settings(
-            self.guild_id
+            guild_id
         )
 
         enabled = settings.get(
@@ -2096,7 +2196,7 @@ class ServerMapSetupView(
 
         await interaction.response.send_modal(
             EditCustomEmbedModal(
-                self.guild_id,
+                guild_id,
                 title,
                 description
             )
@@ -2110,7 +2210,8 @@ class ServerMapSetupView(
         label="حذف الإيمبد المخصص",
         style=discord.ButtonStyle.danger,
         emoji="🗑️",
-        row=2
+        row=2,
+        custom_id="server_map_setup_delete_embed"
     )
     async def delete_custom_embed_button(
         self,
@@ -2129,8 +2230,15 @@ class ServerMapSetupView(
 
             return
 
+        guild_id = self.get_guild_id(
+            interaction
+        )
+
+        if guild_id is None:
+            return
+
         settings = get_settings(
-            self.guild_id
+            guild_id
         )
 
         enabled = settings.get(
@@ -2158,7 +2266,7 @@ class ServerMapSetupView(
             "⚠️ هل أنت متأكد أنك تريد حذف الإيمبد المخصص؟\n\n"
             "سيتم حذف العنوان والمحتوى المحفوظين.",
             view=DeleteCustomEmbedConfirmView(
-                self.guild_id
+                guild_id
             ),
             ephemeral=True
         )
@@ -2171,7 +2279,8 @@ class ServerMapSetupView(
         label="تحديث الخريطة",
         style=discord.ButtonStyle.success,
         emoji="🔄",
-        row=3
+        row=3,
+        custom_id="server_map_setup_refresh"
     )
     async def refresh_button(
         self,
@@ -2188,6 +2297,9 @@ class ServerMapSetupView(
                 ephemeral=True
             )
 
+            return
+
+        if interaction.guild is None:
             return
 
         await interaction.response.defer(
@@ -2218,6 +2330,47 @@ class ServerMapCog(
     ):
 
         self.bot = bot
+
+    # =====================================================
+    # تسجيل Persistent Views
+    #
+    # يتم تنفيذها عند تحميل الـ Cog.
+    #
+    # هذا هو الجزء الذي يجعل الأزرار القديمة تعمل
+    # بعد Restart / Redeploy.
+    # =====================================================
+
+    async def cog_load(
+        self
+    ):
+
+        try:
+
+            # =================================================
+            # View خريطة السيرفر
+            # =================================================
+
+            self.bot.add_view(
+                PersistentServerMapView()
+            )
+
+            # =================================================
+            # View إعداد الخريطة
+            # =================================================
+
+            self.bot.add_view(
+                ServerMapSetupView()
+            )
+
+            print(
+                "[ServerMap] Persistent Views registered successfully."
+            )
+
+        except Exception as error:
+
+            print(
+                f"[ServerMap] Failed to register Persistent Views: {repr(error)}"
+            )
 
     # =====================================================
     # خريطة-إنشاء
