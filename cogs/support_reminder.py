@@ -7,13 +7,13 @@ from discord.ext import commands
 # SETTINGS
 # =========================================================
 
-# الروم الذي يراقبه البوت
+# الروم الذي يراقبه البوت فقط
 TARGET_CHANNEL_ID = 1555381169154039828
 
 # روم التكتات
 TICKET_CHANNEL_ID = 1555369541503025273
 
-# مدة الانتظار بعد آخر رسالة
+# الانتظار بعد آخر رسالة
 WAIT_SECONDS = 10
 
 
@@ -35,8 +35,6 @@ class SupportReminder(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-
-        # مؤقت منفصل لكل شخص
         self.pending_tasks = {}
 
     @commands.Cog.listener()
@@ -46,23 +44,22 @@ class SupportReminder(commands.Cog):
         if message.author.bot:
             return
 
-        # تجاهل أي روم غير الروم المحدد
+        # العمل في الروم المحدد فقط
         if message.channel.id != TARGET_CHANNEL_ID:
             return
 
         user_id = message.author.id
 
-        # إذا كان للشخص مؤقت سابق، نلغيه
+        # إلغاء المؤقت السابق إذا أرسل الشخص رسالة جديدة
         old_task = self.pending_tasks.get(user_id)
 
         if old_task and not old_task.done():
             old_task.cancel()
 
-        # إنشاء مؤقت جديد من آخر رسالة
+        # بدء مؤقت جديد من آخر رسالة
         task = asyncio.create_task(
             self.send_reminder_after_delay(
                 message.channel,
-                message.author,
                 user_id
             )
         )
@@ -72,26 +69,22 @@ class SupportReminder(commands.Cog):
     async def send_reminder_after_delay(
         self,
         channel: discord.TextChannel,
-        member: discord.Member,
         user_id: int
     ):
 
         try:
-            # انتظار 10 ثواني من آخر رسالة
+            # انتظار 30 ثواني من آخر رسالة
             await asyncio.sleep(WAIT_SECONDS)
 
-            # إرسال التنبيه
-            await channel.send(
-                f"{member.mention}\n{REMINDER_MESSAGE}"
-            )
+            # إرسال الرسالة بدون منشن
+            await channel.send(REMINDER_MESSAGE)
 
         except asyncio.CancelledError:
-            # تم إرسال رسالة جديدة قبل انتهاء الـ10 ثواني
-            # لذلك نلغي المؤقت القديم بدون إرسال شيء
+            # تم إرسال رسالة جديدة قبل انتهاء الـ30 ثواني
             pass
 
         finally:
-            # حذف المهمة من القائمة إذا كانت هي المهمة الحالية
+            # تنظيف المؤقت
             current_task = self.pending_tasks.get(user_id)
 
             if current_task is asyncio.current_task():
@@ -104,3 +97,5 @@ class SupportReminder(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(SupportReminder(bot))
+
+الآن الرسالة تطلع بدون منشن نهائيًا، وبعد 10 ثوانٍ من آخر رسالة للشخص.
