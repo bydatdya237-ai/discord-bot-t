@@ -33,7 +33,8 @@ class CommandsListCog(commands.Cog):
         # -------------------------------------------------
 
         await ctx.send(
-            "📚 **يمكنك معرفة جميع أوامر البوت من الموقع الرسمي للبوت.**",
+            "📚 **
+            من خلال رابط https://diaa-bot-website-production-5dec.up.railway.app/dashboard يمكنك معرفة جميع أوامر البوت من الموقع الرسمي للبوت.**",
             delete_after=10
         )
 
