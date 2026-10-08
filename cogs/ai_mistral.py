@@ -1,5 +1,6 @@
 import os
 import asyncio
+import random
 
 import discord
 from discord.ext import commands
@@ -20,17 +21,25 @@ class MistralAutoChatCog(commands.Cog):
         api_key = os.environ.get("MISTRAL_API_KEY")
 
         if not api_key:
-            print("⚠️ MISTRAL_API_KEY غير موجود في Environment Variables")
+            print(
+                "⚠️ MISTRAL_API_KEY غير موجود في Environment Variables"
+            )
             self.mistral_client = None
+
         else:
+
             try:
+
                 self.mistral_client = Mistral(
                     api_key=api_key
                 )
 
-                print("✅ تم تشغيل Mistral API")
+                print(
+                    "✅ تم تشغيل Mistral API"
+                )
 
             except Exception as e:
+
                 print(
                     f"❌ تعذر تشغيل Mistral API: "
                     f"{type(e).__name__}: {e}"
@@ -46,7 +55,11 @@ class MistralAutoChatCog(commands.Cog):
         mongo_uri = os.environ.get("MONGO_URI")
 
         if not mongo_uri:
-            print("⚠️ MONGO_URI غير موجود")
+
+            print(
+                "⚠️ MONGO_URI غير موجود"
+            )
+
             self.mongo_client = None
             self.memory_collection = None
 
@@ -90,21 +103,33 @@ class MistralAutoChatCog(commands.Cog):
 
         # =========================================================
         # قفل الطلبات
+        # يمنع إرسال عدة طلبات Mistral بنفس الوقت
         # =========================================================
 
         self.lock = asyncio.Lock()
 
         # =========================================================
-        # عدد الرسائل المحفوظة
+        # الذاكرة الكاملة المخزنة في MongoDB
         # =========================================================
 
         self.MAX_HISTORY_MESSAGES = 1000
 
+        self.MAX_HISTORY_CHARS = 700_000
+
         # =========================================================
-        # الحد الأقصى لحجم الذاكرة
+        # الذاكرة التي يتم إرسالها فعليًا إلى Mistral
+        #
+        # نخزن 1000 رسالة، لكن لا نرسلها كلها في كل طلب.
+        # هذا يقلل استهلاك الـtokens ويحافظ على استقرار الـAPI.
         # =========================================================
 
-        self.MAX_HISTORY_CHARS = 700_000
+        self.CONTEXT_MESSAGES = 40
+
+        # =========================================================
+        # إعادة المحاولة عند 429
+        # =========================================================
+
+        self.MAX_RETRIES = 5
 
         # =========================================================
         # شخصية Mistral
@@ -152,7 +177,7 @@ class MistralAutoChatCog(commands.Cog):
 """
 
         # =========================================================
-        # ذاكرة مؤقتة داخل التشغيل
+        # ذاكرة مؤقتة داخل تشغيل البوت
         # =========================================================
 
         self.conversation_history = {}
@@ -175,11 +200,19 @@ class MistralAutoChatCog(commands.Cog):
             channel_id
         )
 
+        # ---------------------------------------------------------
+        # إذا الذاكرة موجودة في الرام، نستخدمها مباشرة
+        # ---------------------------------------------------------
+
         if memory_key in self.conversation_history:
 
             return self.conversation_history[
                 memory_key
             ]
+
+        # ---------------------------------------------------------
+        # إذا MongoDB غير متوفر
+        # ---------------------------------------------------------
 
         if self.memory_collection is None:
 
@@ -226,7 +259,10 @@ class MistralAutoChatCog(commands.Cog):
                 ):
 
                     cleaned_history.append(
-                        item
+                        {
+                            "role": item["role"],
+                            "text": item["text"]
+                        }
                     )
 
             cleaned_history = self.trim_history(
@@ -302,7 +338,7 @@ class MistralAutoChatCog(commands.Cog):
             )
 
     # =============================================================
-    # تنظيف الذاكرة
+    # تنظيف الذاكرة المخزنة
     # =============================================================
 
     def trim_history(self, history):
@@ -342,10 +378,139 @@ class MistralAutoChatCog(commands.Cog):
         return history
 
     # =============================================================
-    # تقسيم الرد الطويل
+    # أخذ آخر جزء من الذاكرة لإرساله إلى Mistral
     # =============================================================
 
-    def split_message(self, text, max_length=1900):
+    def get_context_history(self, history):
+
+        if len(history) <= self.CONTEXT_MESSAGES:
+
+            return list(history)
+
+        return list(
+            history[
+                -self.CONTEXT_MESSAGES:
+            ]
+        )
+
+    # =============================================================
+    # التحقق من 429
+    # =============================================================
+
+    def is_rate_limit_error(self, error):
+
+        error_text = str(error).lower()
+
+        error_name = type(error).__name__.lower()
+
+        combined = (
+            error_text
+            + " "
+            + error_name
+        )
+
+        return (
+            "429" in combined
+            or "rate limit" in combined
+            or "rate_limit" in combined
+            or "too many requests" in combined
+        )
+
+    # =============================================================
+    # إرسال الطلب إلى Mistral مع إعادة المحاولة
+    # =============================================================
+
+    async def request_mistral(
+        self,
+        messages
+    ):
+
+        last_error = None
+
+        for attempt in range(
+            self.MAX_RETRIES
+        ):
+
+            try:
+
+                response = await asyncio.to_thread(
+                    self.mistral_client.chat.complete,
+                    model="mistral-small-latest",
+                    messages=messages
+                )
+
+                return response
+
+            except Exception as e:
+
+                last_error = e
+
+                # -------------------------------------------------
+                # إذا الخطأ ليس 429
+                # لا نعيد المحاولة بشكل عشوائي
+                # -------------------------------------------------
+
+                if not self.is_rate_limit_error(e):
+
+                    raise
+
+                # -------------------------------------------------
+                # وصلنا إلى آخر محاولة
+                # -------------------------------------------------
+
+                if attempt >= (
+                    self.MAX_RETRIES - 1
+                ):
+
+                    raise
+
+                # -------------------------------------------------
+                # تأخير متزايد:
+                #
+                # المحاولة 1 -> 2 ثواني تقريبًا
+                # المحاولة 2 -> 4 ثواني تقريبًا
+                # المحاولة 3 -> 8 ثواني تقريبًا
+                # المحاولة 4 -> 16 ثانية تقريبًا
+                #
+                # مع عشوائية بسيطة لمنع الطلبات المتزامنة.
+                # -------------------------------------------------
+
+                wait_time = (
+                    2 ** (
+                        attempt + 1
+                    )
+                )
+
+                wait_time += random.uniform(
+                    0.5,
+                    1.5
+                )
+
+                print(
+                    f"⚠️ Mistral أعاد 429. "
+                    f"إعادة المحاولة بعد "
+                    f"{wait_time:.1f} ثانية..."
+                )
+
+                await asyncio.sleep(
+                    wait_time
+                )
+
+        if last_error:
+
+            raise last_error
+
+        return None
+
+    # =============================================================
+    # تقسيم رد Discord الطويل
+    # =============================================================
+
+    def split_message(
+        self,
+        text,
+        max_length=1900
+    ):
 
         chunks = []
 
@@ -395,12 +560,19 @@ class MistralAutoChatCog(commands.Cog):
     ):
 
         # =========================================================
-        # تجاهل البوتات والرومات الأخرى
+        # تجاهل البوتات
+        # =========================================================
+
+        if message.author.bot:
+
+            return
+
+        # =========================================================
+        # تجاهل جميع الرومات الأخرى
         # =========================================================
 
         if (
-            message.author.bot
-            or message.channel.id
+            message.channel.id
             not in self.TARGET_CHANNEL_IDS
         ):
 
@@ -408,17 +580,22 @@ class MistralAutoChatCog(commands.Cog):
 
         # =========================================================
         # إذا Mistral غير متصل
-        # لا نرسل للمستخدم أي شيء
         # =========================================================
 
         if self.mistral_client is None:
 
             print(
-                "❌ Mistral متوقف لأن MISTRAL_API_KEY غير موجود "
+                "❌ Mistral متوقف لأن "
+                "MISTRAL_API_KEY غير موجود "
                 "أو تعذر تشغيل العميل."
             )
 
             return
+
+        # =========================================================
+        # قفل الطلب
+        # يمنع طلبات Mistral المتزامنة
+        # =========================================================
 
         async with self.lock:
 
@@ -433,6 +610,10 @@ class MistralAutoChatCog(commands.Cog):
                     history = await self.load_history(
                         message.channel.id
                     )
+
+                    # =================================================
+                    # نسخ الذاكرة
+                    # =================================================
 
                     working_history = list(
                         history
@@ -449,6 +630,10 @@ class MistralAutoChatCog(commands.Cog):
                         }
                     )
 
+                    # =================================================
+                    # تنظيف الذاكرة المخزنة
+                    # =================================================
+
                     working_history = (
                         self.trim_history(
                             working_history
@@ -459,7 +644,21 @@ class MistralAutoChatCog(commands.Cog):
                     # انتظار 3 ثواني
                     # =================================================
 
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(
+                        3
+                    )
+
+                    # =================================================
+                    # أخذ آخر 40 رسالة فقط للسياق
+                    #
+                    # الذاكرة الكاملة تبقى محفوظة في MongoDB.
+                    # =================================================
+
+                    context_history = (
+                        self.get_context_history(
+                            working_history
+                        )
+                    )
 
                     # =================================================
                     # بناء رسائل Mistral
@@ -472,7 +671,7 @@ class MistralAutoChatCog(commands.Cog):
                         }
                     ]
 
-                    for item in working_history:
+                    for item in context_history:
 
                         role = item.get(
                             "role"
@@ -502,10 +701,8 @@ class MistralAutoChatCog(commands.Cog):
                     # طلب Mistral
                     # =================================================
 
-                    response = await asyncio.to_thread(
-                        self.mistral_client.chat.complete,
-                        model="mistral-small-latest",
-                        messages=messages
+                    response = await self.request_mistral(
+                        messages
                     )
 
                     # =================================================
@@ -530,6 +727,10 @@ class MistralAutoChatCog(commands.Cog):
                             .content
                         )
 
+                    # =================================================
+                    # إذا لم يرجع نص
+                    # =================================================
+
                     if (
                         not answer
                         or not str(answer).strip()
@@ -546,7 +747,7 @@ class MistralAutoChatCog(commands.Cog):
                     ).strip()
 
                     # =================================================
-                    # إضافة رد Mistral للذاكرة
+                    # إضافة رد Mistral إلى الذاكرة الكاملة
                     # =================================================
 
                     working_history.append(
@@ -556,6 +757,10 @@ class MistralAutoChatCog(commands.Cog):
                         }
                     )
 
+                    # =================================================
+                    # تنظيف الذاكرة
+                    # =================================================
+
                     working_history = (
                         self.trim_history(
                             working_history
@@ -563,7 +768,7 @@ class MistralAutoChatCog(commands.Cog):
                     )
 
                     # =================================================
-                    # حفظ الذاكرة
+                    # حفظ الذاكرة الكاملة في MongoDB
                     # =================================================
 
                     await self.save_history(
@@ -572,7 +777,7 @@ class MistralAutoChatCog(commands.Cog):
                     )
 
                     # =================================================
-                    # إرسال الرد
+                    # تقسيم الرد إذا كان طويلًا
                     # =================================================
 
                     chunks = self.split_message(
@@ -582,6 +787,10 @@ class MistralAutoChatCog(commands.Cog):
                     if not chunks:
 
                         return
+
+                    # =================================================
+                    # إرسال الرد
+                    # =================================================
 
                     for index, chunk in enumerate(
                         chunks
@@ -602,8 +811,8 @@ class MistralAutoChatCog(commands.Cog):
                 except Exception as e:
 
                     # =================================================
-                    # لا نرسل رسالة خطأ للمستخدم
-                    # فقط Railway Logs
+                    # لا نرسل الخطأ للمستخدم
+                    # Railway Logs فقط
                     # =================================================
 
                     print(
