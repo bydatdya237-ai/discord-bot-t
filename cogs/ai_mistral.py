@@ -3,7 +3,7 @@ import asyncio
 
 import discord
 from discord.ext import commands
-from mistralai import Mistral
+from mistralai.client import Mistral
 from pymongo import MongoClient
 
 
@@ -23,13 +23,24 @@ class MistralAutoChatCog(commands.Cog):
             print("⚠️ MISTRAL_API_KEY غير موجود في Environment Variables")
             self.mistral_client = None
         else:
-            self.mistral_client = Mistral(
-                api_key=api_key
-            )
+            try:
+                self.mistral_client = Mistral(
+                    api_key=api_key
+                )
+
+                print("✅ تم تشغيل Mistral API")
+
+            except Exception as e:
+                print(
+                    f"❌ تعذر تشغيل Mistral API: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+                self.mistral_client = None
 
         # =========================================================
         # MongoDB
-        # ذاكرة Mistral مستقلة
+        # ذاكرة Mistral مستقلة تمامًا
         # =========================================================
 
         mongo_uri = os.environ.get("MONGO_URI")
@@ -62,16 +73,15 @@ class MistralAutoChatCog(commands.Cog):
             except Exception as e:
 
                 print(
-                    f"⚠️ تعذر الاتصال بـ MongoDB: {e}"
+                    f"⚠️ تعذر الاتصال بـ MongoDB: "
+                    f"{type(e).__name__}: {e}"
                 )
 
                 self.mongo_client = None
                 self.memory_collection = None
 
         # =========================================================
-        # الرومات التي يعمل فيها Mistral
-        #
-        # غير الرقم التالي إلى ID الروم الذي تريده
+        # الروم الذي يعمل فيه Mistral
         # =========================================================
 
         self.TARGET_CHANNEL_IDS = {
@@ -91,7 +101,7 @@ class MistralAutoChatCog(commands.Cog):
         self.MAX_HISTORY_MESSAGES = 1000
 
         # =========================================================
-        # حماية من حجم ذاكرة ضخم جدًا
+        # الحد الأقصى لحجم الذاكرة
         # =========================================================
 
         self.MAX_HISTORY_CHARS = 700_000
@@ -142,7 +152,7 @@ class MistralAutoChatCog(commands.Cog):
 """
 
         # =========================================================
-        # ذاكرة مؤقتة
+        # ذاكرة مؤقتة داخل التشغيل
         # =========================================================
 
         self.conversation_history = {}
@@ -219,6 +229,10 @@ class MistralAutoChatCog(commands.Cog):
                         item
                     )
 
+            cleaned_history = self.trim_history(
+                cleaned_history
+            )
+
             self.conversation_history[
                 memory_key
             ] = cleaned_history
@@ -228,7 +242,8 @@ class MistralAutoChatCog(commands.Cog):
         except Exception as e:
 
             print(
-                f"⚠️ خطأ أثناء تحميل ذاكرة Mistral: {e}"
+                f"⚠️ خطأ أثناء تحميل ذاكرة Mistral: "
+                f"{type(e).__name__}: {e}"
             )
 
             self.conversation_history[
@@ -249,6 +264,10 @@ class MistralAutoChatCog(commands.Cog):
 
         memory_key = self.get_memory_key(
             channel_id
+        )
+
+        history = self.trim_history(
+            history
         )
 
         self.conversation_history[
@@ -278,7 +297,8 @@ class MistralAutoChatCog(commands.Cog):
         except Exception as e:
 
             print(
-                f"⚠️ خطأ أثناء حفظ ذاكرة Mistral: {e}"
+                f"⚠️ خطأ أثناء حفظ ذاكرة Mistral: "
+                f"{type(e).__name__}: {e}"
             )
 
     # =============================================================
@@ -301,6 +321,7 @@ class MistralAutoChatCog(commands.Cog):
                 )
             )
             for item in history
+            if isinstance(item, dict)
         )
 
         while (
@@ -319,6 +340,49 @@ class MistralAutoChatCog(commands.Cog):
             )
 
         return history
+
+    # =============================================================
+    # تقسيم الرد الطويل
+    # =============================================================
+
+    def split_message(self, text, max_length=1900):
+
+        chunks = []
+
+        current = ""
+
+        for word in text.split():
+
+            if (
+                len(current)
+                + len(word)
+                + 1
+                > max_length
+            ):
+
+                if current:
+
+                    chunks.append(
+                        current
+                    )
+
+                current = word
+
+            else:
+
+                if current:
+
+                    current += " "
+
+                current += word
+
+        if current:
+
+            chunks.append(
+                current
+            )
+
+        return chunks
 
     # =============================================================
     # استقبال الرسائل
@@ -350,7 +414,8 @@ class MistralAutoChatCog(commands.Cog):
         if self.mistral_client is None:
 
             print(
-                "❌ Mistral متوقف لأن MISTRAL_API_KEY غير موجود."
+                "❌ Mistral متوقف لأن MISTRAL_API_KEY غير موجود "
+                "أو تعذر تشغيل العميل."
             )
 
             return
@@ -449,7 +514,14 @@ class MistralAutoChatCog(commands.Cog):
 
                     answer = None
 
-                    if response.choices:
+                    if (
+                        response
+                        and getattr(
+                            response,
+                            "choices",
+                            None
+                        )
+                    ):
 
                         answer = (
                             response
@@ -500,65 +572,32 @@ class MistralAutoChatCog(commands.Cog):
                     )
 
                     # =================================================
-                    # تقسيم الرد الطويل
+                    # إرسال الرد
                     # =================================================
 
-                    if len(answer) <= 1900:
+                    chunks = self.split_message(
+                        answer
+                    )
 
-                        await message.reply(
-                            answer
-                        )
+                    if not chunks:
 
-                    else:
+                        return
 
-                        chunks = []
+                    for index, chunk in enumerate(
+                        chunks
+                    ):
 
-                        current = ""
+                        if index == 0:
 
-                        for word in answer.split():
-
-                            if (
-                                len(current)
-                                + len(word)
-                                + 1
-                                > 1900
-                            ):
-
-                                chunks.append(
-                                    current
-                                )
-
-                                current = word
-
-                            else:
-
-                                if current:
-
-                                    current += " "
-
-                                current += word
-
-                        if current:
-
-                            chunks.append(
-                                current
+                            await message.reply(
+                                chunk
                             )
 
-                        for index, chunk in enumerate(
-                            chunks
-                        ):
+                        else:
 
-                            if index == 0:
-
-                                await message.reply(
-                                    chunk
-                                )
-
-                            else:
-
-                                await message.channel.send(
-                                    chunk
-                                )
+                            await message.channel.send(
+                                chunk
+                            )
 
                 except Exception as e:
 
@@ -576,7 +615,7 @@ class MistralAutoChatCog(commands.Cog):
 
 
 # =============================================================
-# تحميل الـCog
+# تحميل الـ Cog
 # =============================================================
 
 async def setup(bot):
