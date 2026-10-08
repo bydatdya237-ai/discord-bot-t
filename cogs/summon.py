@@ -127,8 +127,25 @@ class SummonCog(commands.Cog):
         channel_id=None
     ):
 
+        # -------------------------------------------------
+        # حماية من الاستخدام خارج السيرفر
+        # -------------------------------------------------
+
         if member is None:
             return False
+
+        guild = getattr(
+            member,
+            "guild",
+            None
+        )
+
+        if guild is None:
+            return False
+
+        # -------------------------------------------------
+        # جلب إعدادات الموقع
+        # -------------------------------------------------
 
         setting = await self.get_command_setting(
             guild_id,
@@ -157,9 +174,13 @@ class SummonCog(commands.Cog):
         # -------------------------------------------------
 
         role_ids = setting.get(
-            "role_ids",
-            []
-        )
+            "role_ids"
+        ) or []
+
+        # -------------------------------------------------
+        # لا توجد أي رتبة محددة
+        # = الأمر ممنوع
+        # -------------------------------------------------
 
         if not role_ids:
             return False
@@ -175,7 +196,7 @@ class SummonCog(commands.Cog):
         }
 
         # -------------------------------------------------
-        # لا يملك الرتبة
+        # العضو لا يملك رتبة مسموحة
         # -------------------------------------------------
 
         if not allowed_role_ids.intersection(
@@ -184,26 +205,36 @@ class SummonCog(commands.Cog):
             return False
 
         # -------------------------------------------------
-        # التحقق من الروم
+        # القنوات المسموحة
         # -------------------------------------------------
 
-        if channel_id is not None:
+        channel_ids = setting.get(
+            "channel_ids"
+        ) or []
 
-            channel_ids = setting.get(
-                "channel_ids",
-                []
-            )
+        # -------------------------------------------------
+        # إذا لم يتم تحديد قنوات
+        # فالأمر يعمل في جميع القنوات
+        # -------------------------------------------------
 
-            if not channel_ids:
-                return False
+        if not channel_ids:
+            return True
 
-            allowed_channel_ids = {
-                str(channel_id)
-                for channel_id in channel_ids
-            }
+        # -------------------------------------------------
+        # إذا تم تحديد قنوات
+        # فالأمر يعمل فقط فيها
+        # -------------------------------------------------
 
-            if str(channel_id) not in allowed_channel_ids:
-                return False
+        if channel_id is None:
+            return True
+
+        allowed_channel_ids = {
+            str(selected_channel_id)
+            for selected_channel_id in channel_ids
+        }
+
+        if str(channel_id) not in allowed_channel_ids:
+            return False
 
         return True
 
@@ -1340,10 +1371,6 @@ class SummonCog(SummonCog):
 
         if not allowed:
 
-            # إذا كان الأمر موجودًا لكن العضو ليس لديه
-            # الرتبة المسموحة، نرسل رسالة فقط إذا كان
-            # الإعداد موجودًا والروم مسموحًا.
-
             setting = await self.get_command_setting(
                 ctx.guild.id,
                 COMMAND_NAME
@@ -1358,25 +1385,67 @@ class SummonCog(SummonCog):
             ):
                 return
 
-            channel_ids = setting.get(
-                "channel_ids",
-                []
-            )
+            # -------------------------------------------------
+            # إذا لم توجد رتبة محددة من الموقع
+            # فالأمر يعتبر غير متاح
+            # -------------------------------------------------
 
-            if not channel_ids:
+            role_ids = setting.get(
+                "role_ids"
+            ) or []
+
+            if not role_ids:
                 return
 
-            allowed_channels = {
-                str(channel_id)
-                for channel_id in channel_ids
+            allowed_role_ids = {
+                str(role_id)
+                for role_id in role_ids
             }
 
-            if str(ctx.channel.id) not in allowed_channels:
+            user_role_ids = {
+                str(role.id)
+                for role in ctx.author.roles
+            }
+
+            # -------------------------------------------------
+            # إذا العضو لا يملك الرتبة المطلوبة
+            # -------------------------------------------------
+
+            if not allowed_role_ids.intersection(
+                user_role_ids
+            ):
+
+                await ctx.send(
+                    "❌ ليس لديك صلاحية لاستخدام أمر الاستدعاء."
+                )
+
                 return
 
-            await ctx.send(
-                "❌ ليس لديك صلاحية لاستخدام أمر الاستدعاء."
-            )
+            # -------------------------------------------------
+            # إذا تم تحديد قنوات
+            # نتأكد أن الروم الحالي مسموح
+            # -------------------------------------------------
+
+            channel_ids = setting.get(
+                "channel_ids"
+            ) or []
+
+            if channel_ids:
+
+                allowed_channels = {
+                    str(channel_id)
+                    for channel_id in channel_ids
+                }
+
+                if str(ctx.channel.id) not in allowed_channels:
+                    return
+
+            # -------------------------------------------------
+            # إذا لم يتم تحديد قنوات:
+            # الأمر مسموح بكل القنوات.
+            # وصولنا هنا يعني أن سبب الرفض كان
+            # حالة أخرى غير متوقعة.
+            # -------------------------------------------------
 
             return
 
@@ -1528,13 +1597,17 @@ class SummonCog(SummonCog):
             return
 
         # =================================================
-        # تجاهل إذا الأمر غير موجود بالموقع
+        # جلب الإعداد
         # =================================================
 
         setting = await self.get_command_setting(
             ctx.guild.id,
             COMMAND_NAME
         )
+
+        # =================================================
+        # تجاهل إذا الأمر غير موجود بالموقع
+        # =================================================
 
         if not setting:
             return
@@ -1550,21 +1623,59 @@ class SummonCog(SummonCog):
             return
 
         # =================================================
-        # تجاهل إذا الروم غير مسموح
+        # إذا لم توجد رتبة محددة
+        # =================================================
+
+        role_ids = setting.get(
+            "role_ids"
+        ) or []
+
+        if not role_ids:
+            return
+
+        # =================================================
+        # التحقق من رتبة العضو
+        # =================================================
+
+        allowed_role_ids = {
+            str(role_id)
+            for role_id in role_ids
+        }
+
+        user_role_ids = {
+            str(role.id)
+            for role in ctx.author.roles
+        }
+
+        if not allowed_role_ids.intersection(
+            user_role_ids
+        ):
+
+            await ctx.send(
+                "❌ ليس لديك صلاحية لاستخدام أمر الاستدعاء."
+            )
+
+            return
+
+        # =================================================
+        # التحقق من القنوات
+        #
+        # إذا channel_ids فارغة = كل القنوات مسموحة
         # =================================================
 
         channel_ids = setting.get(
-            "channel_ids",
-            []
-        )
+            "channel_ids"
+        ) or []
 
-        allowed_channels = {
-            str(channel_id)
-            for channel_id in channel_ids
-        }
+        if channel_ids:
 
-        if str(ctx.channel.id) not in allowed_channels:
-            return
+            allowed_channels = {
+                str(channel_id)
+                for channel_id in channel_ids
+            }
+
+            if str(ctx.channel.id) not in allowed_channels:
+                return
 
         # =================================================
         # أخطاء العضو
