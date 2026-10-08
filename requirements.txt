@@ -8,3 +8,4 @@ folium
 Pillow
 arabic-reshaper
 python-bidi
+google-genai
