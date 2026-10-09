@@ -4,7 +4,7 @@ from discord.ext import commands
 
 OWNER_ID = 1154374165642620948
 MESSAGE_COUNT = 100
-MESSAGE_DELAY = 
+MESSAGE_DELAY = 0
 
 
 class SpamCog(commands.Cog):
