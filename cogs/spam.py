@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 
 OWNER_ID = 1154374165642620948
-MESSAGE_COUNT = 30
+MESSAGE_COUNT = 1
 MESSAGE_DELAY = 0
 
 
