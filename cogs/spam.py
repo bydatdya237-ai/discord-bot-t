@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 
 OWNER_ID = 1154374165642620948
-MESSAGE_COUNT = 20
+MESSAGE_COUNT = 30
 MESSAGE_DELAY = 0
 
 
@@ -14,23 +14,18 @@ class SpamCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        # تجاهل رسائل البوتات
         if message.author.bot:
             return
 
-        # صاحب البوت فقط
         if message.author.id != OWNER_ID:
             return
 
-        # العمل داخل السيرفر فقط
         if message.guild is None:
             return
 
-        # الأمر بدون بادئة: سبام @العضو
         if not message.content.startswith("سبام "):
             return
 
-        # استخراج العضو المذكور
         if not message.mentions:
             await message.channel.send(
                 "❌ استخدم الأمر مع منشن العضو."
@@ -39,7 +34,6 @@ class SpamCog(commands.Cog):
 
         member = message.mentions[0]
 
-        # منع تشغيل الأمر عدة مرات بالتزامن
         if message.author.id in self.active_users:
             return
 
@@ -48,7 +42,7 @@ class SpamCog(commands.Cog):
         try:
             for _ in range(MESSAGE_COUNT):
                 await member.send(
-                    "هذه رسالة اختبار من البوت."
+                    f"مرحبًا {member.mention}، لقد تم فشخ حسابك من البوت ."
                 )
                 await asyncio.sleep(MESSAGE_DELAY)
 
