@@ -2,12 +2,7 @@ import asyncio
 import discord
 from discord.ext import commands
 
-# =========================
-# إعدادات الأمر
-# =========================
-
 OWNER_ID = 1154374165642620948
-SPAM_MESSAGE = "كس امك!"
 MESSAGE_COUNT = 15
 MESSAGE_DELAY = 2
 
@@ -15,37 +10,64 @@ MESSAGE_DELAY = 2
 class SpamCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.active_users = set()
 
-    @commands.command(name="سبام")
-    async def spam(self, ctx):
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        # تجاهل رسائل البوتات
+        if message.author.bot:
+            return
+
         # صاحب البوت فقط
-        if ctx.author.id != OWNER_ID:
+        if message.author.id != OWNER_ID:
             return
 
-        # منع تشغيل الأمر في الخاص
-        if ctx.guild is None:
+        # العمل داخل السيرفر فقط
+        if message.guild is None:
             return
 
-        # حذف رسالة الأمر إن أمكن
+        # الأمر بدون بادئة: سبام @العضو
+        if not message.content.startswith("سبام "):
+            return
+
+        # استخراج العضو المذكور
+        if not message.mentions:
+            await message.channel.send(
+                "❌ استخدم الأمر مع منشن العضو."
+            )
+            return
+
+        member = message.mentions[0]
+
+        # منع تشغيل الأمر عدة مرات بالتزامن
+        if message.author.id in self.active_users:
+            return
+
+        self.active_users.add(message.author.id)
+
         try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-
-        # إرسال رسائل الاختبار
-        for _ in range(MESSAGE_COUNT):
-            try:
-                await ctx.send(SPAM_MESSAGE)
+            for _ in range(MESSAGE_COUNT):
+                await member.send(
+                    "هذه رسالة اختبار من البوت."
+                )
                 await asyncio.sleep(MESSAGE_DELAY)
-            except (discord.HTTPException, asyncio.CancelledError):
-                raise
-            except Exception:
-                break
 
-        try:
-            await ctx.send("✅ انتهى الاختبار.")
+            await message.channel.send(
+                "✅ تم إرسال رسائل الاختبار الثلاث بالخاص."
+            )
+
+        except discord.Forbidden:
+            await message.channel.send(
+                "❌ تعذّر الإرسال؛ قد تكون الرسائل الخاصة مغلقة."
+            )
+
         except discord.HTTPException:
-            pass
+            await message.channel.send(
+                "❌ تعذّر إرسال إحدى رسائل الاختبار."
+            )
+
+        finally:
+            self.active_users.discard(message.author.id)
 
 
 async def setup(bot):
