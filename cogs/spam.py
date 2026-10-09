@@ -1,45 +1,52 @@
-import os
 import asyncio
 import discord
 from discord.ext import commands
 
-# إعدادات البوت
-OWNER_ID = 1154374165642620948  # ضع آيدي حسابك هنا
-SPAM_MESSAGE = "كس  امك!"
+# =========================
+# إعدادات الأمر
+# =========================
 
-intents = discord.Intents.default()
-intents.message_content = True
+OWNER_ID = 1154374165642620948
+SPAM_MESSAGE = "كس امك!"
+MESSAGE_COUNT = 15
+MESSAGE_DELAY = 2
 
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents,
-    help_command=None
-)
 
-@bot.command(name="سبام")
-async def spam(ctx):
-    # التحقق من هوية صاحب البوت
-    if ctx.author.id != OWNER_ID:
-        return
+class SpamCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
 
-    # عدد محدود للاختبار
-    message_count = 15
+    @commands.command(name="سبام")
+    async def spam(self, ctx):
+        # صاحب البوت فقط
+        if ctx.author.id != OWNER_ID:
+            return
 
-    try:
-        await ctx.message.delete()
-    except discord.HTTPException:
-        pass
+        # منع تشغيل الأمر في الخاص
+        if ctx.guild is None:
+            return
 
-    for _ in range(message_count):
+        # حذف رسالة الأمر إن أمكن
         try:
-            await ctx.send(SPAM_MESSAGE)
-            await asyncio.sleep(2)
+            await ctx.message.delete()
         except discord.HTTPException:
-            break
+            pass
 
-    try:
-        await ctx.send("✅ انتهى الاختبار.")
-    except discord.HTTPException:
-        pass
+        # إرسال رسائل الاختبار
+        for _ in range(MESSAGE_COUNT):
+            try:
+                await ctx.send(SPAM_MESSAGE)
+                await asyncio.sleep(MESSAGE_DELAY)
+            except (discord.HTTPException, asyncio.CancelledError):
+                raise
+            except Exception:
+                break
 
-bot.run(os.environ["TOKEN"])
+        try:
+            await ctx.send("✅ انتهى الاختبار.")
+        except discord.HTTPException:
+            pass
+
+
+async def setup(bot):
+    await bot.add_cog(SpamCog(bot))
