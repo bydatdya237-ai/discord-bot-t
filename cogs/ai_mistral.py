@@ -92,7 +92,7 @@ class MistralAutoChatCog(commands.Cog):
         self.MAX_HISTORY_CHARS = 300000
 
         # نرسل آخر 16 رسالة للسياق بدل 8
-        self.CONTEXT_MESSAGES = 16
+        self.CONTEXT_MESSAGES = 8
 
         # =====================================================
         # منع الطلبات المتزامنة
