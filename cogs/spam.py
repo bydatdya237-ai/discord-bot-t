@@ -3,8 +3,8 @@ import discord
 from discord.ext import commands
 
 OWNER_ID = 1154374165642620948
-MESSAGE_COUNT = 1
-MESSAGE_DELAY = 0
+MESSAGE_COUNT = 100
+MESSAGE_DELAY = 
 
 
 class SpamCog(commands.Cog):
@@ -42,7 +42,7 @@ class SpamCog(commands.Cog):
         try:
             for _ in range(MESSAGE_COUNT):
                 await member.send(
-                    f"مرحبًا {member.mention}، لقد تم حبك i love you من قبل البوت ."
+                    f"مرحبًا {member.mention}، لقد تم فشخ كس امك قبل البوت ."
                 )
                 await asyncio.sleep(MESSAGE_DELAY)
 
