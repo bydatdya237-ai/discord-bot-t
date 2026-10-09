@@ -11,4 +11,3 @@ python-bidi
 google-genai
 mistralai>=2
 openai>=1.0.0
-mistralai>=2.0.0
