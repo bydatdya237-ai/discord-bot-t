@@ -35,10 +35,14 @@ def __init__(self, bot):
     self.pending_task = None
     self.reminder_message_id = None
     self.reminder_lock = asyncio.Lock()
+    self.ready_once = False
 
 @commands.Cog.listener()
 async def on_ready(self):
-    # استرجاع رسالة التنبيه بعد إعادة تشغيل البوت
+    if self.ready_once:
+        return
+
+    self.ready_once = True
     await self.restore_reminder()
 
 async def restore_reminder(self):
@@ -46,8 +50,14 @@ async def restore_reminder(self):
 
     if channel is None:
         try:
-            channel = await self.bot.fetch_channel(TARGET_CHANNEL_ID)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            channel = await self.bot.fetch_channel(
+                TARGET_CHANNEL_ID
+            )
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException
+        ):
             return
 
     if not isinstance(channel, discord.TextChannel):
@@ -62,7 +72,10 @@ async def restore_reminder(self):
                 self.reminder_message_id = message.id
                 return
 
-    except (discord.Forbidden, discord.HTTPException):
+    except (
+        discord.Forbidden,
+        discord.HTTPException
+    ):
         return
 
 @commands.Cog.listener()
@@ -87,16 +100,18 @@ async def on_message(self, message):
 
 async def wait_then_update(self, channel):
 
+    current_task = asyncio.current_task()
+
     try:
         # الانتظار بعد آخر رسالة
         await asyncio.sleep(WAIT_SECONDS)
 
         async with self.reminder_lock:
 
-            # محاولة جلب رسالة التنبيه الحالية
+            # جلب رسالة التنبيه الحالية
             old_message = None
 
-            if self.reminder_message_id:
+            if self.reminder_message_id is not None:
                 try:
                     old_message = await channel.fetch_message(
                         self.reminder_message_id
@@ -108,31 +123,31 @@ async def wait_then_update(self, channel):
                 ):
                     old_message = None
 
-            # حذف التنبيه القديم قبل إرسال الجديد
-            if old_message:
+            # حذف رسالة التنبيه القديمة
+            if old_message is not None:
                 try:
                     await old_message.delete()
+                except discord.NotFound:
+                    pass
                 except (
-                    discord.NotFound,
                     discord.Forbidden,
                     discord.HTTPException
                 ):
                     pass
 
-            # إرسال التنبيه في أسفل الروم
+            # إرسال رسالة التنبيه في أسفل الروم
             new_message = await channel.send(REMINDER_TEXT)
 
             self.reminder_message_id = new_message.id
 
     except asyncio.CancelledError:
-        # وصلت رسالة جديدة، وسيبدأ مؤقت جديد
         pass
 
     except discord.HTTPException as error:
         print(f"[SupportReminder] Discord error: {error}")
 
     finally:
-        if self.pending_task is asyncio.current_task():
+        if self.pending_task is current_task:
             self.pending_task = None
 
 =========================================================
