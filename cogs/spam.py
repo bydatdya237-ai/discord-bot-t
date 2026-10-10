@@ -42,7 +42,7 @@ class SpamCog(commands.Cog):
         try:
             for _ in range(MESSAGE_COUNT):
                 await member.send(
-                    f"مرحبًا {member.mention}، تم فشخ حسابك بنجاح تست اذا جتك رسالة ارسل شات عام تست ."
+                    f"مرحبًا {member.mention}، رجع  الذهب يابرو ."
                 )
                 await asyncio.sleep(MESSAGE_DELAY)
 
