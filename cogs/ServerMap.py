@@ -34,6 +34,15 @@ SETUP_COMMAND_NAME = "خريطة-إعداد"
 
 
 # =========================================================
+# تخزين مجموعات القنوات أثناء الإعداد
+# =========================================================
+
+# المفتاح: (guild_id, user_id)
+# القيمة: المجموعات المؤقتة + المجموعة التي يجري إعدادها
+map_group_drafts = {}
+
+
+# =========================================================
 # أدوات عامة
 # =========================================================
 
@@ -52,13 +61,97 @@ def normalize_ids(value):
         try:
             result.add(int(str(item)))
 
-        except (
-            ValueError,
-            TypeError
-        ):
+        except (ValueError, TypeError):
             continue
 
     return result
+
+
+def get_draft_key(guild_id, user_id):
+
+    return int(guild_id), int(user_id)
+
+
+def get_channel_groups(settings):
+
+    groups = settings.get("map_channel_groups", [])
+
+    if not isinstance(groups, list):
+        return []
+
+    valid_groups = []
+
+    for group in groups:
+
+        if not isinstance(group, dict):
+            continue
+
+        channel_ids = list(
+            normalize_ids(group.get("channel_ids", []))
+        )
+
+        description = str(
+            group.get("description", "") or ""
+        ).strip()
+
+        if channel_ids:
+            valid_groups.append({
+                "channel_ids": channel_ids,
+                "description": description
+            })
+
+    return valid_groups
+
+
+def get_all_group_channel_ids(groups):
+
+    channel_ids = []
+
+    seen = set()
+
+    for group in groups:
+
+        for channel_id in normalize_ids(
+            group.get("channel_ids", [])
+        ):
+
+            if channel_id not in seen:
+                seen.add(channel_id)
+                channel_ids.append(channel_id)
+
+    return channel_ids
+
+
+def save_map_groups(guild_id, groups):
+
+    groups = [
+        {
+            "channel_ids": list(
+                normalize_ids(group.get("channel_ids", []))
+            ),
+            "description": str(
+                group.get("description", "") or ""
+            ).strip()
+        }
+        for group in groups
+        if isinstance(group, dict)
+        and normalize_ids(group.get("channel_ids", []))
+    ]
+
+    flattened_channel_ids = get_all_group_channel_ids(groups)
+
+    collection.update_one(
+        {
+            "guild_id": int(guild_id)
+        },
+        {
+            "$set": {
+                "map_channel_groups": groups,
+                "map_channels": flattened_channel_ids
+            }
+        },
+        upsert=True
+    )
 
 
 # =========================================================
@@ -75,17 +168,10 @@ def get_website_command_setting(
     ]
 
     try:
-
-        guild_id_variants.append(
-            int(guild_id)
-        )
+        guild_id_variants.append(int(guild_id))
 
     except Exception:
         pass
-
-    # =====================================================
-    # الطريقة الجديدة
-    # =====================================================
 
     setting = website_collection.find_one(
         {
@@ -99,10 +185,6 @@ def get_website_command_setting(
     if setting:
         return setting
 
-    # =====================================================
-    # دعم البيانات القديمة
-    # =====================================================
-
     setting = website_collection.find_one(
         {
             "guild_id": {
@@ -114,10 +196,6 @@ def get_website_command_setting(
 
     if setting:
         return setting
-
-    # =====================================================
-    # دعم command
-    # =====================================================
 
     setting = website_collection.find_one(
         {
@@ -147,6 +225,9 @@ def website_command_allowed(
     if member.guild is None:
         return False
 
+    if channel is None:
+        return False
+
     setting = get_website_command_setting(
         member.guild.id,
         command_name
@@ -155,20 +236,14 @@ def website_command_allowed(
     if not setting:
         return False
 
-    if not setting.get(
-        "enabled",
-        False
-    ):
+    if not setting.get("enabled", False):
         return False
 
     # =====================================================
     # الرتب
     # =====================================================
 
-    role_ids = setting.get(
-        "role_ids",
-        []
-    )
+    role_ids = setting.get("role_ids", [])
 
     if not role_ids:
         return False
@@ -183,19 +258,14 @@ def website_command_allowed(
         for role in member.roles
     }
 
-    if not allowed_role_ids.intersection(
-        user_role_ids
-    ):
+    if not allowed_role_ids.intersection(user_role_ids):
         return False
 
     # =====================================================
     # الرومات
     # =====================================================
 
-    channel_ids = setting.get(
-        "channel_ids",
-        []
-    )
+    channel_ids = setting.get("channel_ids", [])
 
     if not channel_ids:
         return False
@@ -219,34 +289,30 @@ def get_settings(guild_id):
 
     settings = collection.find_one(
         {
-            "guild_id": guild_id
+            "guild_id": int(guild_id)
         }
     )
 
     if settings:
+
+        # دعم الإعدادات القديمة
+        settings.setdefault("map_channel_groups", [])
+
         return settings
 
     settings = {
-        "guild_id": guild_id,
-
+        "guild_id": int(guild_id),
         "map_channel_id": None,
-
         "notification_roles": [],
-
         "map_channels": [],
-
+        "map_channel_groups": [],
         "rules": "",
-
         "custom_embed_title": "",
-
         "custom_embed_description": "",
-
         "custom_embed_enabled": False
     }
 
-    collection.insert_one(
-        settings
-    )
+    collection.insert_one(settings)
 
     return settings
 
@@ -255,9 +321,7 @@ def get_settings(guild_id):
 # Embed القوانين
 # =========================================================
 
-def create_rules_embed(
-    rules
-):
+def create_rules_embed(rules):
 
     embed = discord.Embed(
         title="📜 قوانين السيرفر",
@@ -273,44 +337,165 @@ def create_rules_embed(
 
 
 # =========================================================
+# Embed قنوات مجموعة واحدة
+# =========================================================
+
+def create_group_field_value(
+    guild,
+    group
+):
+
+    description = str(
+        group.get("description", "") or ""
+    ).strip()
+
+    channel_lines = []
+
+    for channel_id in normalize_ids(
+        group.get("channel_ids", [])
+    ):
+
+        channel = guild.get_channel(channel_id)
+
+        if channel is not None:
+            channel_lines.append(
+                f"• {channel.mention}"
+            )
+
+    parts = []
+
+    if description:
+        parts.append(description)
+
+    if channel_lines:
+
+        if parts:
+            parts.append("")
+
+        parts.extend(channel_lines)
+
+    value = "\n".join(parts).strip()
+
+    if not value:
+        value = "لا توجد قنوات متاحة في هذه المجموعة."
+
+    # الحد الأقصى لقيمة حقل Embed هو 1024 حرفًا
+    if len(value) > 1024:
+        value = value[:1021] + "..."
+
+    return value
+
+
+# =========================================================
 # Embed القنوات
+# يدعم المجموعات والأوصاف، ويدعم الإعداد القديم
 # =========================================================
 
 def create_channels_embed(
     guild,
-    channel_ids
+    channel_ids,
+    channel_groups=None
 ):
-
-    channels = []
-
-    for channel_id in normalize_ids(
-        channel_ids
-    ):
-
-        channel = guild.get_channel(
-            channel_id
-        )
-
-        if channel:
-            channels.append(
-                channel
-            )
-
-    if not channels:
-        return None
 
     embed = discord.Embed(
         title="🗺️ خريطة السيرفر",
         description=(
-            "استكشف أقسام السيرفر من خلال القنوات التالية:"
+            "استكشف أقسام السيرفر من خلال المجموعات التالية:"
         ),
-        color=discord.Color.blurple()
+        color=discord.Color.from_rgb(182, 108, 255)
     )
+
+    groups = []
+
+    if isinstance(channel_groups, list):
+        groups = [
+            group
+            for group in channel_groups
+            if isinstance(group, dict)
+        ]
+
+    # =====================================================
+    # عرض المجموعات مع أوصافها
+    # =====================================================
+
+    if groups:
+
+        field_count = 0
+
+        for index, group in enumerate(groups, start=1):
+
+            valid_channel_ids = []
+
+            for channel_id in normalize_ids(
+                group.get("channel_ids", [])
+            ):
+
+                channel = guild.get_channel(channel_id)
+
+                if channel is not None:
+                    valid_channel_ids.append(channel_id)
+
+            if not valid_channel_ids:
+                continue
+
+            description = str(
+                group.get("description", "") or ""
+            ).strip()
+
+            group_copy = {
+                "channel_ids": valid_channel_ids,
+                "description": description
+            }
+
+            value = create_group_field_value(
+                guild,
+                group_copy
+            )
+
+            embed.add_field(
+                name=f"📁 المجموعة {index}",
+                value=value,
+                inline=False
+            )
+
+            field_count += 1
+
+            # الحد الأقصى لعدد حقول Embed هو 25
+            if field_count >= 25:
+                break
+
+        if field_count == 0:
+            return None
+
+        embed.set_footer(
+            text="خريطة السيرفر • استكشف الأقسام"
+        )
+
+        return embed
+
+    # =====================================================
+    # دعم القنوات القديمة التي لم تُقسّم إلى مجموعات
+    # =====================================================
+
+    channels = []
+
+    for channel_id in normalize_ids(channel_ids):
+
+        channel = guild.get_channel(channel_id)
+
+        if channel is not None:
+            channels.append(channel)
+
+    if not channels:
+        return None
 
     channels_text = "\n".join(
         f"• {channel.mention}"
         for channel in channels
     )
+
+    if len(channels_text) > 1024:
+        channels_text = channels_text[:1021] + "..."
 
     embed.add_field(
         name="📍 القنوات المتاحة",
@@ -336,18 +521,12 @@ def create_notification_roles_embed(
 
     roles = []
 
-    for role_id in normalize_ids(
-        role_ids
-    ):
+    for role_id in normalize_ids(role_ids):
 
-        role = guild.get_role(
-            role_id
-        )
+        role = guild.get_role(role_id)
 
         if role:
-            roles.append(
-                role
-            )
+            roles.append(role)
 
     if not roles:
         return None
@@ -367,7 +546,7 @@ def create_notification_roles_embed(
 
     embed.add_field(
         name="الرتب المتاحة",
-        value=roles_text,
+        value=roles_text[:1024],
         inline=False
     )
 
@@ -382,15 +561,12 @@ def create_notification_roles_embed(
 # الحصول على رابط صورة السيرفر
 # =========================================================
 
-def get_server_icon_url(
-    guild
-):
+def get_server_icon_url(guild):
 
     if not guild.icon:
         return None
 
     try:
-
         return str(
             guild.icon.with_size(1024).url
         )
@@ -398,13 +574,9 @@ def get_server_icon_url(
     except Exception:
 
         try:
-
-            return str(
-                guild.icon.url
-            )
+            return str(guild.icon.url)
 
         except Exception:
-
             return None
 
 
@@ -412,9 +584,7 @@ def get_server_icon_url(
 # Embed الترحيب
 # =========================================================
 
-def create_welcome_embed(
-    guild
-):
+def create_welcome_embed(guild):
 
     embed = discord.Embed(
         title=f"أهلًا بك في سيرفر {guild.name} 🌟",
@@ -422,18 +592,13 @@ def create_welcome_embed(
             f"أهلًا بك في **{guild.name}** 💜\n\n"
             "استكشف السيرفر من خلال الأقسام والأزرار الموجودة بالأسفل."
         ),
-        color=discord.Color.blurple()
+        color=discord.Color.from_rgb(182, 108, 255)
     )
 
-    icon_url = get_server_icon_url(
-        guild
-    )
+    icon_url = get_server_icon_url(guild)
 
     if icon_url:
-
-        embed.set_image(
-            url=icon_url
-        )
+        embed.set_image(url=icon_url)
 
     embed.set_footer(
         text="نتمنى لك وقتًا ممتعًا معنا 💜"
@@ -446,35 +611,23 @@ def create_welcome_embed(
 # اختيار رتبة مخصصة
 # =========================================================
 
-class NotificationRoleSelect(
-    ui.Select
-):
+class NotificationRoleSelect(ui.Select):
 
-    def __init__(
-        self,
-        guild
-    ):
+    def __init__(self, guild):
 
         self.guild_id = guild.id
 
-        settings = get_settings(
-            guild.id
-        )
+        settings = get_settings(guild.id)
 
         allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
+            settings.get("notification_roles", [])
         )
 
         options = []
 
         for role_id in allowed_role_ids:
 
-            role = guild.get_role(
-                role_id
-            )
+            role = guild.get_role(role_id)
 
             if role is None:
                 continue
@@ -483,15 +636,12 @@ class NotificationRoleSelect(
                 discord.SelectOption(
                     label=role.name[:100],
                     value=str(role.id),
-                    description=(
-                        f"اختيار رتبة {role.name[:80]}"
-                    ),
+                    description=f"اختيار رتبة {role.name[:80]}",
                     emoji="🔔"
                 )
             )
 
         if not options:
-
             options.append(
                 discord.SelectOption(
                     label="لا توجد رتب متاحة",
@@ -509,104 +659,76 @@ class NotificationRoleSelect(
             custom_id="server_map_notification_role_select"
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if interaction.guild is None:
             return
 
-        settings = get_settings(
-            interaction.guild.id
-        )
+        settings = get_settings(interaction.guild.id)
 
         allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
+            settings.get("notification_roles", [])
         )
 
         selected_value = self.values[0]
 
         if selected_value == "none":
-
             await interaction.response.send_message(
                 "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
                 ephemeral=True
             )
-
             return
 
         try:
-
-            role_id = int(
-                selected_value
-            )
+            role_id = int(selected_value)
 
         except Exception:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد الرتبة.",
                 ephemeral=True
             )
-
             return
 
         if role_id not in allowed_role_ids:
-
             await interaction.response.send_message(
                 "❌ هذه الرتبة ليست من الرتب المحددة للإشعارات.",
                 ephemeral=True
             )
-
             return
 
-        role = interaction.guild.get_role(
-            role_id
-        )
+        role = interaction.guild.get_role(role_id)
 
         if role is None:
-
             await interaction.response.send_message(
                 "❌ هذه الرتبة لم تعد موجودة.",
                 ephemeral=True
             )
-
             return
 
         me = interaction.guild.me
 
         if me is None:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد البوت.",
                 ephemeral=True
             )
-
             return
 
         if role >= me.top_role:
-
             await interaction.response.send_message(
                 "❌ البوت لا يستطيع إعطاء هذه الرتبة لأن رتبة البوت ليست أعلى منها.",
                 ephemeral=True
             )
-
             return
 
         if role in interaction.user.roles:
-
             await interaction.response.send_message(
                 "ℹ️ أنت تملك هذه الرتبة بالفعل.",
                 ephemeral=True
             )
-
             return
 
         try:
-
             await interaction.user.add_roles(
                 role,
                 reason="اختيار رتبة إشعارات من خريطة السيرفر"
@@ -618,14 +740,12 @@ class NotificationRoleSelect(
             )
 
         except discord.Forbidden:
-
             await interaction.response.send_message(
                 "❌ البوت لا يملك صلاحية إعطاء هذه الرتبة.",
                 ephemeral=True
             )
 
         except discord.HTTPException:
-
             await interaction.response.send_message(
                 "❌ حدث خطأ أثناء إعطاء الرتبة.",
                 ephemeral=True
@@ -636,35 +756,23 @@ class NotificationRoleSelect(
 # اختيار رتبة للإزالة
 # =========================================================
 
-class RemoveNotificationRoleSelect(
-    ui.Select
-):
+class RemoveNotificationRoleSelect(ui.Select):
 
-    def __init__(
-        self,
-        guild
-    ):
+    def __init__(self, guild):
 
         self.guild_id = guild.id
 
-        settings = get_settings(
-            guild.id
-        )
+        settings = get_settings(guild.id)
 
         allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
+            settings.get("notification_roles", [])
         )
 
         options = []
 
         for role_id in allowed_role_ids:
 
-            role = guild.get_role(
-                role_id
-            )
+            role = guild.get_role(role_id)
 
             if role is None:
                 continue
@@ -673,15 +781,12 @@ class RemoveNotificationRoleSelect(
                 discord.SelectOption(
                     label=role.name[:100],
                     value=str(role.id),
-                    description=(
-                        f"إزالة رتبة {role.name[:80]}"
-                    ),
+                    description=f"إزالة رتبة {role.name[:80]}",
                     emoji="🗑️"
                 )
             )
 
         if not options:
-
             options.append(
                 discord.SelectOption(
                     label="لا توجد رتب متاحة",
@@ -699,10 +804,7 @@ class RemoveNotificationRoleSelect(
             custom_id="server_map_remove_role_select"
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if interaction.guild is None:
             return
@@ -710,73 +812,52 @@ class RemoveNotificationRoleSelect(
         selected_value = self.values[0]
 
         if selected_value == "none":
-
             await interaction.response.send_message(
                 "ℹ️ لا توجد رتب إشعارات محددة حاليًا.",
                 ephemeral=True
             )
-
             return
 
         try:
-
-            role_id = int(
-                selected_value
-            )
+            role_id = int(selected_value)
 
         except Exception:
-
             await interaction.response.send_message(
                 "❌ تعذر تحديد الرتبة.",
                 ephemeral=True
             )
-
             return
 
-        settings = get_settings(
-            interaction.guild.id
-        )
+        settings = get_settings(interaction.guild.id)
 
         allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
+            settings.get("notification_roles", [])
         )
 
         if role_id not in allowed_role_ids:
-
             await interaction.response.send_message(
                 "❌ هذه الرتبة ليست من الرتب المحددة للإشعارات.",
                 ephemeral=True
             )
-
             return
 
-        role = interaction.guild.get_role(
-            role_id
-        )
+        role = interaction.guild.get_role(role_id)
 
         if role is None:
-
             await interaction.response.send_message(
                 "❌ هذه الرتبة لم تعد موجودة.",
                 ephemeral=True
             )
-
             return
 
         if role not in interaction.user.roles:
-
             await interaction.response.send_message(
                 "ℹ️ أنت لا تملك هذه الرتبة.",
                 ephemeral=True
             )
-
             return
 
         try:
-
             await interaction.user.remove_roles(
                 role,
                 reason="إزالة رتبة إشعارات من خريطة السيرفر"
@@ -788,14 +869,12 @@ class RemoveNotificationRoleSelect(
             )
 
         except discord.Forbidden:
-
             await interaction.response.send_message(
                 "❌ البوت لا يملك صلاحية إزالة هذه الرتبة.",
                 ephemeral=True
             )
 
         except discord.HTTPException:
-
             await interaction.response.send_message(
                 "❌ حدث خطأ أثناء إزالة الرتبة.",
                 ephemeral=True
@@ -806,23 +885,14 @@ class RemoveNotificationRoleSelect(
 # View اختيار رتب الإشعارات
 # =========================================================
 
-class NotificationRoleMenuView(
-    ui.View
-):
+class NotificationRoleMenuView(ui.View):
 
-    def __init__(
-        self,
-        guild
-    ):
+    def __init__(self, guild):
 
-        super().__init__(
-            timeout=60
-        )
+        super().__init__(timeout=60)
 
         self.add_item(
-            NotificationRoleSelect(
-                guild
-            )
+            NotificationRoleSelect(guild)
         )
 
 
@@ -830,23 +900,14 @@ class NotificationRoleMenuView(
 # View إزالة رتب الإشعارات
 # =========================================================
 
-class RemoveNotificationRoleMenuView(
-    ui.View
-):
+class RemoveNotificationRoleMenuView(ui.View):
 
-    def __init__(
-        self,
-        guild
-    ):
+    def __init__(self, guild):
 
-        super().__init__(
-            timeout=60
-        )
+        super().__init__(timeout=60)
 
         self.add_item(
-            RemoveNotificationRoleSelect(
-                guild
-            )
+            RemoveNotificationRoleSelect(guild)
         )
 
 
@@ -854,9 +915,7 @@ class RemoveNotificationRoleMenuView(
 # زر القوانين
 # =========================================================
 
-class RulesButton(
-    ui.Button
-):
+class RulesButton(ui.Button):
 
     def __init__(self):
 
@@ -867,38 +926,26 @@ class RulesButton(
             custom_id="server_map_rules"
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if interaction.guild is None:
             return
 
-        settings = get_settings(
-            interaction.guild.id
-        )
+        settings = get_settings(interaction.guild.id)
 
         rules = str(
-            settings.get(
-                "rules",
-                ""
-            ) or ""
+            settings.get("rules", "") or ""
         ).strip()
 
         if not rules:
-
             await interaction.response.send_message(
                 "ℹ️ لم يتم تحديد قوانين السيرفر حاليًا.",
                 ephemeral=True
             )
-
             return
 
         await interaction.response.send_message(
-            embed=create_rules_embed(
-                rules
-            ),
+            embed=create_rules_embed(rules),
             ephemeral=True
         )
 
@@ -907,9 +954,7 @@ class RulesButton(
 # زر خريطة السيرفر
 # =========================================================
 
-class MapButton(
-    ui.Button
-):
+class MapButton(ui.Button):
 
     def __init__(self):
 
@@ -920,33 +965,24 @@ class MapButton(
             custom_id="server_map_channels"
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if interaction.guild is None:
             return
 
-        settings = get_settings(
-            interaction.guild.id
-        )
+        settings = get_settings(interaction.guild.id)
 
         embed = create_channels_embed(
             interaction.guild,
-            settings.get(
-                "map_channels",
-                []
-            )
+            settings.get("map_channels", []),
+            settings.get("map_channel_groups", [])
         )
 
         if embed is None:
-
             await interaction.response.send_message(
                 "ℹ️ لم يتم تحديد قنوات في خريطة السيرفر حاليًا.",
                 ephemeral=True
             )
-
             return
 
         await interaction.response.send_message(
@@ -959,9 +995,7 @@ class MapButton(
 # زر رتب الإشعارات
 # =========================================================
 
-class NotificationButton(
-    ui.Button
-):
+class NotificationButton(ui.Button):
 
     def __init__(self):
 
@@ -972,32 +1006,22 @@ class NotificationButton(
             custom_id="server_map_notifications"
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if interaction.guild is None:
             return
 
-        settings = get_settings(
-            interaction.guild.id
-        )
+        settings = get_settings(interaction.guild.id)
 
         allowed_role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
+            settings.get("notification_roles", [])
         )
 
         if not allowed_role_ids:
-
             await interaction.response.send_message(
                 "ℹ️ لم يتم تحديد رتب إشعارات حاليًا.",
                 ephemeral=True
             )
-
             return
 
         embed = create_notification_roles_embed(
@@ -1006,17 +1030,13 @@ class NotificationButton(
         )
 
         if embed is None:
-
             await interaction.response.send_message(
                 "ℹ️ لم تعد رتب الإشعارات المحددة موجودة.",
                 ephemeral=True
             )
-
             return
 
-        view = NotificationRoleMenuView(
-            interaction.guild
-        )
+        view = NotificationRoleMenuView(interaction.guild)
 
         await interaction.response.send_message(
             embed=embed,
@@ -1029,42 +1049,28 @@ class NotificationButton(
 # زر الإيمبد المخصص
 # =========================================================
 
-class CustomEmbedButton(
-    ui.Button
-):
+class CustomEmbedButton(ui.Button):
 
-    def __init__(
-        self,
-        title=""
-    ):
+    def __init__(self, title=""):
 
-        title = str(
-            title or ""
-        ).strip()
+        title = str(title or "").strip()
 
         if not title:
             title = "معلومات السيرفر"
 
-        button_label = title[:80]
-
         super().__init__(
-            label=button_label,
+            label=title[:80],
             style=discord.ButtonStyle.secondary,
             emoji="ℹ️",
             custom_id="server_map_custom_embed"
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if interaction.guild is None:
             return
 
-        settings = get_settings(
-            interaction.guild.id
-        )
+        settings = get_settings(interaction.guild.id)
 
         enabled = settings.get(
             "custom_embed_enabled",
@@ -1072,26 +1078,18 @@ class CustomEmbedButton(
         )
 
         title = str(
-            settings.get(
-                "custom_embed_title",
-                ""
-            ) or ""
+            settings.get("custom_embed_title", "") or ""
         ).strip()
 
         description = str(
-            settings.get(
-                "custom_embed_description",
-                ""
-            ) or ""
+            settings.get("custom_embed_description", "") or ""
         ).strip()
 
         if not enabled or not description:
-
             await interaction.response.send_message(
                 "ℹ️ لم يتم إعداد هذا القسم حاليًا.",
                 ephemeral=True
             )
-
             return
 
         if not title:
@@ -1100,7 +1098,7 @@ class CustomEmbedButton(
         embed = discord.Embed(
             title=title,
             description=description,
-            color=discord.Color.blurple()
+            color=discord.Color.from_rgb(182, 108, 255)
         )
 
         embed.set_footer(
@@ -1117,32 +1115,20 @@ class CustomEmbedButton(
 # View خريطة السيرفر الرئيسية
 # =========================================================
 
-class ServerMapMainView(
-    ui.View
-):
+class ServerMapMainView(ui.View):
 
-    def __init__(
-        self,
-        guild
-    ):
+    def __init__(self, guild):
 
-        super().__init__(
-            timeout=None
-        )
+        super().__init__(timeout=None)
 
-        settings = get_settings(
-            guild.id
-        )
+        settings = get_settings(guild.id)
 
         # =================================================
-        # زر الرتب فقط إذا فيه رتب
+        # زر الرتب
         # =================================================
 
         role_ids = normalize_ids(
-            settings.get(
-                "notification_roles",
-                []
-            )
+            settings.get("notification_roles", [])
         )
 
         valid_roles = [
@@ -1157,21 +1143,22 @@ class ServerMapMainView(
         ]
 
         if valid_roles:
-
-            self.add_item(
-                NotificationButton()
-            )
+            self.add_item(NotificationButton())
 
         # =================================================
-        # زر الخريطة فقط إذا فيه قنوات
+        # زر الخريطة
         # =================================================
+
+        groups = get_channel_groups(settings)
 
         channel_ids = normalize_ids(
-            settings.get(
-                "map_channels",
-                []
-            )
+            settings.get("map_channels", [])
         )
+
+        if groups:
+            channel_ids = normalize_ids(
+                get_all_group_channel_ids(groups)
+            )
 
         valid_channels = [
             guild.get_channel(channel_id)
@@ -1185,27 +1172,18 @@ class ServerMapMainView(
         ]
 
         if valid_channels:
-
-            self.add_item(
-                MapButton()
-            )
+            self.add_item(MapButton())
 
         # =================================================
-        # زر القوانين فقط إذا فيه قوانين
+        # زر القوانين
         # =================================================
 
         rules = str(
-            settings.get(
-                "rules",
-                ""
-            ) or ""
+            settings.get("rules", "") or ""
         ).strip()
 
         if rules:
-
-            self.add_item(
-                RulesButton()
-            )
+            self.add_item(RulesButton())
 
         # =================================================
         # الإيمبد المخصص
@@ -1217,104 +1195,55 @@ class ServerMapMainView(
         )
 
         custom_title = str(
-            settings.get(
-                "custom_embed_title",
-                ""
-            ) or ""
+            settings.get("custom_embed_title", "") or ""
         ).strip()
 
         custom_description = str(
-            settings.get(
-                "custom_embed_description",
-                ""
-            ) or ""
+            settings.get("custom_embed_description", "") or ""
         ).strip()
 
         if custom_enabled and custom_description:
-
             self.add_item(
-                CustomEmbedButton(
-                    custom_title
-                )
+                CustomEmbedButton(custom_title)
             )
 
 
 # =========================================================
 # Persistent View لخريطة السيرفر
-#
-# هذه الـ View لا تعتمد على إعدادات سيرفر محدد.
-# أزرارها تستخدم interaction.guild لمعرفة السيرفر.
 # =========================================================
 
-class PersistentServerMapView(
-    ui.View
-):
+class PersistentServerMapView(ui.View):
 
     def __init__(self):
 
-        super().__init__(
-            timeout=None
-        )
+        super().__init__(timeout=None)
 
-        # =================================================
-        # جميع الأزرار الممكنة
-        #
-        # حتى لو كانت الرسالة القديمة تحتوي على زر واحد
-        # فقط، Discord سيجد الـ custom_id الصحيح.
-        # =================================================
-
-        self.add_item(
-            NotificationButton()
-        )
-
-        self.add_item(
-            MapButton()
-        )
-
-        self.add_item(
-            RulesButton()
-        )
-
-        self.add_item(
-            CustomEmbedButton()
-        )
+        self.add_item(NotificationButton())
+        self.add_item(MapButton())
+        self.add_item(RulesButton())
+        self.add_item(CustomEmbedButton())
 
 
 # =========================================================
 # تحديث خريطة السيرفر
 # =========================================================
 
-async def update_server_map(
-    guild
-):
+async def update_server_map(guild):
 
-    settings = get_settings(
-        guild.id
-    )
+    settings = get_settings(guild.id)
 
-    map_channel_id = settings.get(
-        "map_channel_id"
-    )
+    map_channel_id = settings.get("map_channel_id")
 
     if not map_channel_id:
         return
 
     try:
+        map_channel_id = int(map_channel_id)
 
-        map_channel_id = int(
-            map_channel_id
-        )
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
+    except (ValueError, TypeError):
         return
 
-    channel = guild.get_channel(
-        map_channel_id
-    )
+    channel = guild.get_channel(map_channel_id)
 
     if channel is None:
         return
@@ -1329,9 +1258,7 @@ async def update_server_map(
 
         if me:
 
-            async for message in channel.history(
-                limit=100
-            ):
+            async for message in channel.history(limit=100):
 
                 if message.author.id == me.id:
 
@@ -1348,17 +1275,13 @@ async def update_server_map(
     # Embed الترحيب
     # =====================================================
 
-    welcome_embed = create_welcome_embed(
-        guild
-    )
+    welcome_embed = create_welcome_embed(guild)
 
     # =====================================================
     # View
     # =====================================================
 
-    view = ServerMapMainView(
-        guild
-    )
+    view = ServerMapMainView(guild)
 
     # =====================================================
     # إرسال الإيمبد
@@ -1377,18 +1300,15 @@ async def update_server_map(
             f"[ServerMap] Failed to send server map: {repr(error)}"
         )
 
-        # =================================================
-        # محاولة إرسال الإيمبد بدون الصورة
-        # =================================================
-
+        # إعادة المحاولة بدون الصورة إذا لزم الأمر
         try:
 
-            welcome_embed.set_image(
-                url=None
-            )
+            fallback_embed = create_welcome_embed(guild)
+
+            fallback_embed.remove_image()
 
             await channel.send(
-                embed=welcome_embed,
+                embed=fallback_embed,
                 view=view
             )
 
@@ -1403,14 +1323,9 @@ async def update_server_map(
 # إعداد رتب الإشعارات من الأدمن
 # =========================================================
 
-class NotificationAdminRoleSelect(
-    ui.RoleSelect
-):
+class NotificationAdminRoleSelect(ui.RoleSelect):
 
-    def __init__(
-        self,
-        guild_id
-    ):
+    def __init__(self, guild_id):
 
         super().__init__(
             placeholder="🔔 اختر رتب الإشعارات",
@@ -1420,22 +1335,17 @@ class NotificationAdminRoleSelect(
 
         self.guild_id = guild_id
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def callback(self, interaction: discord.Interaction):
 
         if not website_command_allowed(
             interaction.user,
             interaction.channel,
             SETUP_COMMAND_NAME
         ):
-
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
         role_ids = [
@@ -1444,9 +1354,7 @@ class NotificationAdminRoleSelect(
         ]
 
         collection.update_one(
-            {
-                "guild_id": self.guild_id
-            },
+            {"guild_id": self.guild_id},
             {
                 "$set": {
                     "notification_roles": role_ids
@@ -1462,20 +1370,18 @@ class NotificationAdminRoleSelect(
 
 
 # =========================================================
-# اختيار قنوات الخريطة
+# اختيار قنوات المجموعة
 # =========================================================
 
-class MapChannelSelect(
-    ui.ChannelSelect
-):
+class MapChannelSelect(ui.ChannelSelect):
 
-    def __init__(
-        self,
-        guild_id
-    ):
+    def __init__(self, guild_id, owner_id):
+
+        self.guild_id = int(guild_id)
+        self.owner_id = int(owner_id)
 
         super().__init__(
-            placeholder="🗺️ اختر القنوات التي ستظهر في الخريطة",
+            placeholder="🗺️ اختر قنوات هذه المجموعة",
             min_values=1,
             max_values=25,
             channel_types=[
@@ -1484,45 +1390,419 @@ class MapChannelSelect(
             ]
         )
 
-        self.guild_id = guild_id
+    async def callback(self, interaction: discord.Interaction):
 
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
+        if interaction.guild is None:
+            return
+
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه لوحة إعداد تخص شخصًا آخر.",
+                ephemeral=True
+            )
+            return
 
         if not website_command_allowed(
             interaction.user,
             interaction.channel,
             SETUP_COMMAND_NAME
         ):
-
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        channel_ids = [
+        key = get_draft_key(
+            self.guild_id,
+            self.owner_id
+        )
+
+        draft = map_group_drafts.get(key)
+
+        if draft is None:
+            draft = {
+                "groups": [],
+                "pending_channel_ids": []
+            }
+
+            map_group_drafts[key] = draft
+
+        draft["pending_channel_ids"] = [
             channel.id
             for channel in self.values
         ]
 
-        collection.update_one(
-            {
-                "guild_id": self.guild_id
-            },
-            {
-                "$set": {
-                    "map_channels": channel_ids
-                }
-            },
-            upsert=True
+        view = MapGroupActionsView(
+            self.guild_id,
+            self.owner_id
         )
 
         await interaction.response.send_message(
-            "✅ تم حفظ قنوات خريطة السيرفر.",
+            "✅ تم تحديد قنوات المجموعة.\n\n"
+            "الآن اضغط **كتابة وصف المجموعة** لإضافة وصف لها، "
+            "أو اضغط **إضافة مجموعة أخرى** لاختيار مجموعة جديدة.",
+            view=view,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# View اختيار قنوات مجموعة جديدة
+# =========================================================
+
+class MapGroupChannelPickerView(ui.View):
+
+    def __init__(self, guild_id, owner_id):
+
+        super().__init__(timeout=300)
+
+        self.guild_id = int(guild_id)
+        self.owner_id = int(owner_id)
+
+        self.add_item(
+            MapChannelSelect(
+                guild_id,
+                owner_id
+            )
+        )
+
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه اللوحة تخص الشخص الذي بدأ الإعداد فقط.",
+                ephemeral=True
+            )
+            return False
+
+        if not website_command_allowed(
+            interaction.user,
+            interaction.channel,
+            SETUP_COMMAND_NAME
+        ):
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+
+# =========================================================
+# Modal وصف مجموعة القنوات
+# =========================================================
+
+class MapGroupDescriptionModal(
+    ui.Modal,
+    title="📝 وصف مجموعة القنوات"
+):
+
+    description_input = ui.TextInput(
+        label="وصف المجموعة",
+        placeholder="مثال: هنا تجد قنوات الألعاب والتحديات...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        min_length=1,
+        max_length=1000
+    )
+
+    def __init__(self, guild_id, owner_id):
+
+        super().__init__()
+
+        self.guild_id = int(guild_id)
+        self.owner_id = int(owner_id)
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        if interaction.guild is None:
+            return
+
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه العملية تخص الشخص الذي بدأ الإعداد فقط.",
+                ephemeral=True
+            )
+            return
+
+        if not website_command_allowed(
+            interaction.user,
+            interaction.channel,
+            SETUP_COMMAND_NAME
+        ):
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+            return
+
+        key = get_draft_key(
+            self.guild_id,
+            self.owner_id
+        )
+
+        draft = map_group_drafts.get(key)
+
+        if draft is None:
+            await interaction.response.send_message(
+                "❌ انتهت جلسة الإعداد. اضغط قنوات الخريطة وابدأ من جديد.",
+                ephemeral=True
+            )
+            return
+
+        pending_ids = list(
+            normalize_ids(
+                draft.get("pending_channel_ids", [])
+            )
+        )
+
+        if not pending_ids:
+            await interaction.response.send_message(
+                "❌ لم تحدد قنوات لهذه المجموعة. اختر القنوات أولًا.",
+                ephemeral=True
+            )
+            return
+
+        description = str(
+            self.description_input.value or ""
+        ).strip()
+
+        if not description:
+            await interaction.response.send_message(
+                "❌ اكتب وصفًا للمجموعة قبل الحفظ.",
+                ephemeral=True
+            )
+            return
+
+        draft["groups"].append({
+            "channel_ids": pending_ids,
+            "description": description
+        })
+
+        draft["pending_channel_ids"] = []
+
+        group_number = len(draft["groups"])
+
+        view = MapGroupActionsView(
+            self.guild_id,
+            self.owner_id
+        )
+
+        await interaction.response.send_message(
+            f"✅ تم حفظ وصف المجموعة رقم **{group_number}**.\n"
+            "يمكنك الآن إضافة مجموعة أخرى أو حفظ جميع المجموعات.",
+            view=view,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# أزرار متابعة إعداد المجموعات
+# =========================================================
+
+class MapGroupActionsView(ui.View):
+
+    def __init__(self, guild_id, owner_id):
+
+        super().__init__(timeout=300)
+
+        self.guild_id = int(guild_id)
+        self.owner_id = int(owner_id)
+
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ هذه اللوحة تخص الشخص الذي بدأ الإعداد فقط.",
+                ephemeral=True
+            )
+            return False
+
+        if not website_command_allowed(
+            interaction.user,
+            interaction.channel,
+            SETUP_COMMAND_NAME
+        ):
+            await interaction.response.send_message(
+                "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    # =====================================================
+    # كتابة وصف المجموعة
+    # =====================================================
+
+    @ui.button(
+        label="كتابة وصف المجموعة",
+        style=discord.ButtonStyle.primary,
+        emoji="📝",
+        row=0
+    )
+    async def write_description(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        key = get_draft_key(
+            self.guild_id,
+            self.owner_id
+        )
+
+        draft = map_group_drafts.get(key)
+
+        if draft is None:
+            await interaction.response.send_message(
+                "❌ انتهت جلسة الإعداد. ابدأ من زر قنوات الخريطة.",
+                ephemeral=True
+            )
+            return
+
+        pending_ids = draft.get(
+            "pending_channel_ids",
+            []
+        )
+
+        if not pending_ids:
+            await interaction.response.send_message(
+                "❌ اختر قنوات المجموعة أولًا، ثم اضغط كتابة وصف المجموعة.",
+                view=MapGroupChannelPickerView(
+                    self.guild_id,
+                    self.owner_id
+                ),
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            MapGroupDescriptionModal(
+                self.guild_id,
+                self.owner_id
+            )
+        )
+
+    # =====================================================
+    # إضافة مجموعة أخرى
+    # =====================================================
+
+    @ui.button(
+        label="إضافة مجموعة أخرى",
+        style=discord.ButtonStyle.secondary,
+        emoji="➕",
+        row=0
+    )
+    async def add_another_group(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        key = get_draft_key(
+            self.guild_id,
+            self.owner_id
+        )
+
+        draft = map_group_drafts.get(key)
+
+        if draft is None:
+            draft = {
+                "groups": [],
+                "pending_channel_ids": []
+            }
+
+            map_group_drafts[key] = draft
+
+        # لا نسمح بترك مجموعة محددة دون وصف ثم تجاوزها
+        if draft.get("pending_channel_ids"):
+
+            await interaction.response.send_message(
+                "⚠️ أكمل المجموعة الحالية أولًا: "
+                "اضغط **كتابة وصف المجموعة** قبل إضافة مجموعة أخرى.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "🗺️ اختر قنوات المجموعة الجديدة، وبعدها اكتب وصفها.",
+            view=MapGroupChannelPickerView(
+                self.guild_id,
+                self.owner_id
+            ),
+            ephemeral=True
+        )
+
+    # =====================================================
+    # حفظ جميع المجموعات
+    # =====================================================
+
+    @ui.button(
+        label="حفظ المجموعات",
+        style=discord.ButtonStyle.success,
+        emoji="💾",
+        row=1
+    )
+    async def save_groups(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        key = get_draft_key(
+            self.guild_id,
+            self.owner_id
+        )
+
+        draft = map_group_drafts.get(key)
+
+        if draft is None:
+            await interaction.response.send_message(
+                "❌ لا توجد مجموعات لحفظها. ابدأ من زر قنوات الخريطة.",
+                ephemeral=True
+            )
+            return
+
+        if draft.get("pending_channel_ids"):
+            await interaction.response.send_message(
+                "⚠️ لديك مجموعة لم تكتب وصفها بعد. "
+                "اضغط **كتابة وصف المجموعة** أولًا.",
+                ephemeral=True
+            )
+            return
+
+        groups = draft.get("groups", [])
+
+        if not groups:
+            await interaction.response.send_message(
+                "❌ لم تضف أي مجموعة حتى الآن.",
+                ephemeral=True
+            )
+            return
+
+        save_map_groups(
+            self.guild_id,
+            groups
+        )
+
+        map_group_drafts.pop(key, None)
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.send_message(
+            f"✅ تم حفظ **{len(groups)} مجموعة** بنجاح.\n\n"
+            "🔄 الآن ارجع إلى لوحة إعداد الخريطة واضغط **تحديث الخريطة** "
+            "حتى تظهر المجموعات وأوصافها للأعضاء.",
             ephemeral=True
         )
 
@@ -1531,10 +1811,7 @@ class MapChannelSelect(
 # Modal القوانين
 # =========================================================
 
-class RulesModal(
-    ui.Modal,
-    title="📜 قوانين السيرفر"
-):
+class RulesModal(ui.Modal, title="📜 قوانين السيرفر"):
 
     rules = ui.TextInput(
         label="قوانين السيرفر",
@@ -1544,31 +1821,23 @@ class RulesModal(
         max_length=4000
     )
 
-    def __init__(
-        self,
-        guild_id
-    ):
+    def __init__(self, guild_id):
 
         super().__init__()
 
         self.guild_id = guild_id
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def on_submit(self, interaction: discord.Interaction):
 
         if not website_command_allowed(
             interaction.user,
             interaction.channel,
             SETUP_COMMAND_NAME
         ):
-
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
         rules = str(
@@ -1576,9 +1845,7 @@ class RulesModal(
         ).strip()
 
         collection.update_one(
-            {
-                "guild_id": self.guild_id
-            },
+            {"guild_id": self.guild_id},
             {
                 "$set": {
                     "rules": rules
@@ -1597,10 +1864,7 @@ class RulesModal(
 # Modal إنشاء الإيمبد المخصص
 # =========================================================
 
-class CustomEmbedModal(
-    ui.Modal,
-    title="📝 الإيمبد المخصص"
-):
+class CustomEmbedModal(ui.Modal, title="📝 الإيمبد المخصص"):
 
     title_input = ui.TextInput(
         label="عنوان الإيمبد",
@@ -1617,31 +1881,23 @@ class CustomEmbedModal(
         max_length=4000
     )
 
-    def __init__(
-        self,
-        guild_id
-    ):
+    def __init__(self, guild_id):
 
         super().__init__()
 
         self.guild_id = guild_id
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def on_submit(self, interaction: discord.Interaction):
 
         if not website_command_allowed(
             interaction.user,
             interaction.channel,
             SETUP_COMMAND_NAME
         ):
-
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
         title = str(
@@ -1656,9 +1912,7 @@ class CustomEmbedModal(
             title = "معلومات السيرفر"
 
         collection.update_one(
-            {
-                "guild_id": self.guild_id
-            },
+            {"guild_id": self.guild_id},
             {
                 "$set": {
                     "custom_embed_title": title,
@@ -1680,10 +1934,7 @@ class CustomEmbedModal(
 # Modal تعديل الإيمبد المخصص
 # =========================================================
 
-class EditCustomEmbedModal(
-    ui.Modal,
-    title="✏️ تعديل الإيمبد المخصص"
-):
+class EditCustomEmbedModal(ui.Modal, title="✏️ تعديل الإيمبد المخصص"):
 
     title_input = ui.TextInput(
         label="عنوان الإيمبد",
@@ -1725,22 +1976,17 @@ class EditCustomEmbedModal(
         self.title_input.default = current_title
         self.description_input.default = current_description
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def on_submit(self, interaction: discord.Interaction):
 
         if not website_command_allowed(
             interaction.user,
             interaction.channel,
             SETUP_COMMAND_NAME
         ):
-
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
         title = str(
@@ -1755,18 +2001,14 @@ class EditCustomEmbedModal(
             title = "معلومات السيرفر"
 
         if not description:
-
             await interaction.response.send_message(
                 "❌ لا يمكن حفظ إيمبد بدون محتوى.",
                 ephemeral=True
             )
-
             return
 
         collection.update_one(
-            {
-                "guild_id": self.guild_id
-            },
+            {"guild_id": self.guild_id},
             {
                 "$set": {
                     "custom_embed_title": title,
@@ -1788,24 +2030,13 @@ class EditCustomEmbedModal(
 # View تأكيد حذف الإيمبد
 # =========================================================
 
-class DeleteCustomEmbedConfirmView(
-    ui.View
-):
+class DeleteCustomEmbedConfirmView(ui.View):
 
-    def __init__(
-        self,
-        guild_id
-    ):
+    def __init__(self, guild_id):
 
-        super().__init__(
-            timeout=60
-        )
+        super().__init__(timeout=60)
 
         self.guild_id = guild_id
-
-    # =====================================================
-    # تأكيد الحذف
-    # =====================================================
 
     @ui.button(
         label="نعم، احذف الإيمبد",
@@ -1826,18 +2057,14 @@ class DeleteCustomEmbedConfirmView(
             interaction.channel,
             SETUP_COMMAND_NAME
         ):
-
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
         collection.update_one(
-            {
-                "guild_id": self.guild_id
-            },
+            {"guild_id": self.guild_id},
             {
                 "$set": {
                     "custom_embed_title": "",
@@ -1858,10 +2085,6 @@ class DeleteCustomEmbedConfirmView(
             ),
             view=self
         )
-
-    # =====================================================
-    # إلغاء الحذف
-    # =====================================================
 
     @ui.button(
         label="إلغاء",
@@ -1887,34 +2110,15 @@ class DeleteCustomEmbedConfirmView(
 # View إعداد الخريطة
 # =========================================================
 
-class ServerMapSetupView(
-    ui.View
-):
+class ServerMapSetupView(ui.View):
 
-    def __init__(
-        self,
-        guild_id=None
-    ):
+    def __init__(self, guild_id=None):
 
-        # =================================================
-        # أصبحت Persistent حتى تبقى لوحة الإعداد تعمل
-        # بعد Restart / Redeploy
-        # =================================================
-
-        super().__init__(
-            timeout=None
-        )
+        super().__init__(timeout=None)
 
         self.guild_id = guild_id
 
-    # =====================================================
-    # الحصول على Guild ID
-    # =====================================================
-
-    def get_guild_id(
-        self,
-        interaction
-    ):
+    def get_guild_id(self, interaction):
 
         if interaction.guild is None:
             return None
@@ -1924,14 +2128,7 @@ class ServerMapSetupView(
 
         return interaction.guild.id
 
-    # =====================================================
-    # التحقق من الصلاحية
-    # =====================================================
-
-    async def check_permission(
-        self,
-        interaction
-    ):
+    async def check_permission(self, interaction):
 
         if interaction.guild is None:
             return False
@@ -1959,32 +2156,22 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        guild_id = self.get_guild_id(
-            interaction
-        )
+        guild_id = self.get_guild_id(interaction)
 
         if guild_id is None:
             return
 
-        view = ui.View(
-            timeout=60
-        )
+        view = ui.View(timeout=60)
 
         view.add_item(
-            NotificationAdminRoleSelect(
-                guild_id
-            )
+            NotificationAdminRoleSelect(guild_id)
         )
 
         await interaction.response.send_message(
@@ -1995,7 +2182,7 @@ class ServerMapSetupView(
         )
 
     # =====================================================
-    # قنوات الخريطة
+    # قنوات الخريطة والمجموعات
     # =====================================================
 
     @ui.button(
@@ -2011,37 +2198,40 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        guild_id = self.get_guild_id(
-            interaction
-        )
+        guild_id = self.get_guild_id(interaction)
 
         if guild_id is None:
             return
 
-        view = ui.View(
-            timeout=60
+        key = get_draft_key(
+            guild_id,
+            interaction.user.id
         )
 
-        view.add_item(
-            MapChannelSelect(
-                guild_id
-            )
-        )
+        map_group_drafts[key] = {
+            "groups": [],
+            "pending_channel_ids": []
+        }
 
         await interaction.response.send_message(
-            "🗺️ اختر القنوات التي تريد ظهورها في الخريطة.",
-            view=view,
+            "🗺️ **إعداد مجموعات قنوات الخريطة**\n\n"
+            "1️⃣ اختر قنوات المجموعة الأولى.\n"
+            "2️⃣ اضغط كتابة وصف المجموعة واكتب وصفها.\n"
+            "3️⃣ اضغط إضافة مجموعة أخرى إذا تريد مجموعة جديدة.\n"
+            "4️⃣ كرر الخطوات، ثم اضغط حفظ المجموعات.\n"
+            "5️⃣ بعد الحفظ اضغط تحديث الخريطة من لوحة الإعداد.\n\n"
+            "كل مجموعة ستظهر في الخريطة بعنوان ووصف وقنوات خاصة بها.",
+            view=MapGroupChannelPickerView(
+                guild_id,
+                interaction.user.id
+            ),
             ephemeral=True
         )
 
@@ -2062,28 +2252,20 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        guild_id = self.get_guild_id(
-            interaction
-        )
+        guild_id = self.get_guild_id(interaction)
 
         if guild_id is None:
             return
 
         await interaction.response.send_modal(
-            RulesModal(
-                guild_id
-            )
+            RulesModal(guild_id)
         )
 
     # =====================================================
@@ -2103,28 +2285,20 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        guild_id = self.get_guild_id(
-            interaction
-        )
+        guild_id = self.get_guild_id(interaction)
 
         if guild_id is None:
             return
 
         await interaction.response.send_modal(
-            CustomEmbedModal(
-                guild_id
-            )
+            CustomEmbedModal(guild_id)
         )
 
     # =====================================================
@@ -2144,27 +2318,19 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        guild_id = self.get_guild_id(
-            interaction
-        )
+        guild_id = self.get_guild_id(interaction)
 
         if guild_id is None:
             return
 
-        settings = get_settings(
-            guild_id
-        )
+        settings = get_settings(guild_id)
 
         enabled = settings.get(
             "custom_embed_enabled",
@@ -2172,26 +2338,18 @@ class ServerMapSetupView(
         )
 
         title = str(
-            settings.get(
-                "custom_embed_title",
-                ""
-            ) or ""
+            settings.get("custom_embed_title", "") or ""
         ).strip()
 
         description = str(
-            settings.get(
-                "custom_embed_description",
-                ""
-            ) or ""
+            settings.get("custom_embed_description", "") or ""
         ).strip()
 
         if not enabled or not description:
-
             await interaction.response.send_message(
                 "ℹ️ لا يوجد إيمبد مخصص لتعديله حاليًا.",
                 ephemeral=True
             )
-
             return
 
         await interaction.response.send_modal(
@@ -2219,27 +2377,19 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
-        guild_id = self.get_guild_id(
-            interaction
-        )
+        guild_id = self.get_guild_id(interaction)
 
         if guild_id is None:
             return
 
-        settings = get_settings(
-            guild_id
-        )
+        settings = get_settings(guild_id)
 
         enabled = settings.get(
             "custom_embed_enabled",
@@ -2247,27 +2397,20 @@ class ServerMapSetupView(
         )
 
         description = str(
-            settings.get(
-                "custom_embed_description",
-                ""
-            ) or ""
+            settings.get("custom_embed_description", "") or ""
         ).strip()
 
         if not enabled or not description:
-
             await interaction.response.send_message(
                 "ℹ️ لا يوجد إيمبد مخصص لحذفه حاليًا.",
                 ephemeral=True
             )
-
             return
 
         await interaction.response.send_message(
             "⚠️ هل أنت متأكد أنك تريد حذف الإيمبد المخصص؟\n\n"
             "سيتم حذف العنوان والمحتوى المحفوظين.",
-            view=DeleteCustomEmbedConfirmView(
-                guild_id
-            ),
+            view=DeleteCustomEmbedConfirmView(guild_id),
             ephemeral=True
         )
 
@@ -2288,15 +2431,11 @@ class ServerMapSetupView(
         button: discord.ui.Button
     ):
 
-        if not await self.check_permission(
-            interaction
-        ):
-
+        if not await self.check_permission(interaction):
             await interaction.response.send_message(
                 "❌ لم تعد تملك صلاحية إعداد خريطة السيرفر.",
                 ephemeral=True
             )
-
             return
 
         if interaction.guild is None:
@@ -2320,43 +2459,23 @@ class ServerMapSetupView(
 # Cog خريطة السيرفر
 # =========================================================
 
-class ServerMapCog(
-    commands.Cog
-):
+class ServerMapCog(commands.Cog):
 
-    def __init__(
-        self,
-        bot
-    ):
+    def __init__(self, bot):
 
         self.bot = bot
 
     # =====================================================
     # تسجيل Persistent Views
-    #
-    # يتم تنفيذها عند تحميل الـ Cog.
-    #
-    # هذا هو الجزء الذي يجعل الأزرار القديمة تعمل
-    # بعد Restart / Redeploy.
     # =====================================================
 
-    async def cog_load(
-        self
-    ):
+    async def cog_load(self):
 
         try:
-
-            # =================================================
-            # View خريطة السيرفر
-            # =================================================
 
             self.bot.add_view(
                 PersistentServerMapView()
             )
-
-            # =================================================
-            # View إعداد الخريطة
-            # =================================================
 
             self.bot.add_view(
                 ServerMapSetupView()
@@ -2376,13 +2495,8 @@ class ServerMapCog(
     # خريطة-إنشاء
     # =====================================================
 
-    @commands.command(
-        name="خريطة-إنشاء"
-    )
-    async def create_server_map(
-        self,
-        ctx
-    ):
+    @commands.command(name="خريطة-إنشاء")
+    async def create_server_map(self, ctx):
 
         if ctx.guild is None:
             return
@@ -2392,7 +2506,6 @@ class ServerMapCog(
             ctx.channel,
             CREATE_COMMAND_NAME
         ):
-
             return
 
         map_channel = discord.utils.get(
@@ -2410,25 +2523,19 @@ class ServerMapCog(
                 )
 
             except discord.Forbidden:
-
                 await ctx.send(
                     "❌ البوت لا يملك صلاحية إنشاء الرومات."
                 )
-
                 return
 
             except discord.HTTPException:
-
                 await ctx.send(
                     "❌ حدث خطأ أثناء إنشاء روم خريطة السيرفر."
                 )
-
                 return
 
         collection.update_one(
-            {
-                "guild_id": ctx.guild.id
-            },
+            {"guild_id": ctx.guild.id},
             {
                 "$set": {
                     "map_channel_id": map_channel.id
@@ -2437,12 +2544,10 @@ class ServerMapCog(
             upsert=True
         )
 
-        await update_server_map(
-            ctx.guild
-        )
+        await update_server_map(ctx.guild)
 
         await ctx.send(
-            f"✅ تم إنشاء خريطة السيرفر بنجاح.\n"
+            "✅ تم إنشاء خريطة السيرفر بنجاح.\n"
             f"🗺️ {map_channel.mention}"
         )
 
@@ -2450,13 +2555,8 @@ class ServerMapCog(
     # خريطة-إعداد
     # =====================================================
 
-    @commands.command(
-        name="خريطة-إعداد"
-    )
-    async def setup_server_map(
-        self,
-        ctx
-    ):
+    @commands.command(name="خريطة-إعداد")
+    async def setup_server_map(self, ctx):
 
         if ctx.guild is None:
             return
@@ -2466,26 +2566,17 @@ class ServerMapCog(
             ctx.channel,
             SETUP_COMMAND_NAME
         ):
-
             return
 
-        settings = get_settings(
-            ctx.guild.id
-        )
+        settings = get_settings(ctx.guild.id)
 
-        if not settings.get(
-            "map_channel_id"
-        ):
-
+        if not settings.get("map_channel_id"):
             await ctx.send(
                 "⚠️ قم باستخدام خريطة-إنشاء أولًا."
             )
-
             return
 
-        await update_server_map(
-            ctx.guild
-        )
+        await update_server_map(ctx.guild)
 
         embed = discord.Embed(
             title="🗺️ إعداد خريطة السيرفر",
@@ -2495,14 +2586,15 @@ class ServerMapCog(
                 "🔔 **رتب الإشعارات**\n"
                 "حدد الرتب التي يستطيع الأعضاء اختيارها.\n\n"
 
-                "🗺️ **قنوات الخريطة**\n"
-                "حدد القنوات التي ستظهر للأعضاء.\n\n"
+                "🗺️ **قنوات الخريطة والمجموعات**\n"
+                "اختر عدة قنوات، واكتب وصفًا لكل مجموعة، "
+                "ثم أضف مجموعات أخرى حسب حاجتك.\n\n"
 
                 "📜 **القوانين**\n"
                 "اكتب قوانين السيرفر.\n\n"
 
                 "📝 **إيمبد مخصص**\n"
-                "أنشئ إيمبد مخصص وسيظهر في خريطة السيرفر.\n\n"
+                "أنشئ إيمبد مخصصًا وسيظهر في خريطة السيرفر.\n\n"
 
                 "✏️ **تعديل الإيمبد**\n"
                 "عدل عنوان أو محتوى الإيمبد المخصص الحالي.\n\n"
@@ -2513,11 +2605,10 @@ class ServerMapCog(
                 "🔄 **تحديث الخريطة**\n"
                 "يعيد بناء رسالة الخريطة بالإعدادات الحالية."
             ),
-            color=discord.Color.blurple()
+            color=discord.Color.from_rgb(182, 108, 255)
         )
 
         if ctx.guild.icon:
-
             embed.set_thumbnail(
                 url=ctx.guild.icon.url
             )
@@ -2528,9 +2619,7 @@ class ServerMapCog(
 
         await ctx.send(
             embed=embed,
-            view=ServerMapSetupView(
-                ctx.guild.id
-            )
+            view=ServerMapSetupView(ctx.guild.id)
         )
 
     # =====================================================
@@ -2538,11 +2627,7 @@ class ServerMapCog(
     # =====================================================
 
     @create_server_map.error
-    async def create_server_map_error(
-        self,
-        ctx,
-        error
-    ):
+    async def create_server_map_error(self, ctx, error):
 
         if ctx.guild is None:
             return
@@ -2555,10 +2640,7 @@ class ServerMapCog(
         if not setting:
             return
 
-        if not setting.get(
-            "enabled",
-            False
-        ):
+        if not setting.get("enabled", False):
             return
 
         print(
@@ -2570,11 +2652,7 @@ class ServerMapCog(
     # =====================================================
 
     @setup_server_map.error
-    async def setup_server_map_error(
-        self,
-        ctx,
-        error
-    ):
+    async def setup_server_map_error(self, ctx, error):
 
         if ctx.guild is None:
             return
@@ -2587,10 +2665,7 @@ class ServerMapCog(
         if not setting:
             return
 
-        if not setting.get(
-            "enabled",
-            False
-        ):
+        if not setting.get("enabled", False):
             return
 
         print(
@@ -2602,9 +2677,7 @@ class ServerMapCog(
 # تشغيل الـ Cog
 # =========================================================
 
-async def setup(
-    bot
-):
+async def setup(bot):
 
     await bot.add_cog(
         ServerMapCog(bot)
