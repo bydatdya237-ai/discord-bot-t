@@ -61,6 +61,7 @@ class GeminiAutoChatCog(commands.Cog):
 
         self.TARGET_CHANNEL_IDS = {
             1557727446663565412,
+            1558967436231974953,
             1558961167869673545,
         }
 
