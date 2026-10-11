@@ -17,6 +17,7 @@ MONGO_URI = os.getenv("MONGO_URI")
 MODEL_NAME = "ministral-3b-latest"
 
 TARGET_CHANNELS = {
+    1558965021588062208,
     1557736029040156683,
 }
 
