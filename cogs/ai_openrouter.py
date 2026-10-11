@@ -82,6 +82,7 @@ class OpenRouterAutoChatCog(commands.Cog):
 
         self.TARGET_CHANNEL_IDS = {
             1558965674938736762,
+            1558967756353962065,
             1558064909126865006,
         }
 
