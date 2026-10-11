@@ -18,7 +18,8 @@ class AIAutoChatCog(commands.Cog):
         # الرومات المسموح للذكاء الاصطناعي بالعمل فيها
         self.TARGET_CHANNEL_IDS = {
             1546187533044424785,
-            1557593512814448680
+            1558966468241260605,
+            1557593512814448680,
         }
 
         self.lock = asyncio.Lock()
