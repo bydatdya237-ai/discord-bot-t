@@ -12,3 +12,4 @@ google-genai
 mistralai>=2
 openai>=1.0.0
 PyNaCl
+davey
