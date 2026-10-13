@@ -43,7 +43,9 @@ YTDL_OPTIONS = {
     "quiet": True,
     "no_warnings": True,
     "skip_download": True,
+    "cachedir": False,
 }
+
 
 FFMPEG_OPTIONS = {
     "before_options": (
