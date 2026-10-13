@@ -26,6 +26,9 @@ ALLOWED_VOICE_CHANNEL_IDS = {
     1555550258602442803,
 }
 
+# روم إرسال إشعارات بدء تشغيل الأغاني
+PLAYING_ANNOUNCEMENT_CHANNEL_ID = 1559250563475054652
+
 MAX_QUEUE_SIZE = 50
 DEFAULT_VOLUME = 0.50
 
@@ -84,7 +87,10 @@ async def private_message(interaction, title, description, color=PURPLE):
     embed = make_embed(title, description, color)
 
     if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True,
+        )
     else:
         await interaction.response.send_message(
             embed=embed,
@@ -788,10 +794,7 @@ class MusicCog(commands.Cog):
             )
             return False
 
-        if (
-            interaction.channel_id
-            not in ALLOWED_TEXT_CHANNEL_IDS
-        ):
+        if interaction.channel_id not in ALLOWED_TEXT_CHANNEL_IDS:
             await private_message(
                 interaction,
                 "📍 روم غير مسموح",
@@ -1095,12 +1098,12 @@ class MusicCog(commands.Cog):
                         break
 
                     if not await self.refresh_stream(song):
-                        channel = self.bot.get_channel(
-                            song.text_channel_id
+                        announcement_channel = self.bot.get_channel(
+                            PLAYING_ANNOUNCEMENT_CHANNEL_ID
                         )
 
-                        if channel:
-                            await channel.send(
+                        if announcement_channel:
+                            await announcement_channel.send(
                                 embed=make_embed(
                                     "❌ | تعذر تجهيز الأغنية",
                                     f"لم أتمكن من تشغيل **{song.title}**.",
@@ -1135,11 +1138,22 @@ class MusicCog(commands.Cog):
 
                     voice.play(source, after=after_play)
 
-                    channel = self.bot.get_channel(
-                        song.text_channel_id
+                    # إرسال إعلان التشغيل إلى الروم المحدد فقط
+                    announcement_channel = self.bot.get_channel(
+                        PLAYING_ANNOUNCEMENT_CHANNEL_ID
                     )
 
-                    if channel:
+                    if announcement_channel is None:
+                        try:
+                            announcement_channel = (
+                                await self.bot.fetch_channel(
+                                    PLAYING_ANNOUNCEMENT_CHANNEL_ID
+                                )
+                            )
+                        except discord.HTTPException:
+                            announcement_channel = None
+
+                    if announcement_channel is not None:
                         embed = make_embed(
                             "🎶 | يتم التشغيل الآن",
                             f"**[{song.title}]({song.webpage_url})**",
@@ -1150,7 +1164,13 @@ class MusicCog(commands.Cog):
                             value=f"<@{song.requester_id}>",
                             inline=True,
                         )
-                        await channel.send(embed=embed)
+
+                        try:
+                            await announcement_channel.send(embed=embed)
+                        except discord.HTTPException:
+                            logging.exception(
+                                "Could not send playback announcement"
+                            )
 
                     await finished.wait()
 
@@ -1183,13 +1203,13 @@ class MusicCog(commands.Cog):
                         guild_id,
                     )
 
-                    channel = self.bot.get_channel(
-                        song.text_channel_id
+                    announcement_channel = self.bot.get_channel(
+                        PLAYING_ANNOUNCEMENT_CHANNEL_ID
                     )
 
-                    if channel:
+                    if announcement_channel:
                         try:
-                            await channel.send(
+                            await announcement_channel.send(
                                 embed=make_embed(
                                     "❌ | خطأ في التشغيل",
                                     f"تعذر تشغيل **{song.title}**.",
@@ -1216,7 +1236,10 @@ class MusicCog(commands.Cog):
     # SEND DASHBOARD
     # -----------------------------------------------------
 
-    @commands.command(name="لوحة", aliases=["لوحة_الموسيقى", "ميوزك"])
+    @commands.command(
+        name="لوحة",
+        aliases=["لوحة_الموسيقى", "ميوزك"],
+    )
     async def music_dashboard(self, ctx):
         if ctx.guild is None:
             return
