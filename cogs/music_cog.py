@@ -1,8 +1,8 @@
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
-from typing import Optional
 
 import discord
 from discord.ext import commands
@@ -10,7 +10,7 @@ import yt_dlp
 
 
 # =========================================================
-# SETTINGS - عدّل الآيديّات هنا
+# SETTINGS - الرومات المسموحة
 # =========================================================
 
 ALLOWED_TEXT_CHANNEL_IDS = {
@@ -34,7 +34,6 @@ YTDL_OPTIONS = {
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
-    "default_search": "ytsearch1",
     "skip_download": True,
 }
 
@@ -47,9 +46,11 @@ FFMPEG_OPTIONS = {
     "options": "-vn",
 }
 
+PURPLE = discord.Color.from_rgb(182, 108, 255)
+
 
 # =========================================================
-# DATA
+# SONG DATA
 # =========================================================
 
 @dataclass
@@ -70,15 +71,19 @@ class MusicCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-        # جلسة واحدة لكل سيرفر
+        # جلسة مستقلة لكل سيرفر
         self.queues = {}
         self.workers = {}
         self.current_songs = {}
         self.volumes = {}
         self.locks = {}
+        self.repeat_enabled = {}
 
-        # خيارات yt-dlp
         self.ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+
+    # -----------------------------------------------------
+    # INTERNAL HELPERS
+    # -----------------------------------------------------
 
     def get_lock(self, guild_id):
         if guild_id not in self.locks:
@@ -90,11 +95,13 @@ class MusicCog(commands.Cog):
 
     async def check_context(self, ctx):
         if ctx.guild is None:
-            await ctx.send("❌ أوامر الموسيقى تعمل داخل السيرفر فقط.")
+            await ctx.send("❌ هذا الأمر يعمل داخل السيرفر فقط.")
             return False
 
         if ctx.channel.id not in ALLOWED_TEXT_CHANNEL_IDS:
-            await ctx.send("❌ هذا الروم غير مسموح لأوامر الموسيقى.")
+            await ctx.send(
+                "❌ استخدم أوامر الموسيقى في الرومات المسموحة فقط."
+            )
             return False
 
         return True
@@ -103,13 +110,11 @@ class MusicCog(commands.Cog):
         if not isinstance(ctx.author, discord.Member):
             return None
 
-        voice = ctx.author.voice
-
-        if voice is None or voice.channel is None:
+        if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send("❌ ادخل رومًا صوتيًا أولًا.")
             return None
 
-        channel = voice.channel
+        channel = ctx.author.voice.channel
 
         if channel.id not in ALLOWED_VOICE_CHANNEL_IDS:
             await ctx.send("❌ هذا الروم الصوتي غير مسموح.")
@@ -118,97 +123,160 @@ class MusicCog(commands.Cog):
         return channel
 
     async def search_song(self, query):
+        """البحث عن الأغنية ثم استخراج رابط الصوت الفعلي."""
+
         def extract():
-            return self.ytdl.extract_info(
-                query,
+            # البحث الصريح باستخدام ytsearch1
+            results = self.ytdl.extract_info(
+                f"ytsearch1:{query}",
                 download=False,
             )
 
-        info = await asyncio.to_thread(extract)
+            if not results:
+                return None
 
-        if not info:
-            return None
-
-        # اختيار أول نتيجة عند البحث النصي
-        if "entries" in info:
-            entries = info.get("entries") or []
+            entries = results.get("entries") or []
             info = next(
                 (entry for entry in entries if entry),
                 None,
             )
 
-        if not info:
-            return None
+            if not info:
+                # إذا أعاد yt-dlp نتيجة فيديو مباشرة
+                info = results
 
-        stream_url = info.get("url")
-        webpage_url = info.get("webpage_url")
-        title = info.get("title", "أغنية بدون عنوان")
+            webpage_url = (
+                info.get("webpage_url")
+                or info.get("original_url")
+            )
 
-        if not stream_url:
-            return None
+            if not webpage_url:
+                video_id = info.get("id")
+                if video_id:
+                    webpage_url = (
+                        "https://www.youtube.com/watch?v="
+                        + video_id
+                    )
 
-        return Song(
-            title=title,
-            webpage_url=webpage_url or stream_url,
-            stream_url=stream_url,
-            requester_id=0,
-            text_channel_id=0,
-        )
+            if not webpage_url:
+                return None
 
-    async def get_voice_client(self, ctx, channel):
-        voice = ctx.guild.voice_client
+            # استخراج رابط صوت حديث من صفحة الفيديو
+            details = self.ytdl.extract_info(
+                webpage_url,
+                download=False,
+            )
+
+            if not details:
+                return None
+
+            stream_url = details.get("url")
+            title = details.get(
+                "title",
+                info.get("title", "أغنية بدون عنوان"),
+            )
+
+            if not stream_url:
+                formats = details.get("formats") or []
+                audio_formats = [
+                    item for item in formats
+                    if item.get("url")
+                    and item.get("acodec") != "none"
+                ]
+
+                if audio_formats:
+                    stream_url = audio_formats[-1]["url"]
+
+            if not stream_url:
+                return None
+
+            return Song(
+                title=title,
+                webpage_url=webpage_url,
+                stream_url=stream_url,
+                requester_id=0,
+                text_channel_id=0,
+            )
+
+        return await asyncio.to_thread(extract)
+
+    async def refresh_stream(self, song):
+        """تحديث رابط الصوت قبل التشغيل، لأن بعض الروابط مؤقتة."""
+
+        def extract():
+            info = self.ytdl.extract_info(
+                song.webpage_url,
+                download=False,
+            )
+
+            if not info or not info.get("url"):
+                return None
+
+            return (
+                info.get("title", song.title),
+                info["url"],
+            )
+
+        result = await asyncio.to_thread(extract)
+
+        if result:
+            song.title, song.stream_url = result
+
+        return result is not None
+
+    async def get_voice_client(self, guild, channel):
+        voice = guild.voice_client
 
         if voice and voice.is_connected():
             if voice.channel.id != channel.id:
-                await ctx.send(
-                    "❌ البوت يشغّل في روم صوتي آخر حاليًا. "
-                    "انتظر انتهاء الجلسة أو استخدم غادر أولًا."
-                )
                 return None
 
             return voice
 
-        try:
-            return await channel.connect(
-                self_deaf=True,
-                timeout=30,
-                reconnect=True,
-            )
-        except Exception:
-            logging.exception("Music voice connection failed")
-            await ctx.send(
-                "❌ تعذر الاتصال بالروم الصوتي. "
-                "تحقق من صلاحيات البوت وإعدادات الصوت."
-            )
-            return None
+        return await channel.connect(
+            self_deaf=True,
+            timeout=30,
+            reconnect=True,
+        )
 
-    async def start_worker(self, ctx):
-        guild_id = ctx.guild.id
-
+    async def start_worker(self, guild):
+        guild_id = guild.id
         task = self.workers.get(guild_id)
 
         if task is None or task.done():
             self.workers[guild_id] = asyncio.create_task(
-                self.music_worker(ctx.guild)
+                self.music_worker(guild)
             )
 
     async def music_worker(self, guild):
         guild_id = guild.id
+        this_task = asyncio.current_task()
 
         try:
             while self.queues.get(guild_id):
                 song = self.queues[guild_id].pop(0)
                 self.current_songs[guild_id] = song
 
-                voice = guild.voice_client
-
-                if voice is None or not voice.is_connected():
-                    break
-
-                loop = asyncio.get_running_loop()
-                finished = asyncio.Event()
-
                 try:
+                    voice = guild.voice_client
+
+                    if not voice or not voice.is_connected():
+                        break
+
+                    # لا تستخدم رابط الصوت القديم إذا انتهت صلاحيته
+                    if not await self.refresh_stream(song):
+                        channel = self.bot.get_channel(
+                            song.text_channel_id
+                        )
+                        if channel:
+                            await channel.send(
+                                f"❌ تعذر تجهيز الأغنية: **{song.title}**"
+                            )
+                        continue
+
+                    loop = asyncio.get_running_loop()
+                    finished = asyncio.Event()
+
                     source = discord.PCMVolumeTransformer(
                         discord.FFmpegPCMAudio(
                             song.stream_url,
@@ -223,7 +291,8 @@ class MusicCog(commands.Cog):
                     def after_play(error):
                         if error:
                             logging.error(
-                                "Music playback error: %s",
+                                "Playback error in guild %s: %s",
+                                guild_id,
                                 error,
                             )
 
@@ -231,31 +300,46 @@ class MusicCog(commands.Cog):
 
                     voice.play(source, after=after_play)
 
-                    text_channel = self.bot.get_channel(
+                    channel = self.bot.get_channel(
                         song.text_channel_id
                     )
 
-                    if text_channel:
-                        await text_channel.send(
+                    if channel:
+                        await channel.send(
                             f"🎶 **يتم التشغيل الآن:** "
                             f"[{song.title}]({song.webpage_url})"
                         )
 
                     await finished.wait()
 
+                    # كرر الأغنية إذا كان التكرار مفعّلًا
+                    if self.repeat_enabled.get(guild_id, False):
+                        self.queues.setdefault(
+                            guild_id, []
+                        ).insert(0, Song(
+                            title=song.title,
+                            webpage_url=song.webpage_url,
+                            stream_url=song.stream_url,
+                            requester_id=song.requester_id,
+                            text_channel_id=song.text_channel_id,
+                        ))
+
                 except asyncio.CancelledError:
                     raise
 
                 except Exception:
-                    logging.exception("Could not play song")
+                    logging.exception(
+                        "Music worker error in guild %s",
+                        guild_id,
+                    )
 
-                    text_channel = self.bot.get_channel(
+                    channel = self.bot.get_channel(
                         song.text_channel_id
                     )
 
-                    if text_channel:
+                    if channel:
                         try:
-                            await text_channel.send(
+                            await channel.send(
                                 f"❌ تعذر تشغيل **{song.title}**."
                             )
                         except discord.HTTPException:
@@ -268,20 +352,16 @@ class MusicCog(commands.Cog):
             raise
 
         finally:
-            current_task = asyncio.current_task()
-
-            if self.workers.get(guild_id) is current_task:
+            if self.workers.get(guild_id) is this_task:
                 self.workers.pop(guild_id, None)
 
-            # معالجة الأغاني التي أضيفت قرب انتهاء المهمة
+            # لا تفقد الأغاني التي أضيفت قرب انتهاء المهمة
             if self.queues.get(guild_id):
-                self.workers[guild_id] = asyncio.create_task(
-                    self.music_worker(guild)
-                )
+                await self.start_worker(guild)
 
-    # =====================================================
+    # -----------------------------------------------------
     # PLAY
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="تشغيل", aliases=["شغل"])
     async def play(self, ctx, *, query: str):
@@ -289,79 +369,92 @@ class MusicCog(commands.Cog):
             return
 
         channel = await self.get_voice_channel(ctx)
-
         if channel is None:
+            return
+
+        status = await ctx.send(
+            f"🔎 جاري البحث عن **{query}**..."
+        )
+
+        try:
+            song = await self.search_song(query)
+
+        except Exception:
+            logging.exception("YouTube search failed")
+
+            await status.edit(
+                content=(
+                    "❌ فشل البحث عن الأغنية. "
+                    "راجع سجلات Railway لمعرفة السبب."
+                )
+            )
+            return
+
+        if song is None:
+            await status.edit(
+                content="❌ لم أجد أغنية قابلة للتشغيل."
+            )
             return
 
         guild_id = ctx.guild.id
 
-        async with self.get_lock(guild_id):
-            voice = ctx.guild.voice_client
+        song.requester_id = ctx.author.id
+        song.text_channel_id = ctx.channel.id
 
-            if voice and voice.is_connected():
-                if voice.channel.id != channel.id:
-                    await ctx.send(
-                        "❌ البوت موجود في روم صوتي آخر."
+        try:
+            async with self.get_lock(guild_id):
+                voice = ctx.guild.voice_client
+
+                # يمنع الانتقال بين رومات الصوت في السيرفر نفسه
+                if voice and voice.is_connected():
+                    if voice.channel.id != channel.id:
+                        await status.edit(
+                            content=(
+                                "❌ البوت يشغّل في روم صوتي آخر "
+                                "في هذا السيرفر حاليًا."
+                            )
+                        )
+                        return
+
+                queue = self.get_queue(guild_id)
+
+                if len(queue) >= MAX_QUEUE_SIZE:
+                    await status.edit(
+                        content="❌ قائمة الانتظار ممتلئة."
                     )
                     return
 
-            queue = self.get_queue(guild_id)
+                if not voice or not voice.is_connected():
+                    voice = await self.get_voice_client(
+                        ctx.guild,
+                        channel,
+                    )
 
-            if len(queue) >= MAX_QUEUE_SIZE:
-                await ctx.send(
-                    f"❌ وصلت القائمة إلى الحد الأقصى "
-                    f"({MAX_QUEUE_SIZE} أغنية)."
-                )
-                return
+                queue.append(song)
+                position = len(queue)
 
-            status = await ctx.send(
-                f"🔎 جاري البحث عن: **{query}**..."
-            )
-
-            try:
-                song = await self.search_song(query)
-
-            except Exception:
-                logging.exception("YouTube search failed")
                 await status.edit(
                     content=(
-                        "❌ تعذر البحث عن الأغنية. "
-                        "قد تكون خدمة البحث غير متاحة حاليًا."
+                        f"✅ تمت إضافة **{song.title}** "
+                        f"إلى قائمة الانتظار.\n"
+                        f"📍 ترتيبها: {position}"
                     )
                 )
-                return
 
-            if song is None:
-                await status.edit(
-                    content="❌ لم أجد نتيجة قابلة للتشغيل."
-                )
-                return
+            await self.start_worker(ctx.guild)
 
-            song.requester_id = ctx.author.id
-            song.text_channel_id = ctx.channel.id
-
-            voice = await self.get_voice_client(ctx, channel)
-
-            if voice is None:
-                return
-
-            queue.append(song)
-
-            position = len(queue)
-
+        except Exception:
+            logging.exception("Could not join voice channel")
             await status.edit(
                 content=(
-                    f"✅ تمت إضافة **{song.title}** "
-                    f"إلى قائمة الانتظار.\n"
-                    f"📍 ترتيبها في القائمة: {position}"
+                    "❌ تعذر الاتصال بالروم الصوتي. "
+                    "تحقق من صلاحيات البوت وإعدادات الصوت."
                 )
             )
 
-            await self.start_worker(ctx)
-
-    # =====================================================
+    # -----------------------------------------------------
     # SKIP
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="تخطي", aliases=["التالي"])
     async def skip(self, ctx):
@@ -376,9 +469,9 @@ class MusicCog(commands.Cog):
         else:
             await ctx.send("❌ لا توجد أغنية تعمل حاليًا.")
 
-    # =====================================================
-    # PAUSE
-    # =====================================================
+    # -----------------------------------------------------
+    # PAUSE / RESUME
+    # -----------------------------------------------------
 
     @commands.command(name="مؤقت", aliases=["إيقاف_مؤقت"])
     async def pause(self, ctx):
@@ -389,13 +482,9 @@ class MusicCog(commands.Cog):
 
         if voice and voice.is_playing():
             voice.pause()
-            await ctx.send("⏸️ تم إيقاف الأغنية مؤقتًا.")
+            await ctx.send("⏸️ تم إيقاف التشغيل مؤقتًا.")
         else:
             await ctx.send("❌ لا توجد أغنية تعمل حاليًا.")
-
-    # =====================================================
-    # RESUME
-    # =====================================================
 
     @commands.command(name="كمل", aliases=["استئناف"])
     async def resume(self, ctx):
@@ -410,9 +499,9 @@ class MusicCog(commands.Cog):
         else:
             await ctx.send("❌ لا توجد أغنية متوقفة مؤقتًا.")
 
-    # =====================================================
-    # STOP AND CLEAR
-    # =====================================================
+    # -----------------------------------------------------
+    # STOP / CLEAR
+    # -----------------------------------------------------
 
     @commands.command(name="إيقاف", aliases=["وقف"])
     async def stop(self, ctx):
@@ -420,18 +509,19 @@ class MusicCog(commands.Cog):
             return
 
         guild_id = ctx.guild.id
-        voice = ctx.guild.voice_client
-
         self.queues[guild_id] = []
+        self.repeat_enabled[guild_id] = False
+
+        voice = ctx.guild.voice_client
 
         if voice and (voice.is_playing() or voice.is_paused()):
             voice.stop()
 
-        await ctx.send("⏹️ تم إيقاف التشغيل وتفريغ القائمة.")
+        await ctx.send("⏹️ تم إيقاف الأغنية وتفريغ القائمة.")
 
-    # =====================================================
+    # -----------------------------------------------------
     # QUEUE
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="القائمة", aliases=["طابور"])
     async def show_queue(self, ctx):
@@ -445,17 +535,13 @@ class MusicCog(commands.Cog):
         lines = []
 
         if current:
-            lines.append(
-                f"🎶 الآن: **{current.title}**"
-            )
+            lines.append(f"🎶 الآن: **{current.title}**")
 
         if queue:
             lines.append("\n**قائمة الانتظار:**")
 
             for index, song in enumerate(queue[:15], start=1):
-                lines.append(
-                    f"`{index}.` {song.title}"
-                )
+                lines.append(f"`{index}.` {song.title}")
 
             if len(queue) > 15:
                 lines.append(
@@ -469,14 +555,13 @@ class MusicCog(commands.Cog):
         embed = discord.Embed(
             title="🎵 قائمة الموسيقى",
             description="\n".join(lines),
-            color=discord.Color.from_rgb(182, 108, 255),
+            color=PURPLE,
         )
-
         await ctx.send(embed=embed)
 
-    # =====================================================
+    # -----------------------------------------------------
     # NOW PLAYING
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="الآن", aliases=["الحالية"])
     async def now_playing(self, ctx):
@@ -494,9 +579,9 @@ class MusicCog(commands.Cog):
             f"[{song.title}]({song.webpage_url})"
         )
 
-    # =====================================================
-    # REMOVE SONG BY POSITION
-    # =====================================================
+    # -----------------------------------------------------
+    # REMOVE SONG
+    # -----------------------------------------------------
 
     @commands.command(name="حذف")
     async def remove_song(self, ctx, position: int):
@@ -510,19 +595,14 @@ class MusicCog(commands.Cog):
             return
 
         song = queue.pop(position - 1)
+        await ctx.send(f"🗑️ تم حذف **{song.title}**.")
 
-        await ctx.send(
-            f"🗑️ تم حذف **{song.title}** من القائمة."
-        )
-
-    # =====================================================
+    # -----------------------------------------------------
     # SHUFFLE
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="خلط", aliases=["عشوائي"])
     async def shuffle(self, ctx):
-        import random
-
         if not await self.check_context(ctx):
             return
 
@@ -533,12 +613,11 @@ class MusicCog(commands.Cog):
             return
 
         random.shuffle(queue)
-
         await ctx.send("🔀 تم خلط قائمة الانتظار.")
 
-    # =====================================================
-    # REPEAT CURRENT SONG
-    # =====================================================
+    # -----------------------------------------------------
+    # REPEAT TOGGLE
+    # -----------------------------------------------------
 
     @commands.command(name="كرر", aliases=["تكرار"])
     async def repeat(self, ctx):
@@ -546,33 +625,18 @@ class MusicCog(commands.Cog):
             return
 
         guild_id = ctx.guild.id
-        song = self.current_songs.get(guild_id)
-
-        if song is None:
-            await ctx.send("❌ لا توجد أغنية تعمل حاليًا.")
-            return
-
-        queue = self.get_queue(guild_id)
-
-        if len(queue) >= MAX_QUEUE_SIZE:
-            await ctx.send("❌ قائمة الانتظار ممتلئة.")
-            return
-
-        queue.insert(0, Song(
-            title=song.title,
-            webpage_url=song.webpage_url,
-            stream_url=song.stream_url,
-            requester_id=ctx.author.id,
-            text_channel_id=ctx.channel.id,
-        ))
-
-        await ctx.send(
-            f"🔁 ستُضاف **{song.title}** للتشغيل مرة أخرى."
+        self.repeat_enabled[guild_id] = not (
+            self.repeat_enabled.get(guild_id, False)
         )
 
-    # =====================================================
+        if self.repeat_enabled[guild_id]:
+            await ctx.send("🔁 تم تفعيل تكرار الأغاني.")
+        else:
+            await ctx.send("➡️ تم إيقاف تكرار الأغاني.")
+
+    # -----------------------------------------------------
     # VOLUME
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="صوت", aliases=["مستوى_الصوت"])
     async def volume(self, ctx, level: int):
@@ -580,7 +644,7 @@ class MusicCog(commands.Cog):
             return
 
         if not 1 <= level <= 100:
-            await ctx.send("❌ حدد مستوى صوت من 1 إلى 100.")
+            await ctx.send("❌ حدد مستوى الصوت من 1 إلى 100.")
             return
 
         guild_id = ctx.guild.id
@@ -598,11 +662,11 @@ class MusicCog(commands.Cog):
         ):
             voice.source.volume = level / 100
 
-        await ctx.send(f"🔊 تم ضبط الصوت على {level}%.")
+        await ctx.send(f"🔊 مستوى الصوت الآن {level}%.")
 
-    # =====================================================
+    # -----------------------------------------------------
     # LEAVE
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="غادر", aliases=["اخرج"])
     async def leave(self, ctx):
@@ -610,9 +674,10 @@ class MusicCog(commands.Cog):
             return
 
         guild_id = ctx.guild.id
-        voice = ctx.guild.voice_client
-
         self.queues[guild_id] = []
+        self.repeat_enabled[guild_id] = False
+
+        voice = ctx.guild.voice_client
 
         if voice:
             if voice.is_playing() or voice.is_paused():
@@ -622,9 +687,9 @@ class MusicCog(commands.Cog):
 
         await ctx.send("👋 غادرت الروم الصوتي.")
 
-    # =====================================================
+    # -----------------------------------------------------
     # HELP
-    # =====================================================
+    # -----------------------------------------------------
 
     @commands.command(name="مساعدة", aliases=["ميوزك"])
     async def music_help(self, ctx):
@@ -650,7 +715,7 @@ class MusicCog(commands.Cog):
                 "مساعدة\n"
                 "```"
             ),
-            color=discord.Color.from_rgb(182, 108, 255),
+            color=PURPLE,
         )
 
         await ctx.send(embed=embed)
