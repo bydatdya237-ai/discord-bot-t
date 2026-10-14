@@ -1509,7 +1509,7 @@ class EconomyCog(commands.Cog):
 
             else:
                 name = (
-                    f"<@{user_id}> (مغادر)"
+                    f"<@{user_id}>"
                 )
 
             rank = (
