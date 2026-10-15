@@ -41,9 +41,12 @@ YTDL_OPTIONS = {
     "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
-    "no_warnings": True,
+    "no_warnings": False,
     "skip_download": True,
     "cachedir": False,
+    "socket_timeout": 20,
+    "retries": 3,
+    "extractor_retries": 3,
 }
 
 
@@ -862,7 +865,7 @@ class MusicCog(commands.Cog):
             )
 
             if not info:
-                info = results
+                return None
 
             webpage_url = (
                 info.get("webpage_url")
@@ -890,7 +893,8 @@ class MusicCog(commands.Cog):
 
             if not stream_url:
                 audio_formats = [
-                    item for item in details.get("formats", [])
+                    item
+                    for item in details.get("formats", [])
                     if item.get("url")
                     and item.get("acodec") != "none"
                 ]
@@ -913,41 +917,6 @@ class MusicCog(commands.Cog):
             )
 
         return await asyncio.to_thread(extract)
-
-    async def refresh_stream(self, song):
-        def extract():
-            info = self.ytdl.extract_info(
-                song.webpage_url,
-                download=False,
-            )
-
-            if not info:
-                return None
-
-            stream_url = info.get("url")
-
-            if not stream_url:
-                audio_formats = [
-                    item for item in info.get("formats", [])
-                    if item.get("url")
-                    and item.get("acodec") != "none"
-                ]
-
-                if audio_formats:
-                    stream_url = audio_formats[-1]["url"]
-
-            if not stream_url:
-                return None
-
-            return info.get("title", song.title), stream_url
-
-        result = await asyncio.to_thread(extract)
-
-        if result:
-            song.title, song.stream_url = result
-
-        return result is not None
-
     # -----------------------------------------------------
     # ADD SONG FROM MODAL
     # -----------------------------------------------------
