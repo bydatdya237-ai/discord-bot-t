@@ -15,3 +15,4 @@ PyNaCl
 davey
 discord.py[voice]>=2.5.0
 yt-dlp
+yt-dlp[default]
