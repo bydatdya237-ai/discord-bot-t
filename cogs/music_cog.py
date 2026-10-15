@@ -76,28 +76,29 @@ class Song:
 # =========================================================
 
 def make_embed(title, description=None, color=PURPLE):
-embed = discord.Embed(
-title=title,
-description=description,
-color=color,
-timestamp=discord.utils.utcnow(),
-)
-embed.set_footer(text="DIAA MUSIC • Interactive Music System")
-return embed
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color,
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text="DIAA MUSIC • Interactive Music System")
+    return embed
+
 
 async def private_message(interaction, title, description, color=PURPLE):
-embed = make_embed(title, description, color)
+    embed = make_embed(title, description, color)
 
-if interaction.response.is_done():
-    await interaction.followup.send(
-        embed=embed,
-        ephemeral=True,
-    )
-else:
-    await interaction.response.send_message(
-        embed=embed,
-        ephemeral=True,
-    )
+    if interaction.response.is_done():
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
 
 # =========================================================
 # SEARCH MODAL
