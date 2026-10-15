@@ -61,13 +61,15 @@ FFMPEG_OPTIONS = {
 # SONG DATA
 # =========================================================
 
+from dataclasses import dataclass
+
 @dataclass
 class Song:
-title: str
-webpage_url: str
-stream_url: str
-requester_id: int
-text_channel_id: int
+    title: str
+    webpage_url: str
+    stream_url: str
+    requester_id: int
+    text_channel_id: int
 
 # =========================================================
 # EMBEDS
