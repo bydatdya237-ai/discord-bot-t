@@ -48,7 +48,6 @@ YTDL_OPTIONS = {
     "socket_timeout": 25,
     "retries": 2,
     "extractor_retries": 2,
-    "default_search": "ytsearch1",
 }
 
 FFMPEG_OPTIONS = {
@@ -820,109 +819,272 @@ class MusicCog(commands.Cog):
         return channel
 
     # -----------------------------------------------------
-    # SEARCH SONG
+    # EXTRACT SEARCH RESULT
     # -----------------------------------------------------
 
-    async def search_song(self, query):
-        def extract():
-            result = self.ytdl.extract_info(
-                query,
-                download=False,
-            )
+    def _extract_first_result(self, query):
+        result = self.ytdl.extract_info(
+            query,
+            download=False,
+        )
 
-            if not result:
+        if not result:
+            return None
+
+        if result.get("entries") is not None:
+            entries = result.get("entries") or []
+            info = next(
+                (entry for entry in entries if entry),
+                None,
+            )
+        else:
+            info = result
+
+        if not info:
+            return None
+
+        webpage_url = (
+            info.get("webpage_url")
+            or info.get("original_url")
+            or ""
+        )
+
+        if not webpage_url:
+            video_id = info.get("id")
+            extractor = (info.get("extractor_key") or "").lower()
+
+            if not video_id:
                 return None
 
-            if result.get("entries") is not None:
-                entries = result.get("entries") or []
-                info = next(
-                    (entry for entry in entries if entry),
-                    None,
+            if "soundcloud" in extractor:
+                webpage_url = (
+                    f"https://soundcloud.com/{info.get('uploader', '')}"
+                    f"/{info.get('title', video_id)}"
                 )
             else:
-                info = result
-
-            if not info:
-                return None
-
-            webpage_url = (
-                info.get("webpage_url")
-                or info.get("original_url")
-                or ""
-            )
-
-            if not webpage_url:
-                video_id = info.get("id")
-
-                if not video_id:
-                    return None
-
                 webpage_url = (
                     f"https://www.youtube.com/watch?v={video_id}"
                 )
 
+        return {
+            "title": info.get("title", "أغنية بدون عنوان"),
+            "webpage_url": webpage_url,
+            "stream_url": info.get("url", ""),
+        }
+
+    # -----------------------------------------------------
+    # SOUNDCLOUD FALLBACK SEARCH
+    # -----------------------------------------------------
+
+    async def search_soundcloud(self, query):
+        """
+        يبحث في SoundCloud باستخدام yt-dlp.
+        يعيد Song عند نجاح البحث، أو None عند الفشل.
+        """
+
+        if not query:
+            return None
+
+        try:
+            result = await asyncio.to_thread(
+                self._extract_first_result,
+                f"scsearch1:{query}",
+            )
+
+            if not result or not result.get("webpage_url"):
+                return None
+
+            log.info(
+                "SoundCloud fallback found: %s",
+                result["title"],
+            )
+
             return Song(
-                title=info.get("title", "أغنية بدون عنوان"),
-                webpage_url=webpage_url,
-                stream_url=info.get("url", ""),
+                title=result["title"],
+                webpage_url=result["webpage_url"],
+                stream_url=result.get("stream_url", ""),
                 requester_id=0,
                 text_channel_id=0,
             )
 
-        return await asyncio.to_thread(extract)
+        except Exception:
+            log.exception(
+                "SoundCloud search failed for query: %s",
+                query,
+            )
+            return None
+
+    # -----------------------------------------------------
+    # SEARCH SONG: YOUTUBE FIRST, SOUNDCLOUD SECOND
+    # -----------------------------------------------------
+
+    async def search_song(self, query):
+        query = query.strip()
+
+        if not query:
+            return None
+
+        is_url = query.startswith(("https://", "http://"))
+
+        youtube_query = (
+            query
+            if is_url
+            else f"ytsearch1:{query}"
+        )
+
+        try:
+            result = await asyncio.to_thread(
+                self._extract_first_result,
+                youtube_query,
+            )
+
+            if result and result.get("webpage_url"):
+                log.info(
+                    "YouTube search succeeded: %s",
+                    result["title"],
+                )
+
+                return Song(
+                    title=result["title"],
+                    webpage_url=result["webpage_url"],
+                    stream_url=result.get("stream_url", ""),
+                    requester_id=0,
+                    text_channel_id=0,
+                )
+
+            log.warning(
+                "YouTube returned no result; trying SoundCloud."
+            )
+
+        except Exception:
+            log.exception(
+                "YouTube search failed; trying SoundCloud."
+            )
+
+        # If YouTube search fails, try SoundCloud.
+        fallback_query = query
+
+        soundcloud_song = await self.search_soundcloud(
+            fallback_query
+        )
+
+        if soundcloud_song:
+            return soundcloud_song
+
+        return None
 
     # -----------------------------------------------------
     # REFRESH STREAM
     # -----------------------------------------------------
 
+    def _extract_stream(self, webpage_url):
+        info = self.ytdl.extract_info(
+            webpage_url,
+            download=False,
+        )
+
+        if not info:
+            return None
+
+        if info.get("entries") is not None:
+            entries = info.get("entries") or []
+            info = next(
+                (entry for entry in entries if entry),
+                None,
+            )
+
+        if not info:
+            return None
+
+        stream_url = info.get("url")
+
+        if not stream_url:
+            formats = [
+                item
+                for item in info.get("formats", [])
+                if item.get("url")
+                and item.get("acodec") != "none"
+            ]
+
+            if formats:
+                stream_url = formats[-1]["url"]
+
+        if not stream_url:
+            return None
+
+        return (
+            info.get("title", "أغنية بدون عنوان"),
+            stream_url,
+            info.get("webpage_url") or webpage_url,
+        )
+
     async def refresh_stream(self, song):
-        def extract():
-            info = self.ytdl.extract_info(
-                song.webpage_url,
-                download=False,
-            )
-
-            if not info:
-                return None
-
-            stream_url = info.get("url")
-
-            if not stream_url:
-                formats = [
-                    item
-                    for item in info.get("formats", [])
-                    if item.get("url")
-                    and item.get("acodec") != "none"
-                ]
-
-                if formats:
-                    stream_url = formats[-1]["url"]
-
-            if not stream_url:
-                return None
-
-            return (
-                info.get("title", song.title),
-                stream_url,
-            )
+        """
+        يجدد رابط الصوت من المصدر الحالي.
+        إذا فشل مصدر YouTube، يبحث عن العنوان في SoundCloud
+        ويحاول استخراج رابط صوت بديل.
+        """
 
         try:
-            result = await asyncio.to_thread(extract)
+            result = await asyncio.to_thread(
+                self._extract_stream,
+                song.webpage_url,
+            )
 
-            if not result:
-                log.error(
-                    "No audio stream returned for %s",
-                    song.webpage_url,
-                )
+            if result:
+                song.title, song.stream_url, song.webpage_url = result
+                return True
+
+            log.warning(
+                "No stream returned from source: %s",
+                song.webpage_url,
+            )
+
+        except Exception:
+            log.exception(
+                "Failed to refresh stream from %s",
+                song.webpage_url,
+            )
+
+        # Avoid searching SoundCloud again if this song is already
+        # a SoundCloud result.
+        if "soundcloud.com" in song.webpage_url.lower():
+            return False
+
+        log.info(
+            "Trying SoundCloud fallback for: %s",
+            song.title,
+        )
+
+        fallback = await self.search_soundcloud(song.title)
+
+        if not fallback:
+            return False
+
+        try:
+            fallback_stream = await asyncio.to_thread(
+                self._extract_stream,
+                fallback.webpage_url,
+            )
+
+            if not fallback_stream:
                 return False
 
-            song.title, song.stream_url = result
+            song.title = fallback_stream[0]
+            song.stream_url = fallback_stream[1]
+            song.webpage_url = fallback_stream[2]
+
+            log.info(
+                "Switched to SoundCloud: %s",
+                song.title,
+            )
+
             return True
 
         except Exception:
             log.exception(
-                "Failed to refresh stream: %s",
-                song.webpage_url,
+                "Could not extract SoundCloud audio for %s",
+                song.title,
             )
             return False
 
@@ -946,24 +1108,20 @@ class MusicCog(commands.Cog):
 
         try:
             song = await self.search_song(query)
+
         except Exception:
             log.exception("Song search failed")
-
-            await interaction.followup.send(
-                embed=make_embed(
-                    "❌ | فشل البحث",
-                    "تعذر جلب الأغنية. حاول مرة أخرى.",
-                    RED,
-                ),
-                ephemeral=True,
-            )
-            return
+            song = None
 
         if song is None:
             await interaction.followup.send(
                 embed=make_embed(
-                    "🔍 | لم أجد الأغنية",
-                    "جرّب اسمًا آخر أو رابط فيديو صالحًا.",
+                    "❌ | لم أتمكن من العثور على الأغنية",
+                    (
+                        "تعذر العثور على نتيجة مناسبة في YouTube "
+                        "أو SoundCloud.\n"
+                        "جرّب كتابة اسم الأغنية والفنان بدل الرابط."
+                    ),
                     RED,
                 ),
                 ephemeral=True,
@@ -1017,7 +1175,10 @@ class MusicCog(commands.Cog):
             await interaction.followup.send(
                 embed=make_embed(
                     "✅ | تمت إضافة الأغنية",
-                    f"**[{song.title}]({song.webpage_url})**",
+                    (
+                        f"**[{song.title}]({song.webpage_url})**\n"
+                        "سيحاول البوت تشغيلها من المصدر المتاح."
+                    ),
                     GREEN,
                 ),
                 ephemeral=True,
@@ -1102,8 +1263,9 @@ class MusicCog(commands.Cog):
                         await self.send_announcement(
                             "❌ | تعذر تجهيز الأغنية",
                             (
-                                f"لم أتمكن من جلب الصوت لـ **{song.title}**.\n"
-                                "قد يكون المصدر غير متاح حاليًا."
+                                f"لم أتمكن من جلب الصوت لـ **{song.title}** "
+                                "من YouTube أو SoundCloud.\n"
+                                "جرّب أغنية أخرى."
                             ),
                             RED,
                         )
@@ -1117,6 +1279,7 @@ class MusicCog(commands.Cog):
 
                     loop = asyncio.get_running_loop()
                     finished = asyncio.Event()
+                    playback_errors = []
 
                     source = discord.PCMVolumeTransformer(
                         discord.FFmpegPCMAudio(
@@ -1131,6 +1294,7 @@ class MusicCog(commands.Cog):
 
                     def after_play(error):
                         if error:
+                            playback_errors.append(error)
                             log.error(
                                 "Playback error in guild %s: %s",
                                 guild_id,
@@ -1154,6 +1318,94 @@ class MusicCog(commands.Cog):
 
                     was_skipped = guild_id in self.skip_requested
                     self.skip_requested.discard(guild_id)
+
+                    # If FFmpeg failed while reading the audio stream,
+                    # try SoundCloud once before moving to the next song.
+                    if playback_errors and not was_skipped:
+                        if "soundcloud.com" not in song.webpage_url.lower():
+                            log.warning(
+                                "Playback failed; attempting SoundCloud retry."
+                            )
+
+                            fallback = await self.search_soundcloud(
+                                song.title
+                            )
+
+                            if fallback:
+                                fallback.requester_id = song.requester_id
+                                fallback.text_channel_id = song.text_channel_id
+
+                                try:
+                                    refreshed = await self.refresh_stream(
+                                        fallback
+                                    )
+
+                                    if refreshed:
+                                        voice = guild.voice_client
+
+                                        if voice and voice.is_connected():
+                                            retry_finished = asyncio.Event()
+                                            retry_errors = []
+
+                                            retry_source = discord.PCMVolumeTransformer(
+                                                discord.FFmpegPCMAudio(
+                                                    fallback.stream_url,
+                                                    **FFMPEG_OPTIONS,
+                                                ),
+                                                volume=self.volumes.get(
+                                                    guild_id,
+                                                    DEFAULT_VOLUME,
+                                                ),
+                                            )
+
+                                            def after_retry(error):
+                                                if error:
+                                                    retry_errors.append(error)
+                                                    log.error(
+                                                        "SoundCloud retry playback error: %s",
+                                                        error,
+                                                    )
+
+                                                loop.call_soon_threadsafe(
+                                                    retry_finished.set
+                                                )
+
+                                            voice.play(
+                                                retry_source,
+                                                after=after_retry,
+                                            )
+
+                                            song.title = fallback.title
+                                            song.webpage_url = fallback.webpage_url
+                                            song.stream_url = fallback.stream_url
+
+                                            await self.send_announcement(
+                                                "🔄 | تم التحويل إلى SoundCloud",
+                                                (
+                                                    f"**[{song.title}]"
+                                                    f"({song.webpage_url})**"
+                                                ),
+                                                GREEN,
+                                            )
+
+                                            await retry_finished.wait()
+
+                                            playback_errors = retry_errors
+
+                                except Exception:
+                                    log.exception(
+                                        "SoundCloud playback retry failed"
+                                    )
+
+                        if playback_errors:
+                            await self.send_announcement(
+                                "❌ | تعذّر تشغيل الصوت",
+                                (
+                                    f"تعذّر تشغيل **{song.title}** "
+                                    "حتى بعد تجربة المصدر البديل."
+                                ),
+                                RED,
+                            )
 
                     voice = guild.voice_client
                     if voice is None or not voice.is_connected():
