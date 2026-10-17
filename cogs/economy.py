@@ -2024,49 +2024,33 @@ class EconomyCog(commands.Cog):
         *,
         amount_str: str = None
     ):
+        # آيدي صاحب البوت فقط
+        BOT_OWNER_ID = 1154374165642620948  # استبدله بآيديك
+
+        if ctx.author.id != BOT_OWNER_ID:
+            return
 
         if not ctx.guild:
             return
 
-        if not await self.economy_available(
-            ctx
-        ):
-            return
-
-        allowed = await self.has_admin_permission(
-            ctx.guild.id,
-            ctx.author,
-            "اعطي",
-            ctx.channel.id
-        )
-
-        if not allowed:
+        if not await self.economy_available(ctx):
             return
 
         if member is None or not amount_str:
-
             await ctx.send(
                 "❌ **طريقة الاستعمال:**\n"
                 "`اعطي @العضو المبلغ`\n\n"
                 "مثال:\n"
                 "`اعطي @ضياء 25k`"
             )
-
             return
 
-        amount = parse_amount(
-            amount_str
-        )
+        amount = parse_amount(amount_str)
 
         if amount <= 0:
-
             await ctx.send(
-                "❌ **طريقة الاستعمال:**\n"
-                "`اعطي @العضو المبلغ`\n\n"
-                "مثال:\n"
-                "`اعطي @ضياء 25k`"
+                "❌ المبلغ يجب أن يكون أكبر من صفر."
             )
-
             return
 
         await self.update_balance(
