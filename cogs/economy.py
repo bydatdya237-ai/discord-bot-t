@@ -2077,38 +2077,25 @@ class EconomyCog(commands.Cog):
         *,
         amount_str: str = None
     ):
+        # آيدي صاحب البوت فقط
+        BOT_OWNER_ID = 1154374165642620948  # استبدله بآيديك
+
+        if ctx.author.id != BOT_OWNER_ID:
+            return
 
         if not ctx.guild:
             return
 
-        if not await self.economy_available(
-            ctx
-        ):
+        if not await self.economy_available(ctx):
             return
 
-        allowed = await self.has_admin_permission(
-            ctx.guild.id,
-            ctx.author,
-            "سحب",
-            ctx.channel.id
-        )
-
-        if not allowed:
+        if self.withdraw_is_on_cooldown(ctx.author.id):
             return
 
-        if self.withdraw_is_on_cooldown(
-            ctx.author.id
-        ):
-            return
-
-        lock = self.get_withdraw_lock(
-            ctx.author.id
-        )
+        lock = self.get_withdraw_lock(ctx.author.id)
 
         async with lock:
-
             if member is None or not amount_str:
-
                 await ctx.send(
                     "❌ **طريقة الاستعمال:**\n"
                     "`سحب @العضو المبلغ`\n"
@@ -2118,86 +2105,54 @@ class EconomyCog(commands.Cog):
                     "`سحب @ضياء 25k`\n"
                     "`سحب @ضياء كل`"
                 )
-
                 return
 
             if amount_str.strip() == "كل":
-
-                current_bal = (
-                    await self.get_balance(
-                        member.id
-                    )
-                )
+                current_bal = await self.get_balance(member.id)
 
                 if current_bal <= 0:
-
                     await ctx.send(
-                        f"❌ {member.mention} "
-                        f"لا يملك أي Ai."
+                        f"❌ {member.mention} لا يملك أي Ai."
                     )
-
                     return
 
-                await self.update_balance(
-                    member.id,
-                    -current_bal
-                )
+                await self.update_balance(member.id, -current_bal)
 
                 await ctx.send(
-                    f"✅ تم سحب كامل رصيد "
-                    f"{member.mention}.\n"
+                    f"✅ تم سحب كامل رصيد {member.mention}.\n"
                     f"💸 المبلغ المسحوب: "
                     f"**{format_coins(current_bal)} Ai**"
                 )
-
                 return
 
-            amount = parse_amount(
-                amount_str
-            )
+            amount = parse_amount(amount_str)
 
             if amount <= 0:
-
                 await ctx.send(
                     "❌ **طريقة الاستعمال:**\n"
                     "`سحب @العضو المبلغ`\n"
                     "أو\n"
                     "`سحب @العضو كل`"
                 )
-
                 return
 
-            current_bal = (
-                await self.get_balance(
-                    member.id
-                )
-            )
+            current_bal = await self.get_balance(member.id)
 
             if current_bal <= 0:
-
                 await ctx.send(
-                    f"❌ {member.mention} "
-                    f"لا يملك أي Ai."
+                    f"❌ {member.mention} لا يملك أي Ai."
                 )
-
                 return
 
-            final_amount = min(
-                amount,
-                current_bal
-            )
+            final_amount = min(amount, current_bal)
 
-            await self.update_balance(
-                member.id,
-                -final_amount
-            )
+            await self.update_balance(member.id, -final_amount)
 
             await ctx.send(
                 f"✅ تم سحب "
                 f"**{format_coins(final_amount)} Ai** "
                 f"من رصيد {member.mention}"
             )
-
 
     # =====================================================
     # تصفير
